@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>tnalpha · 产品图解</title>
+<title>tnalpha · 产品图解（可点击）</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <style>
@@ -11,19 +11,22 @@
   [x-cloak]{display:none;}
   .mock{background:#fff;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 8px 30px -12px rgba(0,0,0,.18);}
   .chip{display:inline-block;padding:.15rem .55rem;border-radius:9999px;font-size:.75rem;}
+  .click{cursor:pointer;transition:all .15s;}
+  .click:hover{border-color:#818cf8 !important;box-shadow:0 4px 16px -4px rgba(99,102,241,.4);transform:translateY(-1px);}
+  .go::after{content:"›";margin-left:.4rem;color:#94a3b8;font-weight:700;}
 </style>
 </head>
-<body class="bg-slate-100 text-slate-800" x-data="{tab:'overview'}">
+<body class="bg-slate-100 text-slate-800" x-data="{tab:'overview', sub:null}">
 
 <header class="bg-white border-b border-slate-200 sticky top-0 z-20">
   <div class="max-w-5xl mx-auto px-5 py-3 flex items-center gap-3">
     <div class="w-9 h-9 rounded-xl bg-indigo-600 text-white grid place-items-center font-bold text-lg">t</div>
     <div><div class="font-bold text-lg leading-tight">tnalpha · 产品图解</div>
-      <div class="text-xs text-slate-400">内容生产协作平台 · 一看就懂版</div></div>
+      <div class="text-xs text-slate-400">蓝色虚线框 = 可点击进入二级页面</div></div>
   </div>
   <nav class="max-w-5xl mx-auto px-3 flex gap-1 text-sm overflow-x-auto pb-1">
     <template x-for="t in [['overview','全局总览'],['kb','①知识库'],['topic','②选题库'],['writing','③写作引擎'],['schedule','④排期版'],['feedback','⑤数据反馈'],['perm','⑥权限']]">
-      <button @click="tab=t[0]" :class="tab===t[0]?'bg-indigo-600 text-white':'text-slate-500 hover:bg-slate-100'"
+      <button @click="tab=t[0]; sub=null" :class="tab===t[0]?'bg-indigo-600 text-white':'text-slate-500 hover:bg-slate-100'"
               class="px-3.5 py-2 rounded-lg whitespace-nowrap font-medium" x-text="t[1]"></button>
     </template>
   </nav>
@@ -37,203 +40,280 @@
     <h1 class="text-2xl font-bold mb-2">一句话：帮一个品牌，把内容从"想选题"到"发出去看数据"全流程跑起来，还能越做越准。</h1>
     <p class="text-slate-500 text-lg">六个模块像流水线一样串起来，最后用真实数据回头优化选题，转成一个圈（闭环）。</p>
   </div>
-
   <div class="bg-white rounded-2xl border border-slate-200 p-7">
-    <div class="text-sm font-semibold text-slate-400 mb-4">内容是怎么流动的</div>
+    <div class="text-sm font-semibold text-slate-400 mb-4">内容是怎么流动的（点上面标签逐个看，每页里蓝框还能点进去）</div>
     <div class="flex flex-col md:flex-row items-stretch gap-2 text-center">
-      <template x-for="(s,i) in [
-        ['①','知识库','准备素材','bg-sky-50 text-sky-700'],
-        ['②','选题库','AI帮想选题','bg-violet-50 text-violet-700'],
-        ['③','写作引擎','按风格写文','bg-fuchsia-50 text-fuchsia-700'],
-        ['④','排期版','安排哪天发','bg-amber-50 text-amber-700'],
-        ['⑤','数据反馈','看数据复盘','bg-emerald-50 text-emerald-700']]">
+      <template x-for="(s,i) in [['①','知识库','准备素材','bg-sky-50 text-sky-700','kb'],['②','选题库','AI帮想选题','bg-violet-50 text-violet-700','topic'],['③','写作引擎','按风格写文','bg-fuchsia-50 text-fuchsia-700','writing'],['④','排期版','安排哪天发','bg-amber-50 text-amber-700','schedule'],['⑤','数据反馈','看数据复盘','bg-emerald-50 text-emerald-700','feedback']]">
         <div class="flex items-center gap-2 flex-1">
-          <div :class="s[3]" class="flex-1 rounded-xl py-4 px-2">
-            <div class="text-2xl font-bold" x-text="s[0]"></div>
-            <div class="font-semibold" x-text="s[1]"></div>
-            <div class="text-xs opacity-70" x-text="s[2]"></div>
-          </div>
+          <div @click="tab=s[4]; sub=null" :class="s[3]" class="click flex-1 rounded-xl py-4 px-2 border border-transparent">
+            <div class="text-2xl font-bold" x-text="s[0]"></div><div class="font-semibold" x-text="s[1]"></div><div class="text-xs opacity-70" x-text="s[2]"></div></div>
           <div x-show="i<4" class="text-slate-300 text-xl hidden md:block">→</div>
         </div>
       </template>
     </div>
-    <div class="mt-4 rounded-xl bg-rose-50 text-rose-700 p-4 text-sm flex gap-2">
-      <span class="font-bold">🔄 闭环：</span>
-      <span>⑤ 收到的真实数据 + AI 复盘 → 沉淀进"数据池" → 下一轮 ② 选题时参考它。<b>用市场数据校准"选题者觉得好"，越做越准。</b></span>
-    </div>
-    <div class="mt-3 rounded-xl bg-slate-50 text-slate-600 p-4 text-sm">
-      <b>⑥ 权限：</b>三种人分工——<b>定义者</b>(管素材和品牌) → <b>选题者</b>(选题/写作/排期) → <b>发布者</b>(发布/填数据)。各看各的界面。
-    </div>
-  </div>
-
-  <div class="bg-indigo-50 border border-indigo-100 rounded-2xl p-5 text-sm text-indigo-800">
-    💡 顶部切换标签看每个模块。每页都是 <b>左边界面示意图 + 右边大白话讲解（这是什么 / 怎么用 / 为什么这么设计）</b>。
+    <div class="mt-4 rounded-xl bg-rose-50 text-rose-700 p-4 text-sm flex gap-2"><span class="font-bold">🔄 闭环：</span><span>⑤ 收到的真实数据 + AI 复盘 → 沉淀进"数据池" → 下一轮 ② 选题时参考它。<b>用市场数据校准"选题者觉得好"，越做越准。</b></span></div>
+    <div class="mt-3 rounded-xl bg-slate-50 text-slate-600 p-4 text-sm"><b>⑥ 权限：</b>三种人分工——<b>定义者</b>(管素材) → <b>选题者</b>(选题/写作/排期) → <b>发布者</b>(发布/填数据)。各看各的界面。</div>
   </div>
 </section>
 
 <!-- ===== ① 知识库 ===== -->
-<section x-show="tab==='kb'" x-cloak class="space-y-4">
-  <div><h2 class="text-2xl font-bold">① 知识库</h2><p class="text-lg text-slate-500">一个品牌所有"原始素材"的家。</p></div>
-  <div class="grid md:grid-cols-2 gap-5 items-start">
-    <!-- 左：界面图 -->
-    <div class="mock p-5 space-y-3">
-      <div class="text-xs text-slate-400">界面示意</div>
-      <div class="rounded-xl bg-sky-50 border border-sky-100 p-4">
-        <div class="font-bold text-sky-800">📦 品牌：敦煌IP <span class="chip bg-sky-200 text-sky-800">长期不变</span></div>
-        <div class="text-sm text-slate-500 mt-1">品牌定义、历史脉络、视觉规范…（定义者上传）</div>
+<section x-show="tab==='kb'" x-cloak>
+  <!-- 一级 -->
+  <div x-show="!sub" class="space-y-4">
+    <div><h2 class="text-2xl font-bold">① 知识库</h2><p class="text-lg text-slate-500">一个品牌所有"原始素材"的家。</p></div>
+    <div class="grid md:grid-cols-2 gap-5 items-start">
+      <div class="mock p-5 space-y-3">
+        <div class="text-xs text-slate-400">界面示意（蓝虚线框可点进去）</div>
+        <div class="rounded-xl bg-sky-50 border border-sky-100 p-4"><div class="font-bold text-sky-800">📦 品牌：敦煌IP <span class="chip bg-sky-200 text-sky-800">长期不变</span></div><div class="text-sm text-slate-500 mt-1">品牌定义、历史脉络、视觉规范…</div></div>
+        <div class="text-center text-slate-300">下面挂多个"活动"，点进去看 ↓</div>
+        <div class="space-y-2">
+          <div @click="sub='kb-campaign'" class="click go rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-3 flex justify-between items-center"><span>🗂 敦煌当代美术展 <span class="chip bg-amber-200 text-amber-800">07.01–09.30</span></span></div>
+          <div class="rounded-xl border border-slate-200 p-3 flex justify-between items-center text-slate-500"><span>🗂 品牌日常 <span class="chip bg-slate-100">常驻</span></span><span class="text-xs">进入 →</span></div>
+        </div>
+        <div @click="sub='kb-pool'" class="click go rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">🗄 全局数据池：大家共享的资料 + 过往数据沉淀</div>
       </div>
-      <div class="text-center text-slate-300">下面挂多个"活动"</div>
-      <div class="space-y-2">
-        <div class="rounded-xl border border-slate-200 p-3 flex justify-between items-center"><span>🗂 品牌日常 <span class="chip bg-slate-100 text-slate-500">常驻</span></span><span class="text-xs text-slate-400">进入 →</span></div>
-        <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 flex justify-between items-center"><span>🗂 敦煌当代美术展 <span class="chip bg-amber-200 text-amber-800">07.01–09.30 有时效</span></span><span class="text-xs text-slate-400">进入 →</span></div>
-        <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 flex justify-between items-center"><span>🗂 敦煌音乐节</span><span class="text-xs text-slate-400">进入 →</span></div>
+      <div class="space-y-3">
+        <div class="bg-white rounded-xl border-l-4 border-sky-400 p-4"><div class="font-bold text-sky-700">💡 这是什么</div><p class="text-slate-600 mt-1">放一个品牌全部素材的仓库。分两层：<b>品牌</b>(长期不变的底色) → 下面挂多个 <b>campaign 活动</b>(有时间的)。</p></div>
+        <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>定义者建品牌、传品牌资料</li><li>每办一个活动就建一个 campaign，传对应资料</li><li>日常内容放进"品牌日常"活动里</li></ul></div>
+        <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">后面选题、写作都要"读"这些素材。分两层是因为品牌料长期有效、活动料有时效；敏感资料可标"不触网"——AI 只本地看、不外传。</p></div>
       </div>
-      <div class="rounded-xl bg-slate-50 border border-dashed border-slate-300 p-3 text-sm text-slate-500">🗄 还有个"全局数据池"：大家共享的资料 + 过往数据沉淀，每个活动都能从里面取用。</div>
     </div>
-    <!-- 右：讲解 -->
-    <div class="space-y-3">
-      <div class="bg-white rounded-xl border-l-4 border-sky-400 p-4"><div class="font-bold text-sky-700">💡 这是什么</div><p class="text-slate-600 mt-1">放一个品牌全部素材的仓库。分两层：<b>品牌</b>(长期不变的底色，如敦煌IP) → 下面挂多个 <b>campaign 活动</b>(有时间的，如美术展)。</p></div>
-      <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>定义者建品牌、传品牌资料</li><li>每办一个活动就建一个 campaign，传对应资料</li><li>日常内容放进默认的"品牌日常"活动里</li></ul></div>
-      <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">后面选题、写作都要"读"这些素材。<b>分两层</b>是因为品牌料长期有效、活动料有时效；<b>所有选题都挂在活动下</b>，管理才不乱。敏感资料可标"不触网"——AI 只本地看、不外传。</p></div>
+  </div>
+  <!-- 二级：campaign 详情 -->
+  <div x-show="sub==='kb-campaign'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 知识库</button>
+    <div><h2 class="text-xl font-bold">🗂 敦煌当代美术展 <span class="text-sm font-normal text-slate-400">活动详情</span></h2><p class="text-sm text-slate-500">这是点进某个活动后的页面：放这个活动的专属资料 + 进入选题。</p></div>
+    <div class="mock p-5 space-y-4">
+      <div class="flex justify-between items-center"><div><b>起止时间：</b>2026-07-01 ～ 09-30</div><span class="text-xs text-slate-400">[编辑] [删除]</span></div>
+      <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2">活动资料（直接传，AI自己读时效）<button class="ml-2 text-xs text-indigo-600">⬆ 上传</button></div>
+        <div class="space-y-1.5 text-sm">
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>📄 开幕新闻通稿.docx</span><span class="chip bg-slate-100 text-slate-500">备注：开幕</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>📄 展品清单.pdf</span><span class="chip bg-slate-100 text-slate-500">备注：—</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>📄 媒体报道汇总.pdf</span><span class="chip bg-slate-100 text-slate-500">备注：中期</span></div>
+        </div></div>
+      <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2">本活动·关联信息层 <button class="ml-2 text-xs text-indigo-600">⬆上传</button> <button class="text-xs text-indigo-600">＋从数据池选</button></div>
+        <div class="text-sm"><span class="chip bg-emerald-50 text-emerald-700">✅触网 媒体监测报告〔引自池〕</span></div></div>
+      <button @click="tab='topic'; sub=null" class="click go w-full py-3 rounded-xl bg-violet-600 text-white font-semibold border border-transparent">进入本活动的选题库</button>
+    </div>
+  </div>
+  <!-- 二级：全局数据池 -->
+  <div x-show="sub==='kb-pool'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 知识库</button>
+    <div><h2 class="text-xl font-bold">🗄 全局数据池</h2><p class="text-sm text-slate-500">平台级共享底座：所有品牌都能从这里取用；⑤的复盘数据会自动沉淀进来。</p></div>
+    <div class="mock p-5 space-y-2 text-sm">
+      <input class="w-full border border-slate-200 rounded-lg px-3 py-2 mb-2" placeholder="🔍 搜索数据源…">
+      <div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>✅触网 · 历史复盘　敦煌IP上季10篇复盘</span><span class="chip bg-rose-100 text-rose-600">来自⑤·自动</span></div>
+      <div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>✅触网 · 共享料　非遗行业白皮书2026</span><button class="chip bg-indigo-100 text-indigo-700">引用</button></div>
+      <div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>🔒不触网 · 特殊料　内部渠道价格表</span><button class="chip bg-indigo-100 text-indigo-700">引用</button></div>
     </div>
   </div>
 </section>
 
 <!-- ===== ② 选题库 ===== -->
-<section x-show="tab==='topic'" x-cloak class="space-y-4">
-  <div><h2 class="text-2xl font-bold">② 选题库</h2><p class="text-lg text-slate-500">AI 帮你想一批选题，你挑好的留下。</p></div>
-  <div class="grid md:grid-cols-2 gap-5 items-start">
-    <div class="mock p-5 space-y-3">
-      <div class="text-xs text-slate-400">界面示意</div>
-      <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-3">
-        <div class="text-sm"><div class="text-slate-500 mb-1">① 调配比（日常 vs 活动）</div>
-          <div class="flex items-center gap-2 text-xs"><span>品牌日常</span><div class="flex-1 h-2.5 rounded-full bg-gradient-to-r from-violet-300 to-amber-300 relative"><div class="absolute -top-1 left-[30%] w-4.5 h-4.5 w-4 h-4 rounded-full bg-white border-2 border-violet-500"></div></div><span>活动</span></div></div>
-        <div class="text-sm text-slate-500">② 选数据来源：☑知识库 ☑热点 ☑小红书 ☐公众号</div>
-        <button class="w-full py-2.5 rounded-xl bg-violet-600 text-white font-semibold">✦ 让 AI 推荐选题</button>
+<section x-show="tab==='topic'" x-cloak>
+  <div x-show="!sub" class="space-y-4">
+    <div><h2 class="text-2xl font-bold">② 选题库</h2><p class="text-lg text-slate-500">AI 帮你想一批选题，你挑好的留下。</p></div>
+    <div class="grid md:grid-cols-2 gap-5 items-start">
+      <div class="mock p-5 space-y-3">
+        <div class="text-xs text-slate-400">界面示意（蓝虚线框可点进去）</div>
+        <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-3">
+          <div class="text-sm"><div class="text-slate-500 mb-1">① 调配比（日常 vs 活动）</div><div class="flex items-center gap-2 text-xs"><span>日常</span><div class="flex-1 h-2.5 rounded-full bg-gradient-to-r from-violet-300 to-amber-300 relative"><div class="absolute -top-1 left-[30%] w-4 h-4 rounded-full bg-white border-2 border-violet-500"></div></div><span>活动</span></div></div>
+          <div class="text-sm text-slate-500">② 选来源：☑知识库 ☑热点 ☑小红书 ☐公众号</div>
+          <button class="w-full py-2.5 rounded-xl bg-violet-600 text-white font-semibold">✦ 让 AI 推荐选题</button>
+        </div>
+        <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-1.5">
+          <div class="text-xs text-amber-700 font-semibold">③ AI 推荐了一批，点选题看详情 / 勾选采纳：</div>
+          <div @click="sub='topic-detail'" class="click go flex items-center gap-2 text-sm bg-white rounded-lg px-2 py-1.5 border-2 border-dashed border-violet-200"><input type="checkbox" checked onclick="event.stopPropagation()"> 美术展开幕打卡攻略</div>
+          <label class="flex items-center gap-2 text-sm bg-white rounded-lg px-2 py-1.5"><input type="checkbox" checked> 展品背后的修复故事</label>
+          <button class="w-full py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium mt-1">✓ 采纳勾选的 2 条</button>
+        </div>
       </div>
-      <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-1.5">
-        <div class="text-xs text-amber-700 font-semibold">③ AI 推荐了一批，勾选好的：</div>
-        <label class="flex items-center gap-2 text-sm bg-white rounded-lg px-2 py-1.5"><input type="checkbox" checked> 美术展开幕打卡攻略</label>
-        <label class="flex items-center gap-2 text-sm bg-white rounded-lg px-2 py-1.5"><input type="checkbox" checked> 展品背后的修复故事</label>
-        <label class="flex items-center gap-2 text-sm bg-white rounded-lg px-2 py-1.5"><input type="checkbox"> 看展穿搭指南</label>
-        <button class="w-full py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium mt-1">✓ 采纳勾选的 2 条</button>
+      <div class="space-y-3">
+        <div class="bg-white rounded-xl border-l-4 border-violet-400 p-4"><div class="font-bold text-violet-700">💡 这是什么</div><p class="text-slate-600 mt-1">针对某个活动，AI 一次想出一批选题点子，你像"筛简历"一样挑好的留下。</p></div>
+        <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>拖比例条定"日常 : 活动"配比</li><li>勾选让 AI 参考哪些渠道</li><li>点推荐 → 点开看详情 → 采纳满意的</li></ul></div>
+        <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1"><b>"选题者觉得好 ≠ 用户买单"</b>。AI 参考真实发布数据 + 多渠道热点帮你选得更准；先候选再采纳，筛掉一般的、只留精华。</p></div>
       </div>
-      <div class="text-sm text-slate-500">→ 采纳的进"正式选题库"，等着写作。没勾的直接丢。</div>
     </div>
-    <div class="space-y-3">
-      <div class="bg-white rounded-xl border-l-4 border-violet-400 p-4"><div class="font-bold text-violet-700">💡 这是什么</div><p class="text-slate-600 mt-1">针对某个活动，AI 一次性想出一批选题点子，你像"筛简历"一样挑出好的留下。</p></div>
-      <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>拖比例条，定"日常 : 活动"各占多少</li><li>勾选让 AI 参考哪些渠道（知识库/热点/小红书/公众号）</li><li>点推荐 → 勾选满意的 → 采纳进库</li></ul></div>
-      <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1"><b>"选题者觉得好 ≠ 用户买单"</b>。所以 AI 会参考真实发布数据 + 多个渠道的热点，帮你选得更准；<b>先候选再采纳</b>，是为了筛掉一般的、只留精华，不堆垃圾。</p></div>
+  </div>
+  <!-- 二级：选题详情 -->
+  <div x-show="sub==='topic-detail'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 选题库</button>
+    <div><h2 class="text-xl font-bold">选题详情</h2><p class="text-sm text-slate-500">点开一条候选选题看全貌，再决定采纳还是弃选。</p></div>
+    <div class="mock p-5 space-y-3 text-sm">
+      <div class="text-lg font-bold">美术展开幕KOL打卡攻略 <span class="chip bg-amber-100 text-amber-700">时效</span></div>
+      <div><b class="text-slate-500">纲要：</b>以"开幕首日打卡路线"切入，串联5个必看展品 + 拍照机位，结尾引导收藏…</div>
+      <div><b class="text-slate-500">来源：</b>🔥热点 + 📕小红书</div>
+      <div class="bg-violet-50 rounded-lg p-3"><b class="text-violet-700">AI 推荐理由：</b>本周"沉浸式看展"搜索量上涨，且贵品牌上条同类笔记收藏破千，建议蹭开幕热度。</div>
+      <div class="bg-emerald-50 rounded-lg p-3"><b class="text-emerald-700">反馈依据：</b>敦煌IP《夜游展》小红书收藏 1.2k（来自数据池）</div>
+      <div><b class="text-slate-500">关联：</b><span class="text-indigo-600">xiaohongshu.com/xxx</span></div>
+      <div class="flex gap-2 pt-2"><button class="px-4 py-2 rounded-lg bg-emerald-600 text-white">✓ 采纳进库</button><button class="px-4 py-2 rounded-lg border">✕ 弃选</button></div>
     </div>
   </div>
 </section>
 
 <!-- ===== ③ 写作引擎 ===== -->
-<section x-show="tab==='writing'" x-cloak class="space-y-4">
-  <div><h2 class="text-2xl font-bold">③ 写作引擎</h2><p class="text-lg text-slate-500">先学"别人怎么写"，再按这个风格帮你写。</p></div>
-  <div class="grid md:grid-cols-2 gap-5 items-start">
-    <div class="mock p-5 space-y-3">
-      <div class="text-xs text-slate-400">界面示意</div>
-      <div class="text-sm text-slate-500">AI 去小红书/公众号扒了 5 种"写法风格"：</div>
-      <div class="space-y-2">
-        <div class="rounded-xl border-2 border-fuchsia-300 bg-fuchsia-50 p-3"><div class="flex justify-between items-center"><b>⭐ 沉浸式种草体</b><span class="chip bg-fuchsia-200 text-fuchsia-800">设为默认</span></div><div class="text-xs text-slate-500 mt-1">短句铺陈 · 亲切安利 · 口语化 ｜ 🔗参考链接</div></div>
-        <div class="rounded-xl border border-slate-200 p-3"><b class="text-slate-600">文化科普体</b><div class="text-xs text-slate-500 mt-1">总分总 · 娓娓道来 · 典雅 ｜ 🔗参考链接</div></div>
-        <div class="rounded-xl border border-slate-200 p-3 text-sm text-slate-400">攻略清单体 · 故事叙事体 · 情绪共鸣体…</div>
+<section x-show="tab==='writing'" x-cloak>
+  <div x-show="!sub" class="space-y-4">
+    <div><h2 class="text-2xl font-bold">③ 写作引擎</h2><p class="text-lg text-slate-500">先学"别人怎么写"，再按这个风格帮你写。</p></div>
+    <div class="grid md:grid-cols-2 gap-5 items-start">
+      <div class="mock p-5 space-y-3">
+        <div class="text-xs text-slate-400">界面示意（蓝虚线框可点进去）</div>
+        <div class="text-sm text-slate-500">AI 扒了 5 种"写法风格"：</div>
+        <div @click="sub='writing-style'" class="click go rounded-xl border-2 border-dashed border-fuchsia-300 bg-fuchsia-50 p-3"><div class="flex justify-between items-center"><b>⭐ 沉浸式种草体</b><span class="chip bg-fuchsia-200 text-fuchsia-800">默认</span></div><div class="text-xs text-slate-500 mt-1">短句铺陈 · 亲切安利 · 口语化 ｜ 点看详情</div></div>
+        <div class="rounded-xl border border-slate-200 p-3 text-slate-600"><b>文化科普体</b> <span class="text-xs text-slate-400">· 攻略清单体 · 故事叙事体 · 情绪共鸣体</span></div>
+        <div @click="sub='writing-article'" class="click go rounded-xl bg-slate-50 border-2 border-dashed border-slate-300 p-3 text-sm"><button class="px-3 py-1.5 rounded-lg bg-fuchsia-600 text-white text-xs">⚡ 生成文章</button> <span class="text-slate-500">点这里看生成结果 →</span></div>
       </div>
-      <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm">
-        <div class="text-slate-500 mb-2">写文章时自动套用默认风格：</div>
-        <button class="px-3 py-2 rounded-lg bg-fuchsia-600 text-white text-sm">⚡ 生成文章</button>
-        <span class="text-slate-400 text-sm">→ ✓文章 → </span>
-        <button class="px-3 py-2 rounded-lg bg-fuchsia-600 text-white text-sm">🖼 生成配图</button>
-        <span class="text-slate-400 text-sm">→ ✓图文完成</span>
+      <div class="space-y-3">
+        <div class="bg-white rounded-xl border-l-4 border-fuchsia-400 p-4"><div class="font-bold text-fuchsia-700">💡 这是什么</div><p class="text-slate-600 mt-1">AI 先找"同类感觉"的爆款，总结几种写作风格，再照风格帮你生成文章 + 配图。</p></div>
+        <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>给活动抓 5 种风格（带参考链接）</li><li>选 1 种设默认</li><li>生成时自动套用，先文章后配图</li></ul></div>
+        <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">好内容要符合平台调性。学优秀同行的表达方式，带参考链接方便核对，不是黑箱。</p></div>
       </div>
     </div>
-    <div class="space-y-3">
-      <div class="bg-white rounded-xl border-l-4 border-fuchsia-400 p-4"><div class="font-bold text-fuchsia-700">💡 这是什么</div><p class="text-slate-600 mt-1">AI 先去平台上找"同类感觉"的爆款，总结出几种写作风格（段落、语气、用词），再照这个风格帮你生成文章 + 配图。</p></div>
-      <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>给活动抓 5 种风格（每种带参考链接）</li><li>选 1 种设为这个活动的默认风格</li><li>生成时自动套用，先出文章、再出配图</li></ul></div>
-      <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">好内容要<b>符合平台调性</b>。与其凭空写，不如学优秀同行的表达方式。带<b>参考链接</b>方便人工核对，不是黑箱。</p></div>
+  </div>
+  <!-- 二级：风格详情 -->
+  <div x-show="sub==='writing-style'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 写作引擎</button>
+    <div><h2 class="text-xl font-bold">⭐ 沉浸式种草体 <span class="text-sm font-normal text-slate-400">风格详情</span></h2></div>
+    <div class="mock p-5 space-y-3 text-sm">
+      <div class="grid grid-cols-3 gap-2 text-center"><div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">段落结构</div><div class="font-semibold mt-1">短句铺陈+场景代入</div></div><div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">语气</div><div class="font-semibold mt-1">亲切安利</div></div><div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">用词</div><div class="font-semibold mt-1">口语化/网感</div></div></div>
+      <div class="bg-slate-50 rounded-lg p-3"><b class="text-slate-500">参考来源：</b><span class="text-indigo-600">xiaohongshu.com/xxx</span>（这种风格扒自这篇真实爆款）</div>
+      <div class="bg-fuchsia-50 rounded-lg p-3"><b class="text-fuchsia-700">示例片段：</b>"姐妹些！这个展我直接逛了 3 小时不想走😭 一进门就是巨巨巨震撼的飞天…"</div>
+      <button class="px-4 py-2 rounded-lg bg-fuchsia-600 text-white">设为本活动默认风格</button>
+    </div>
+  </div>
+  <!-- 二级：文章预览 -->
+  <div x-show="sub==='writing-article'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 写作引擎</button>
+    <div><h2 class="text-xl font-bold">生成结果预览</h2><p class="text-sm text-slate-500">套用默认风格生成的文章 + 配图（生成是"先文章后配图"两步）。</p></div>
+    <div class="mock p-5 space-y-3">
+      <div class="flex gap-2 text-xs"><span class="chip bg-emerald-100 text-emerald-700">✓ 文章已生成</span><span class="chip bg-emerald-100 text-emerald-700">✓ 配图已生成</span><span class="chip bg-slate-100 text-slate-500">风格：沉浸式种草体</span></div>
+      <div class="bg-slate-50 rounded-lg p-4 text-sm leading-relaxed"><b>美术展开幕｜直接封神的一场敦煌之旅✨</b><br><br>姐妹些！开幕首日冲了，给你们扒拉出最值得打卡的 5 个机位…（正文）</div>
+      <div class="grid grid-cols-3 gap-2"><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图1</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图2</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图3</div></div>
     </div>
   </div>
 </section>
 
 <!-- ===== ④ 排期版 ===== -->
-<section x-show="tab==='schedule'" x-cloak class="space-y-4">
-  <div><h2 class="text-2xl font-bold">④ 排期版</h2><p class="text-lg text-slate-500">写好的内容，安排哪天发。</p></div>
-  <div class="grid md:grid-cols-2 gap-5 items-start">
-    <div class="mock p-5 space-y-3">
-      <div class="text-xs text-slate-400">界面示意</div>
-      <button class="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium">✦ AI 推荐排期</button>
-      <span class="text-sm text-slate-500">（设"每周 3 篇"，AI 自动排到日历）</span>
-      <div class="rounded-xl border border-slate-200 p-3 space-y-2">
-        <div class="text-xs font-semibold text-slate-400">这一周</div>
-        <div class="flex justify-between items-center text-sm border-b border-slate-100 pb-2"><span>📅 07.01（开幕日）开幕速记</span><button class="chip bg-emerald-100 text-emerald-700">发布</button></div>
-        <div class="flex justify-between items-center text-sm border-b border-slate-100 pb-2"><span>📅 07.05 看展攻略</span><span class="chip bg-slate-100 text-slate-500">✅已发·小红书</span></div>
-        <div class="flex justify-between items-center text-sm"><span>📅 07.08 修复故事</span><button class="chip bg-emerald-100 text-emerald-700">发布</button></div>
+<section x-show="tab==='schedule'" x-cloak>
+  <div x-show="!sub" class="space-y-4">
+    <div><h2 class="text-2xl font-bold">④ 排期版</h2><p class="text-lg text-slate-500">写好的内容，安排哪天发。</p></div>
+    <div class="grid md:grid-cols-2 gap-5 items-start">
+      <div class="mock p-5 space-y-3">
+        <div class="text-xs text-slate-400">界面示意（蓝虚线框可点进去）</div>
+        <div><button class="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium">✦ AI 推荐排期</button> <span class="text-sm text-slate-500">设"每周3篇"自动排</span></div>
+        <div class="rounded-xl border border-slate-200 p-3 space-y-2">
+          <div class="text-xs font-semibold text-slate-400">这一周</div>
+          <div @click="sub='schedule-publish'" class="click go flex justify-between items-center text-sm border-2 border-dashed border-amber-200 rounded-lg px-2 py-2"><span>📅 07.01（开幕）开幕速记</span><span class="chip bg-emerald-100 text-emerald-700">点这发布</span></div>
+          <div class="flex justify-between items-center text-sm px-2"><span>📅 07.05 看展攻略</span><span class="chip bg-slate-100 text-slate-500">✅已发·小红书</span></div>
+        </div>
+        <div @click="sub='schedule-brand'" class="click go rounded-xl bg-slate-50 border-2 border-dashed border-slate-300 p-3 text-sm text-slate-600">📊 看品牌总表（所有活动一起看，有没有撞期）</div>
       </div>
-      <div class="rounded-xl bg-emerald-50 border border-emerald-100 p-3 text-sm">
-        <div class="font-semibold text-emerald-700 mb-1">点"发布"时填一下：</div>
-        发布平台：小红书　文章链接：____　发布时间：07.05
+      <div class="space-y-3">
+        <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">💡 这是什么</div><p class="text-slate-600 mt-1">一个发布日历。把写好的图文排到哪天发，AI 先给推荐，你能手动改。</p></div>
+        <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>设"每周几篇"，AI 自动排（可调）</li><li>到点发布者点"发布"，填平台/链接/时间</li><li>品牌总表看所有活动撞没撞期</li></ul></div>
+        <div class="bg-white rounded-xl border-l-4 border-sky-400 p-4"><div class="font-bold text-sky-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">时效内容要卡节点发（开幕/闭幕），AI 按活动时间排最省心。填链接是为了下一步回收数据。</p></div>
       </div>
     </div>
-    <div class="space-y-3">
-      <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">💡 这是什么</div><p class="text-slate-600 mt-1">一个发布日历。把写好的图文安排到具体哪天发，AI 先给个推荐排期，你能手动改。</p></div>
-      <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>设"每周发几篇"，AI 自动排到日历（可手动调）</li><li>到点了，发布者点"发布"，填平台/链接/时间</li><li>品牌层还有个只读总表，看所有活动撞没撞期</li></ul></div>
-      <div class="bg-white rounded-xl border-l-4 border-sky-400 p-4"><div class="font-bold text-sky-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">时效内容要<b>卡节点发</b>（开幕/闭幕），AI 按活动时间帮你排最省心。填发布链接是为了下一步<b>回收数据</b>。</p></div>
+  </div>
+  <!-- 二级：发布回填 -->
+  <div x-show="sub==='schedule-publish'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 排期版</button>
+    <div><h2 class="text-xl font-bold">发布回填</h2><p class="text-sm text-slate-500">发布者点"发布"后填这张表，发完锁定。</p></div>
+    <div class="mock p-5 space-y-3 text-sm max-w-md">
+      <div><b>选题：</b>开幕速记</div>
+      <div><b>发布平台：</b><label class="ml-1"><input type="radio" name="p" checked> 📕小红书</label> <label class="ml-2"><input type="radio" name="p"> 📰公众号</label> <label class="ml-2"><input type="radio" name="p"> 其他</label></div>
+      <div><b>文章链接：</b><input class="border border-slate-200 rounded px-2 py-1 w-full mt-1" placeholder="粘贴发布后的链接"></div>
+      <div><b>发布时间：</b><input class="border border-slate-200 rounded px-2 py-1" value="2026-07-01 10:00"></div>
+      <button class="px-4 py-2 rounded-lg bg-indigo-600 text-white">确认发布</button>
+      <div class="text-xs text-slate-400">发布后阅读数据稍后在「⑤数据反馈」回填。</div>
+    </div>
+  </div>
+  <!-- 二级：品牌总表 -->
+  <div x-show="sub==='schedule-brand'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 排期版</button>
+    <div><h2 class="text-xl font-bold">📊 品牌排期总表 <span class="text-sm font-normal text-slate-400">只读</span></h2><p class="text-sm text-slate-500">把这个品牌所有活动的发布排到一起，一眼看出撞期。</p></div>
+    <div class="mock p-5 space-y-2 text-sm">
+      <div class="text-xs font-semibold text-slate-400">第27周</div>
+      <div class="bg-slate-50 rounded px-3 py-2">07.01　[美术展·时效] 开幕速记　<span class="text-emerald-600">✅已发布</span></div>
+      <div class="bg-slate-50 rounded px-3 py-2">07.03　[品牌日常] 纹样设计　✓图文</div>
+      <div class="bg-slate-50 rounded px-3 py-2">07.05　[美术展·时效] 看展攻略　<span class="text-emerald-600">✅已发布</span></div>
+      <div class="bg-rose-50 text-rose-600 rounded px-3 py-2">07.05　[音乐节·时效] 阵容预告　⚠ 同一天 2 篇，注意撞期</div>
     </div>
   </div>
 </section>
 
 <!-- ===== ⑤ 数据反馈 ===== -->
-<section x-show="tab==='feedback'" x-cloak class="space-y-4">
-  <div><h2 class="text-2xl font-bold">⑤ 数据反馈</h2><p class="text-lg text-slate-500">发完看数据，AI 帮你总结经验。</p></div>
-  <div class="grid md:grid-cols-2 gap-5 items-start">
-    <div class="mock p-5 space-y-3">
-      <div class="text-xs text-slate-400">界面示意</div>
-      <div class="rounded-xl border border-slate-200 p-3">
-        <div class="text-xs font-semibold text-slate-400 mb-2">发布后回填的数据</div>
-        <table class="w-full text-sm"><tr class="text-slate-400 text-xs"><td>篇目</td><td>赞</td><td>评</td><td>藏</td></tr>
-          <tr><td class="py-1">开幕速记</td><td>340</td><td>42</td><td>210</td></tr>
-          <tr><td class="py-1">看展攻略</td><td>120</td><td>18</td><td>95</td></tr>
-        </table>
+<section x-show="tab==='feedback'" x-cloak>
+  <div x-show="!sub" class="space-y-4">
+    <div><h2 class="text-2xl font-bold">⑤ 数据反馈</h2><p class="text-lg text-slate-500">发完看数据，AI 帮你总结经验。</p></div>
+    <div class="grid md:grid-cols-2 gap-5 items-start">
+      <div class="mock p-5 space-y-3">
+        <div class="text-xs text-slate-400">界面示意（蓝虚线框可点进去）</div>
+        <div class="rounded-xl border border-slate-200 p-3"><div class="text-xs font-semibold text-slate-400 mb-2">发布后回填的数据</div>
+          <table class="w-full text-sm"><tr class="text-slate-400 text-xs"><td>篇目</td><td>赞</td><td>评</td><td>藏</td></tr><tr><td class="py-1">开幕速记</td><td>340</td><td>42</td><td>210</td></tr><tr><td class="py-1">看展攻略</td><td>120</td><td>18</td><td>95</td></tr></table></div>
+        <div class="rounded-xl bg-emerald-50 border border-emerald-100 p-4"><div class="font-semibold text-emerald-700 mb-1">🧠 AI 复盘（点一下生成）</div><ul class="text-sm text-slate-600 space-y-0.5 list-disc list-inside"><li>"故事叙事体"比"攻略体"数据好</li><li>开幕当天流量最高</li></ul></div>
+        <div @click="sub='feedback-brand'" class="click go rounded-xl bg-slate-50 border-2 border-dashed border-slate-300 p-3 text-sm text-slate-600">📈 看品牌大盘（所有活动表现排行）</div>
       </div>
-      <div class="rounded-xl bg-emerald-50 border border-emerald-100 p-4">
-        <div class="font-semibold text-emerald-700 mb-1">🧠 AI 复盘（点一下生成）</div>
-        <ul class="text-sm text-slate-600 space-y-0.5 list-disc list-inside">
-          <li>"故事叙事体"比"攻略体"数据好</li>
-          <li>开幕当天流量最高</li>
-          <li>下轮建议：多用故事体、卡开幕发</li>
-        </ul>
-        <button class="mt-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm">采纳，存进数据池</button>
+      <div class="space-y-3">
+        <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">💡 这是什么</div><p class="text-slate-600 mt-1">记录每篇发出去后的真实数据，AI 帮你总结"哪类内容数据好"。</p></div>
+        <div class="bg-white rounded-xl border-l-4 border-sky-400 p-4"><div class="font-bold text-sky-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>发布者回填阅读数据</li><li>点"生成复盘"看 AI 洞察 + 下轮建议</li><li>看板按活动/品牌看整体表现</li></ul></div>
+        <div class="bg-white rounded-xl border-l-4 border-rose-400 p-4"><div class="font-bold text-rose-700">🎯 为什么这么设计（最关键）</div><p class="text-slate-600 mt-1">这是<b>闭环核心</b>：把"什么内容数据好"沉淀进数据池，<b>喂回第②步选题</b>。系统会<b>越用越准</b>。</p></div>
       </div>
     </div>
-    <div class="space-y-3">
-      <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">💡 这是什么</div><p class="text-slate-600 mt-1">记录每篇发出去后的真实数据（赞/评/藏、阅读量），AI 帮你总结"哪类内容数据好"。</p></div>
-      <div class="bg-white rounded-xl border-l-4 border-sky-400 p-4"><div class="font-bold text-sky-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>发布者回填阅读数据</li><li>点"生成复盘"，AI 给出洞察 + 下轮建议</li><li>看板按活动/品牌看整体表现</li></ul></div>
-      <div class="bg-white rounded-xl border-l-4 border-rose-400 p-4"><div class="font-bold text-rose-700">🎯 为什么这么设计（最关键）</div><p class="text-slate-600 mt-1">这是<b>闭环的核心</b>：把"什么内容数据好"沉淀进数据池，<b>喂回第②步选题</b>。这样系统会<b>越用越懂你的用户、选题越来越准</b>。</p></div>
+  </div>
+  <!-- 二级：品牌大盘 -->
+  <div x-show="sub==='feedback-brand'" x-cloak class="space-y-4">
+    <button @click="sub=null" class="text-sm text-indigo-600">← 返回 数据反馈</button>
+    <div><h2 class="text-xl font-bold">📈 品牌数据大盘 <span class="text-sm font-normal text-slate-400">只读</span></h2><p class="text-sm text-slate-500">跨所有活动看整体表现和排行。</p></div>
+    <div class="mock p-5 space-y-3 text-sm">
+      <div class="grid grid-cols-3 gap-2 text-center">
+        <div class="bg-sky-50 rounded-lg p-3"><div class="text-2xl font-bold text-sky-700">23</div><div class="text-xs text-slate-500">累计发布</div></div>
+        <div class="bg-emerald-50 rounded-lg p-3"><div class="text-2xl font-bold text-emerald-700">6.7k</div><div class="text-xs text-slate-500">总互动</div></div>
+        <div class="bg-amber-50 rounded-lg p-3"><div class="text-2xl font-bold text-amber-700">开幕速记</div><div class="text-xs text-slate-500">最佳篇</div></div>
+      </div>
+      <div class="rounded-lg border border-slate-200 p-3"><div class="text-xs text-slate-400 mb-2">各活动表现</div>
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-2"><span class="w-20">美术展</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-indigo-500 h-3 rounded" style="width:80%"></div></div><span class="text-xs">3.2k</span></div>
+          <div class="flex items-center gap-2"><span class="w-20">品牌日常</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-indigo-500 h-3 rounded" style="width:60%"></div></div><span class="text-xs">2.4k</span></div>
+          <div class="flex items-center gap-2"><span class="w-20">音乐节</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-indigo-500 h-3 rounded" style="width:28%"></div></div><span class="text-xs">1.1k</span></div>
+        </div></div>
     </div>
   </div>
 </section>
 
 <!-- ===== ⑥ 权限 ===== -->
-<section x-show="tab==='perm'" x-cloak class="space-y-4">
-  <div><h2 class="text-2xl font-bold">⑥ 权限管理</h2><p class="text-lg text-slate-500">三种人，分工协作，各看各的。</p></div>
-  <div class="grid md:grid-cols-2 gap-5 items-start">
-    <div class="mock p-5 space-y-3">
-      <div class="text-xs text-slate-400">界面示意</div>
-      <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-3"><b class="text-indigo-700">👑 定义者</b><div class="text-sm text-slate-500">管素材、建品牌/活动、管账号。权限最大。</div></div>
-      <div class="rounded-xl border border-slate-200 p-3"><b>✍️ 选题者</b><div class="text-sm text-slate-500">选题、写作、排期。素材只能看不能改。</div></div>
-      <div class="rounded-xl border border-slate-200 p-3"><b>📤 发布者</b><div class="text-sm text-slate-500">发布、回填数据、看报表。权限最小。</div></div>
-      <div class="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">同一个系统，三个账号登录，看到的按钮不一样。</div>
+<section x-show="tab==='perm'" x-cloak>
+  <div x-show="!sub" class="space-y-4">
+    <div><h2 class="text-2xl font-bold">⑥ 权限管理</h2><p class="text-lg text-slate-500">三种人，分工协作，各看各的。点角色看他的视角 ↓</p></div>
+    <div class="grid md:grid-cols-3 gap-4">
+      <div @click="sub='perm-owner'" class="click go mock p-4 border-indigo-200 bg-indigo-50"><b class="text-indigo-700">👑 定义者</b><div class="text-sm text-slate-500 mt-1">管素材、建品牌/活动、管账号。权限最大。</div></div>
+      <div @click="sub='perm-editor'" class="click go mock p-4"><b>✍️ 选题者</b><div class="text-sm text-slate-500 mt-1">选题、写作、排期。素材只看不改。</div></div>
+      <div @click="sub='perm-publisher'" class="click go mock p-4"><b>📤 发布者</b><div class="text-sm text-slate-500 mt-1">发布、回填数据、看报表。权限最小。</div></div>
     </div>
-    <div class="space-y-3">
-      <div class="bg-white rounded-xl border-l-4 border-indigo-400 p-4"><div class="font-bold text-indigo-700">💡 这是什么</div><p class="text-slate-600 mt-1">把团队分成三种角色，每种能做的事不同，层层包含（上一级包含下一级的权限）。</p></div>
-      <div class="bg-white rounded-xl border-l-4 border-emerald-400 p-4"><div class="font-bold text-emerald-700">📝 怎么用</div><p class="text-slate-600 mt-1">三个账号分给三种人，登录后系统自动只显示他能用的功能。</p></div>
-      <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">分工清楚、避免乱改。而且是<b>双保险</b>：界面藏起来 + 后台拦截，绕也绕不过去。<b>这套已经做好了，直接用。</b></p></div>
-    </div>
+    <div class="bg-white rounded-xl border-l-4 border-amber-400 p-4 text-sm"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">分工清楚、避免乱改。<b>双保险</b>：界面藏起来 + 后台拦截，绕也绕不过去。<b>这套已做好，直接用。</b></p></div>
   </div>
+  <template x-for="r in [
+    ['perm-owner','👑 定义者','全部能用：建品牌/活动、上传管理素材、治理数据池、所有选题写作排期发布、管账号','✓ 全亮'],
+    ['perm-editor','✍️ 选题者','能用：选题推荐采纳、写作风格、生成、排期、发布回填；只读：知识库素材（不能传/改）','部分'],
+    ['perm-publisher','📤 发布者','能用：发布、回填阅读数据、看报表/复盘；其余都是只读','最少']]">
+    <div x-show="sub===r[0]" x-cloak class="space-y-4">
+      <button @click="sub=null" class="text-sm text-indigo-600">← 返回 权限</button>
+      <div><h2 class="text-xl font-bold" x-text="r[1]+' 的视角'"></h2><p class="text-sm text-slate-500">这个角色登录后，界面长这样（不能用的功能直接不显示）。</p></div>
+      <div class="mock p-5 space-y-2">
+        <div class="text-sm text-slate-600 mb-2" x-text="r[2]"></div>
+        <div class="grid grid-cols-3 gap-2 text-center text-xs">
+          <template x-for="m in [['①知识库','owner'],['②选题库','editor'],['③写作','editor'],['④排期','editor'],['⑤数据反馈','pub'],['发布动作','pub']]">
+            <div :class="(r[0]==='perm-owner') || (r[0]==='perm-editor'&&(m[1]==='editor'||m[1]==='pub')) || (r[0]==='perm-publisher'&&m[1]==='pub') ? 'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-slate-50 text-slate-300 border-slate-200'"
+                 class="rounded-lg p-3 border"><div x-text="m[0]"></div>
+              <div class="mt-1" x-text="((r[0]==='perm-owner')||(r[0]==='perm-editor'&&(m[1]==='editor'||m[1]==='pub'))||(r[0]==='perm-publisher'&&m[1]==='pub'))?'可操作':'只读/隐藏'"></div></div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
 </section>
 
 </main>
-<footer class="max-w-5xl mx-auto px-5 py-8 text-xs text-slate-400">tnalpha · 产品图解 · 供讨论，非最终视觉</footer>
+<footer class="max-w-5xl mx-auto px-5 py-8 text-xs text-slate-400">tnalpha · 产品图解（可点击二级页面）· 供讨论，非最终视觉</footer>
 </body>
 </html>
