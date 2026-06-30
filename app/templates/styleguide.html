@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, button, chip, field, empty_state, table_open, table_close %}
+{% block content %}
+  {{ page_header("设计系统", "组件样例 Styleguide") }}
+  <p class="text-sm text-slate-500 -mt-3 mb-5">开发参考：所有模块复用这些组件（见 DESIGN.md）。不要自创样式。</p>
+
+  {{ card_open("按钮 button") }}
+    <div class="flex flex-wrap gap-2">
+      {{ button("主操作 primary", variant="primary") }}
+      {{ button("次操作 secondary", variant="secondary") }}
+      {{ button("危险 danger", variant="danger") }}
+      {{ button("幽灵 ghost", variant="ghost") }}
+      {{ button("禁用", disabled=True) }}
+    </div>
+  {{ card_close() }}
+
+  {{ card_open("标签 chip") }}
+    <div class="flex flex-wrap gap-2">
+      {{ chip("slate") }} {{ chip("已发布", "emerald") }} {{ chip("时效", "amber") }}
+      {{ chip("删除", "rose") }} {{ chip("品牌", "brand") }}
+    </div>
+  {{ card_close() }}
+
+  {{ card_open("表单 field") }}
+    <div class="max-w-sm">
+      {{ field("品牌名称", "name", placeholder="如 敦煌IP", required=True) }}
+      {{ field("开始日期", "start", type="date") }}
+    </div>
+  {{ card_close() }}
+
+  {{ card_open("表格 table") }}
+    {{ table_open(["篇目","平台","赞","评"]) }}
+      <tr class="border-b border-slate-50"><td class="py-1.5">开幕速记</td><td>小红书</td><td>340</td><td>42</td></tr>
+      <tr><td class="py-1.5">看展攻略</td><td>小红书</td><td>120</td><td>18</td></tr>
+    {{ table_close() }}
+  {{ card_close() }}
+
+  {{ card_open("空状态 empty_state") }}
+    {{ empty_state("还没有数据，点上面按钮开始。") }}
+  {{ card_close() }}
+{% endblock %}

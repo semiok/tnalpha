@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}tnalpha{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // ── 设计 Token（全站唯一来源，改这里全局生效，见 DESIGN.md）──
+    tailwind.config = { theme: { extend: { colors: {
+      brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',
+               400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca' }
+    }}}}
+  </script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}[x-cloak]{display:none;}</style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+  <header class="bg-white border-b border-slate-200 px-5 py-3 flex items-center gap-3 sticky top-0 z-20">
+    <a href="/" class="w-8 h-8 rounded-lg bg-brand-600 text-white grid place-items-center font-bold">t</a>
+    <div class="font-bold">tnalpha <span class="text-slate-400 font-normal text-sm">· 内容生产协作平台</span></div>
+    <span class="ml-auto text-xs text-slate-400">
+      {{ {"owner":"定义者","editor":"选题者","publisher":"发布者"}.get(request.state.role, "") if request.state.role else "" }}
+    </span>
+    {% if request.state.role %}<a href="/logout" class="text-xs text-slate-400 hover:text-slate-600">退出登录</a>{% endif %}
+  </header>
+
+  <main class="max-w-5xl mx-auto p-6">{% block content %}{% endblock %}</main>
+
+  <!-- 弹框挂载点（HTMX 注入，见 DESIGN.md 第3节） -->
+  <div id="modal-slot"></div>
+
+  <!-- 全局 toast：后端响应头 HX-Trigger: saved 触发 -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 hidden px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm shadow-lg"></div>
+  <script>
+    function tnToast(msg){const t=document.getElementById('toast');t.textContent=msg||'保存成功';t.classList.remove('hidden');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.add('hidden'),2000);}
+    document.body.addEventListener('saved', e=>tnToast((e.detail&&e.detail.value)||'保存成功'));
+    function tnCloseModal(){document.getElementById('modal-slot').innerHTML='';}
+  </script>
+</body>
+</html>

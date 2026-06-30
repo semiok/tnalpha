@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, empty_state %}
+{% block content %}
+  {{ page_header("①知识库", "品牌 / Campaign") }}
+  <p class="text-sm text-slate-500 -mt-3 mb-5">一个品牌 = 一套知识库。点进去管理资料和活动。</p>
+
+  <div class="grid grid-cols-3 gap-4">
+    {% for b in brands %}
+    <a href="/brands/{{ b.id }}" class="block bg-white rounded-xl border border-slate-200 p-5 hover:border-brand-300 hover:shadow-md transition">
+      <div class="font-semibold">{{ b.name }}</div>
+      <div class="text-xs text-slate-400 mt-2">{{ b.created_at.strftime('%Y-%m-%d') }}</div>
+    </a>
+    {% endfor %}
+
+    {% if request.state.level >= 2 %}
+    <form method="post" action="/brands" class="bg-white rounded-xl border-2 border-dashed border-slate-300 p-5 grid place-items-center">
+      <div class="w-full text-center">
+        <input name="name" required placeholder="新品牌名称" class="w-full text-sm border border-slate-200 rounded-lg px-2 py-1.5 mb-2">
+        <button class="w-full px-3 py-1.5 rounded-lg bg-brand-600 text-white text-sm">＋ 新建品牌</button>
+      </div>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if not brands and request.state.level < 2 %}{{ empty_state("还没有品牌，等定义者创建。") }}{% endif %}
+{% endblock %}

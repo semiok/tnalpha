@@ -1,0 +1,92 @@
+{#
+  tnalpha 共享组件库（见 DESIGN.md）。所有模块复用这些宏，不要自己写样式。
+  用法：{% from "components/ui.html" import button, card_open, card_close, chip, page_header, field, empty_state, modal_open, modal_close, table_open, table_close %}
+#}
+
+{# 页头：模块名 + 标题 + 面包屑。crumbs=[(文字,链接)…] #}
+{% macro page_header(module, title, crumbs=None) %}
+<div class="mb-5">
+  {% if crumbs %}<nav class="text-xs text-slate-400 mb-2">
+    {% for text, href in crumbs %}<a href="{{ href }}" class="hover:text-slate-600">{{ text }}</a>{% if not loop.last %} / {% endif %}{% endfor %}
+  </nav>{% endif %}
+  <div class="flex items-baseline gap-3">
+    <h1 class="text-xl font-bold">{{ title }}</h1>
+    <span class="text-xs text-slate-400">{{ module }}</span>
+  </div>
+</div>
+{% endmacro %}
+
+{# 按钮。variant: primary|secondary|danger|ghost。hx_* / type / disabled 透传。 #}
+{% macro button(label, variant="primary", type="button", hx_post=None, hx_get=None, hx_target=None, hx_swap=None, hx_confirm=None, hx_include=None, disabled=False, extra="") %}
+{% set styles = {
+  "primary":"bg-brand-600 text-white hover:bg-brand-700",
+  "secondary":"bg-slate-100 text-slate-700 hover:bg-slate-200",
+  "danger":"bg-rose-600 text-white hover:bg-rose-700",
+  "ghost":"text-slate-500 hover:bg-slate-100"
+} %}
+<button type="{{ type }}"
+  class="px-3.5 py-2 rounded-lg text-sm font-medium transition {{ styles[variant] }} {{ 'opacity-50 pointer-events-none' if disabled else '' }} {{ extra }}"
+  {% if hx_post %}hx-post="{{ hx_post }}"{% endif %}{% if hx_get %}hx-get="{{ hx_get }}"{% endif %}
+  {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}{% if hx_swap %}hx-swap="{{ hx_swap }}"{% endif %}
+  {% if hx_confirm %}hx-confirm="{{ hx_confirm }}"{% endif %}{% if hx_include %}hx-include="{{ hx_include }}"{% endif %}
+  >{{ label }}</button>
+{% endmacro %}
+
+{# 白卡片容器。actions=右上角 HTML（可选）。配对 card_close()。 #}
+{% macro card_open(title=None, actions=None) %}
+<div class="bg-white rounded-xl border border-slate-200 p-5 mb-4">
+  {% if title or actions %}<div class="flex items-center justify-between mb-3">
+    <div class="text-sm font-semibold text-slate-600">{{ title or "" }}</div>
+    <div>{{ actions or "" }}</div>
+  </div>{% endif %}
+{% endmacro %}
+{% macro card_close() %}</div>{% endmacro %}
+
+{# 小标签。color: slate|emerald|amber|rose|brand #}
+{% macro chip(label, color="slate") %}
+{% set c = {
+  "slate":"bg-slate-100 text-slate-600","emerald":"bg-emerald-100 text-emerald-700",
+  "amber":"bg-amber-100 text-amber-700","rose":"bg-rose-100 text-rose-600","brand":"bg-brand-100 text-brand-700"
+} %}
+<span class="inline-block px-2 py-0.5 rounded-full text-xs {{ c[color] }}">{{ label }}</span>
+{% endmacro %}
+
+{# 表单项：label + input #}
+{% macro field(label, name, type="text", value="", placeholder="", required=False) %}
+<label class="block mb-3">
+  <span class="block text-sm text-slate-600 mb-1">{{ label }}</span>
+  <input type="{{ type }}" name="{{ name }}" value="{{ value }}" placeholder="{{ placeholder }}"
+    {{ 'required' if required else '' }}
+    class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+</label>
+{% endmacro %}
+
+{# 空状态占位 #}
+{% macro empty_state(text) %}
+<div class="text-slate-400 text-sm py-6 text-center">{{ text }}</div>
+{% endmacro %}
+
+{# 弹框：放进 #modal-slot。配对 modal_close(footer)。 #}
+{% macro modal_open(title) %}
+<div class="fixed inset-0 z-40 bg-black/30 grid place-items-center" @click.self="" onclick="if(event.target===this)tnCloseModal()">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-5 m-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="font-semibold">{{ title }}</div>
+      <button type="button" onclick="tnCloseModal()" class="text-slate-400 hover:text-slate-600">✕</button>
+    </div>
+{% endmacro %}
+{% macro modal_close(footer=None) %}
+    {% if footer %}<div class="flex justify-end gap-2 mt-4">{{ footer }}</div>{% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{# 表格。headers=[…]。配对 table_close()。行自己写 <tr>。 #}
+{% macro table_open(headers) %}
+<table class="w-full text-sm">
+  <thead><tr class="text-slate-400 text-xs text-left border-b border-slate-100">
+    {% for h in headers %}<th class="font-normal py-2">{{ h }}</th>{% endfor %}
+  </tr></thead>
+  <tbody class="text-slate-700">
+{% endmacro %}
+{% macro table_close() %}</tbody></table>{% endmacro %}

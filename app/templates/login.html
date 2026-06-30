@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 · tnalpha</title><script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={theme:{extend:{colors:{brand:{600:'#4f46e5',700:'#4338ca'}}}}}</script>
+<style>body{font-family:-apple-system,"PingFang SC",sans-serif;}</style></head>
+<body class="bg-slate-100 grid place-items-center min-h-screen">
+  <form method="post" action="/login" class="bg-white rounded-2xl border border-slate-200 p-8 w-80 shadow-sm">
+    <div class="flex items-center gap-2 mb-6"><div class="w-9 h-9 rounded-xl bg-brand-600 text-white grid place-items-center font-bold">t</div><div class="font-bold text-lg">tnalpha</div></div>
+    {% if error %}<div class="text-rose-600 text-sm mb-3">{{ error }}</div>{% endif %}
+    <input name="username" placeholder="用户名" required class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm mb-3">
+    <input name="password" type="password" placeholder="密码" required class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm mb-4">
+    <button class="w-full py-2 rounded-lg bg-brand-600 text-white text-sm font-medium">登录</button>
+  </form>
+</body></html>

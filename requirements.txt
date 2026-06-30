@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+jinja2
+python-multipart
+alembic
+psycopg2-binary
+pypdf
+python-docx
+python-pptx
+openpyxl
+pytest
+httpx

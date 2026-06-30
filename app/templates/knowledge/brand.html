@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state %}
+{% block content %}
+  {{ page_header("①知识库", brand.name, crumbs=[("首页","/"), (brand.name, "")]) }}
+
+  {{ card_open("品牌定义（低时效·长期）") }}
+    <div class="text-sm text-slate-600 whitespace-pre-wrap">{{ brand.brand_prompt or "（未填写品牌定义）" }}</div>
+  {{ card_close() }}
+
+  {{ card_open("Campaign 活动") }}
+    <div class="space-y-2">
+      {% for c in campaigns %}
+      <div class="flex items-center justify-between px-3 py-2.5 rounded-lg bg-slate-50">
+        <div class="flex items-center gap-2">
+          <span class="font-medium text-sm">🗂 {{ c.name }}</span>
+          {% if c.is_default %}{{ chip("常驻·无时效", "slate") }}
+          {% elif c.start_date %}{{ chip(c.start_date.strftime('%m.%d') ~ "–" ~ (c.end_date.strftime('%m.%d') if c.end_date else "?"), "amber") }}{% endif %}
+        </div>
+        <span class="text-xs text-slate-400">进入 →</span>
+      </div>
+      {% else %}
+      {{ empty_state("还没有活动。") }}
+      {% endfor %}
+    </div>
+    {% if request.state.level >= 2 %}
+    <div class="mt-3">{{ button("＋ 新建 campaign", variant="secondary") }}</div>
+    {% endif %}
+  {{ card_close() }}
+{% endblock %}
