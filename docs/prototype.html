@@ -156,55 +156,66 @@
 </section>
 
 <!-- ===== ② 选题库 ===== -->
-<section x-show="tab==='topic'" x-cloak x-data="{ratio:30,count:10,reco:false,
-  cands:[{t:'美术展开幕打卡攻略',ty:'时效',src:'热点+小红书',sel:true},{t:'展品背后的修复故事',ty:'时效',src:'公众号',sel:true},{t:'敦煌色彩美学科普',ty:'日常',src:'知识库',sel:false},{t:'看展穿搭指南',ty:'时效',src:'小红书',sel:false}],
-  adopted:[{t:'美术展沉浸式体验测评',st:'待写作'}],
+<section x-show="tab==='topic'" x-cloak x-data="{ratio:30,count:10,reco:false,selected:null,
+  cands:[{t:'美术展开幕打卡攻略',ty:'时效',src:'热点+小红书',sel:true,outline:'以“开幕首日打卡路线”切入，串联5个必看展品+拍照机位，结尾引导收藏',reason:'本周“沉浸式看展”搜索量上涨，贵品牌上条同类笔记收藏破千，建议蹭开幕热度',fb:'敦煌IP《夜游展》小红书收藏 1.2k（来自数据池）',link:'xiaohongshu.com/xxx'},
+    {t:'展品背后的修复故事',ty:'时效',src:'公众号',sel:true,outline:'挑3件修复难度最高的展品，讲文物修复师的故事与工艺',reason:'公众号深度内容打开率高，故事性强易转发',fb:'同类“匠人故事”选题平均阅读 8k+',link:'mp.weixin.qq.com/xxx'},
+    {t:'敦煌色彩美学科普',ty:'日常',src:'知识库',sel:false,outline:'从壁画矿物颜料讲敦煌色彩体系，附配色卡',reason:'品牌长期科普向，沉淀专业形象',fb:'—',link:''},
+    {t:'看展穿搭指南',ty:'时效',src:'小红书',sel:false,outline:'国风穿搭 + 看展机位，实用向',reason:'小红书穿搭流量大，蹭展会热度',fb:'—',link:''}],
+  adopted:[{t:'美术展沉浸式体验测评',st:'待写作',ty:'时效',src:'小红书',outline:'第一人称沉浸式测评，五感描写',reason:'测评体真实感强，种草转化好',fb:'—',link:''}],
   get daily(){return Math.round(this.count*this.ratio/100)}, get nsel(){return this.cands.filter(c=>c.sel).length},
-  adopt(){this.cands.filter(c=>c.sel).forEach(c=>this.adopted.push({t:c.t,st:'待写作'})); this.cands=this.cands.filter(c=>!c.sel)}}">
-  <div x-show="!sub" class="space-y-4">
-    <div><h2 class="text-2xl font-bold">② 选题库</h2><p class="text-lg text-slate-500">AI 帮你想一批选题，你挑好的留下。</p></div>
-    <div class="grid md:grid-cols-2 gap-5 items-start">
-      <div class="card space-y-3">
-        <div class="text-xs text-slate-400">界面预览（拖滑块 / 点推荐 / 勾选采纳，都有反应）</div>
-        <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-3">
-          <div class="text-sm"><div class="text-slate-500 mb-1">① 调配比：日常 <b x-text="daily"></b> 条 · 活动 <b x-text="count-daily"></b> 条</div>
+  adopt(){this.cands.filter(c=>c.sel).forEach(c=>this.adopted.push({...c,st:'待写作'})); this.cands=this.cands.filter(c=>!c.sel); this.selected=null},
+  adoptOne(c){this.adopted.push({...c,st:'待写作'}); this.cands=this.cands.filter(x=>x!==c); this.selected=null},
+  dropOne(c){this.cands=this.cands.filter(x=>x!==c); this.selected=null}}">
+  <div class="space-y-4">
+    <div><h2 class="text-2xl font-bold">② 选题库</h2><p class="text-lg text-slate-500">AI 帮你想一批选题，你挑好的留下。点任意选题，右边看详情。</p></div>
+    <div class="grid md:grid-cols-5 gap-4 items-start">
+      <!-- 左：控制 + 候选 + 正式库 -->
+      <div class="md:col-span-2 space-y-3">
+        <div class="rounded-xl bg-white border border-slate-200 p-4 space-y-3">
+          <div class="text-sm"><div class="text-slate-500 mb-1">① 配比：日常 <b x-text="daily"></b> 条 · 活动 <b x-text="count-daily"></b> 条</div>
             <div class="flex items-center gap-2 text-xs"><span>日常</span><input type="range" min="0" max="100" x-model="ratio" class="flex-1"><span>活动</span></div></div>
-          <div class="text-sm text-slate-500">② 选来源：☑知识库 ☑热点 ☑小红书 ☐公众号</div>
+          <div class="text-xs text-slate-500">② 来源：☑知识库 ☑热点 ☑小红书 ☐公众号</div>
           <button class="btn btn-primary w-full text-center" @click="reco=true" x-text="reco?'✦ 重新推荐':'✦ 让 AI 推荐选题'"></button>
         </div>
         <div x-show="reco" x-cloak class="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-1.5">
-          <div class="text-xs text-amber-700 font-semibold">③ AI 推荐了这些，点看详情 / 勾选采纳：</div>
-          <template x-for="(c,i) in cands" :key="c.t">
-            <div class="flex items-center gap-2 text-sm bg-white rounded-lg px-2 py-1.5" :class="c.t==='美术展开幕打卡攻略'?'border-2 border-dashed border-violet-200 click':''" @click="c.t==='美术展开幕打卡攻略' && (sub='topic-detail')">
+          <div class="text-xs text-amber-700 font-semibold">候选区（点看详情 / 勾选批量采纳）</div>
+          <template x-for="c in cands" :key="c.t">
+            <div class="click flex items-center gap-2 text-sm bg-white rounded-lg px-2 py-1.5 border" :class="selected===c?'border-violet-400 ring-2 ring-violet-200':'border-slate-200'" @click="selected=c">
               <input type="checkbox" x-model="c.sel" onclick="event.stopPropagation()">
               <span class="chip" :class="c.ty==='时效'?'chip-amber':'chip-slate'" x-text="c.ty"></span>
-              <span x-text="c.t"></span><span class="text-xs text-slate-400 ml-auto" x-text="'来源:'+c.src"></span></div>
+              <span x-text="c.t"></span></div>
           </template>
           <div x-show="!cands.length" class="text-xs text-slate-400 py-2">候选都处理完了，可重新推荐。</div>
           <button class="btn !bg-emerald-600 !text-white w-full text-center !py-2 mt-1" :disabled="!nsel" @click="adopt()" x-text="'✓ 采纳选中('+nsel+')'"></button>
         </div>
         <div class="rounded-xl border border-slate-200 p-3">
-          <div class="text-xs font-semibold text-slate-500 mb-2">正式选题库（采纳的进这里，等写作）</div>
-          <div class="space-y-1 text-sm"><template x-for="a in adopted" :key="a.t"><div class="flex justify-between bg-slate-50 rounded px-2 py-1.5"><span x-text="a.t"></span><span class="chip chip-slate" x-text="a.st"></span></div></template></div>
+          <div class="text-xs font-semibold text-slate-500 mb-2">正式选题库（点看详情）</div>
+          <div class="space-y-1 text-sm"><template x-for="a in adopted" :key="a.t">
+            <div class="click flex justify-between rounded px-2 py-1.5 border" :class="selected===a?'border-violet-400 ring-2 ring-violet-200 bg-white':'border-transparent bg-slate-50'" @click="selected=a"><span x-text="a.t"></span><span class="chip chip-slate" x-text="a.st"></span></div>
+          </template></div>
         </div>
       </div>
-      <div class="space-y-3">
-        <div class="expl border-violet-400"><div class="font-bold text-violet-700">💡 这是什么</div><p class="text-slate-600 mt-1">针对某活动，AI 一次想一批选题，你像"筛简历"挑好的留下。</p></div>
-        <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>拖比例条定"日常 : 活动"</li><li>选 AI 参考哪些渠道</li><li>点推荐 → 看详情 → 采纳</li></ul></div>
-        <div class="expl border-amber-400"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1"><b>"选题者觉得好 ≠ 用户买单"</b>。AI 参考真实数据 + 多渠道热点选得更准；先候选再采纳，只留精华。</p></div>
+      <!-- 右：选题详情面板 -->
+      <div class="md:col-span-3">
+        <template x-if="!selected"><div class="card text-slate-400 text-sm grid place-items-center min-h-[200px]">← 点左边任意选题，这里看详情（纲要 / 推荐理由 / 反馈依据）</div></template>
+        <template x-if="selected"><div class="card space-y-3 text-sm">
+          <div class="text-lg font-bold"><span x-text="selected.t"></span> <span class="chip" :class="selected.ty==='时效'?'chip-amber':'chip-slate'" x-text="selected.ty"></span></div>
+          <div><b class="text-slate-500">纲要：</b><span x-text="selected.outline"></span></div>
+          <div><b class="text-slate-500">来源：</b><span x-text="selected.src"></span></div>
+          <div class="bg-violet-50 rounded-lg p-3"><b class="text-violet-700">AI 推荐理由：</b><span x-text="selected.reason"></span></div>
+          <div class="bg-emerald-50 rounded-lg p-3"><b class="text-emerald-700">反馈依据：</b><span x-text="selected.fb"></span></div>
+          <div x-show="selected.link"><b class="text-slate-500">关联：</b><span class="text-brand-600" x-text="selected.link"></span></div>
+          <!-- 候选态：采纳/弃选；已采纳态：状态 -->
+          <div x-show="!selected.st" class="flex gap-2 pt-1"><button class="btn !bg-emerald-600 !text-white" @click="adoptOne(selected)">✓ 采纳进库</button><button class="btn btn-secondary" @click="dropOne(selected)">✕ 弃选</button></div>
+          <div x-show="selected.st" class="flex items-center gap-2 pt-1"><span class="chip chip-slate">状态：<span x-text="selected.st"></span></span><button class="btn btn-primary !py-1.5 !text-xs" @click="tab='writing'">去写作 ›</button></div>
+        </div></template>
       </div>
     </div>
-  </div>
-  <div x-show="sub==='topic-detail'" x-cloak class="space-y-4">
-    <button @click="sub=null" class="text-sm text-brand-600">← 返回 选题库</button>
-    <div><h2 class="text-xl font-bold">选题详情</h2><p class="text-sm text-slate-500">看全貌再决定采纳还是弃选。</p></div>
-    <div class="card space-y-3 text-sm">
-      <div class="text-lg font-bold">美术展开幕KOL打卡攻略 <span class="chip chip-amber">时效</span></div>
-      <div><b class="text-slate-500">纲要：</b>以"开幕首日打卡路线"切入，串联5个必看展品 + 拍照机位，结尾引导收藏…</div>
-      <div><b class="text-slate-500">来源：</b>🔥热点 + 📕小红书</div>
-      <div class="bg-violet-50 rounded-lg p-3"><b class="text-violet-700">AI 推荐理由：</b>本周"沉浸式看展"搜索量上涨，贵品牌上条同类笔记收藏破千，建议蹭开幕热度。</div>
-      <div class="bg-emerald-50 rounded-lg p-3"><b class="text-emerald-700">反馈依据：</b>敦煌IP《夜游展》小红书收藏 1.2k（来自数据池）</div>
-      <div class="flex gap-2 pt-2"><button class="btn !bg-emerald-600 !text-white" @click="sub=null">✓ 采纳进库</button><button class="btn btn-secondary" @click="sub=null">✕ 弃选</button></div>
+    <!-- 说明下移 -->
+    <div class="grid md:grid-cols-3 gap-3">
+      <div class="expl border-violet-400"><div class="font-bold text-violet-700">💡 这是什么</div><p class="text-slate-600 mt-1 text-sm">针对某活动，AI 一次想一批选题，你像"筛简历"挑好的留下。</p></div>
+      <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 text-sm list-disc list-inside"><li>拖比例条定"日常 : 活动"</li><li>选 AI 参考哪些渠道</li><li>点推荐 → 看详情 → 采纳</li></ul></div>
+      <div class="expl border-amber-400"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1 text-sm"><b>"选题者觉得好 ≠ 用户买单"</b>。AI 参考真实数据 + 多渠道热点选得更准；先候选再采纳，只留精华。</p></div>
     </div>
   </div>
 </section>
