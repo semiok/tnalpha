@@ -448,35 +448,107 @@
 </section>
 
 <!-- ===== ⑤ 数据反馈 ===== -->
-<section x-show="tab==='feedback'" x-cloak x-data="{insight:false}">
-  <div x-show="!sub" class="space-y-4">
-    <div><h2 class="text-2xl font-bold">⑤ 数据反馈</h2><p class="text-lg text-slate-500">发完看数据，AI 帮你总结经验。</p></div>
-    <div class="grid md:grid-cols-2 gap-5 items-start">
-      <div class="card space-y-3">
-        <div class="text-xs text-slate-400">界面预览（点"生成复盘"出洞察）</div>
-        <div class="rounded-xl border border-slate-200 p-3"><div class="text-xs font-semibold text-slate-400 mb-2">发布后回填的数据</div>
-          <table class="w-full text-sm"><tr class="text-slate-400 text-xs"><td>篇目</td><td>赞</td><td>评</td><td>藏</td></tr><tr><td class="py-1">开幕速记</td><td>340</td><td>42</td><td>210</td></tr><tr><td class="py-1">看展攻略</td><td>120</td><td>18</td><td>95</td></tr></table></div>
-        <button class="btn !bg-emerald-600 !text-white" @click="insight=true" x-show="!insight">🧠 生成复盘</button>
-        <div x-show="insight" x-cloak class="rounded-xl bg-emerald-50 border border-emerald-100 p-4"><div class="font-semibold text-emerald-700 mb-1">🧠 AI 复盘</div><ul class="text-sm text-slate-600 space-y-0.5 list-disc list-inside"><li>"故事叙事体"比"攻略体"数据好</li><li>开幕当天流量最高</li><li>下轮建议：多用故事体、卡开幕发</li></ul><button class="btn !bg-emerald-600 !text-white !py-1 !text-xs mt-2">采纳，存进数据池</button></div>
-        <div @click="sub='feedback-brand'" class="click go rounded-xl bg-slate-50 border-2 border-dashed border-slate-300 p-3 text-sm text-slate-600">📈 看品牌大盘（所有活动排行）</div>
+<section x-show="tab==='feedback'" x-cloak x-data="{
+  dashModal:false, artModal:false, sel:null, insight:false, packed:false,
+  arts:[{t:'开幕速记',pf:'📕小红书',like:340,cmt:42,fav:210,day:'07.01'},{t:'看展攻略',pf:'📕小红书',like:120,cmt:18,fav:95,day:'07.05'},{t:'展品故事',pf:'📰公众号',read:1200,zan:88,share:40,day:'07.08'}],
+  gen(){this.insight=true}, pack(){this.packed=true}}">
+  <div class="space-y-4">
+    <div>
+      <nav class="text-xs text-slate-400 mb-1">敦煌IP / 美术展 / 数据反馈</nav>
+      <h2 class="text-2xl font-bold">⑤ 数据反馈</h2><p class="text-lg text-slate-500">回填发布数据 → AI 复盘 → 沉淀成经验包喂回选题（闭环）。</p></div>
+
+    <div class="card flex flex-wrap items-center gap-3 text-sm">
+      <span class="chip chip-amber">活动：美术展</span>
+      <button class="btn btn-secondary" @click="dashModal=true">📈 品牌大盘排行</button>
+      <button class="btn !bg-emerald-600 !text-white ml-auto" @click="gen()" x-show="!insight">🧠 生成复盘</button>
+      <span x-show="insight" class="ml-auto chip chip-emerald">✓ 已生成复盘</span>
+    </div>
+
+    <div class="grid md:grid-cols-5 gap-4 items-start">
+      <div class="md:col-span-2 card">
+        <div class="text-xs font-semibold text-slate-500 mb-2">已发布明细（点篇目看数据）</div>
+        <div class="space-y-1 text-sm"><template x-for="a in arts" :key="a.t">
+          <div class="click flex justify-between items-center rounded px-2 py-1.5 border" :class="sel===a?'border-emerald-400 ring-2 ring-emerald-200 bg-white':'border-transparent bg-slate-50'" @click="sel=a">
+            <span x-text="a.t"></span><span class="text-xs text-slate-400" x-text="a.like?a.like+'赞':a.read+'阅'"></span></div>
+        </template></div>
       </div>
-      <div class="space-y-3">
-        <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">💡 这是什么</div><p class="text-slate-600 mt-1">记录每篇发出后的真实数据，AI 总结"哪类内容数据好"。</p></div>
-        <div class="expl border-sky-400"><div class="font-bold text-sky-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>发布者回填数据</li><li>点"生成复盘"看洞察</li><li>看板看整体表现</li></ul></div>
-        <div class="expl border-rose-400"><div class="font-bold text-rose-700">🎯 为什么这么设计（最关键）</div><p class="text-slate-600 mt-1"><b>闭环核心</b>：把"什么内容数据好"沉淀进数据池，<b>喂回②选题</b>，系统<b>越用越准</b>。</p></div>
+      <div class="md:col-span-3">
+        <template x-if="!sel"><div class="card text-slate-400 text-sm grid place-items-center min-h-[160px]">← 点左边篇目，看它的数据 / 文章</div></template>
+        <template x-if="sel"><div class="card space-y-3 text-sm">
+          <div class="flex items-center justify-between"><div class="font-bold" x-text="sel.t"></div><button class="btn btn-secondary !py-1 !text-xs" @click="artModal=true">看文章</button></div>
+          <div class="text-slate-500" x-text="'平台 '+sel.pf+' · 发布 '+sel.day"></div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <template x-if="sel.like"><div class="contents">
+              <div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">赞</div><div class="font-bold text-lg" x-text="sel.like"></div></div>
+              <div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">评</div><div class="font-bold text-lg" x-text="sel.cmt"></div></div>
+              <div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">藏</div><div class="font-bold text-lg" x-text="sel.fav"></div></div></div></template>
+            <template x-if="!sel.like"><div class="contents">
+              <div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">阅读</div><div class="font-bold text-lg" x-text="sel.read"></div></div>
+              <div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">在看</div><div class="font-bold text-lg" x-text="sel.zan"></div></div>
+              <div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">转发</div><div class="font-bold text-lg" x-text="sel.share"></div></div></div></template>
+          </div>
+          <div class="text-xs text-slate-400">数据由发布者回填，可再更新。</div>
+        </div></template>
+      </div>
+    </div>
+
+    <div x-show="insight" x-cloak class="rounded-xl border-2 border-emerald-300 bg-emerald-50/50 p-4 shadow-sm space-y-3">
+      <div class="font-bold text-emerald-700">🧠 AI 复盘洞察（本活动）</div>
+      <ul class="text-sm text-slate-600 space-y-0.5 list-disc list-inside">
+        <li>高表现：<b>故事叙事体 &gt; 攻略清单体</b>；开幕节点是流量峰</li>
+        <li>周五发布互动最高；公众号深度内容收藏率高</li>
+        <li>下轮建议：多用故事体、时效题卡开幕/闭幕、增公众号深度</li>
+      </ul>
+      <div class="border-t border-emerald-200 pt-3">
+        <div x-show="!packed">
+          <button class="btn !bg-emerald-600 !text-white" @click="pack()">📦 沉淀为经验包 → 存入数据池</button>
+          <div class="text-xs text-slate-500 mt-1">经验包 = 洞察摘要 + 高表现数据 + 下轮建议，存入 ①知识库·数据池，喂 ②选题推荐（闭环闭合）。</div>
+        </div>
+        <div x-show="packed" x-cloak class="bg-white rounded-lg border border-emerald-200 p-3">
+          <div class="flex items-center gap-2 text-emerald-700 font-semibold text-sm">✅ 已沉淀为经验包，存入数据池</div>
+          <div class="mt-2 rounded-lg bg-slate-50 p-3 text-sm">
+            <div class="font-bold">🧠 经验包《美术展·2026Q3复盘》 <span class="chip chip-emerald">来自⑤</span></div>
+            <div class="text-xs text-slate-500 mt-1">含：高表现风格(故事体) · 最佳发布时间(周五/开幕) · 3篇高数据文章 · 下轮选题建议</div>
+            <div class="text-xs text-brand-600 mt-1">→ 已进入 ①知识库·数据池，campaign 可引用、②选题推荐会参考</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-3">
+      <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">💡 这是什么</div><p class="text-slate-600 mt-1 text-sm">回填每篇真实数据，AI 复盘"哪类内容数据好"，再沉淀成经验包。</p></div>
+      <div class="expl border-sky-400"><div class="font-bold text-sky-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 text-sm list-disc list-inside"><li>发布者回填数据</li><li>点"生成复盘"看洞察</li><li>点"沉淀为经验包"存数据池</li></ul></div>
+      <div class="expl border-rose-400"><div class="font-bold text-rose-700">🎯 为什么这么设计（闭环）</div><p class="text-slate-600 mt-1 text-sm">经验包是<b>闭环的载体</b>：把"什么内容数据好"打包进数据池，喂回②选题，越用越准。</p></div>
+    </div>
+  </div>
+
+  <!-- 品牌大盘 弹框 -->
+  <div x-show="dashModal" x-cloak class="fixed inset-0 z-40 bg-black/30 grid place-items-center p-4" @click.self="dashModal=false">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-auto">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100"><div class="font-semibold">📈 敦煌IP · 品牌数据大盘 <span class="text-xs font-normal text-slate-400">跨活动 · 只读</span></div><button @click="dashModal=false" class="text-slate-400 hover:text-slate-600">✕</button></div>
+      <div class="p-4 space-y-3 text-sm">
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="bg-sky-50 rounded-lg p-3"><div class="text-2xl font-bold text-sky-700">23</div><div class="text-xs text-slate-500">累计发布</div></div>
+          <div class="bg-emerald-50 rounded-lg p-3"><div class="text-2xl font-bold text-emerald-700">6.7k</div><div class="text-xs text-slate-500">总互动</div></div>
+          <div class="bg-amber-50 rounded-lg p-3"><div class="text-2xl font-bold text-amber-700">开幕速记</div><div class="text-xs text-slate-500">最佳篇</div></div>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3"><div class="text-xs text-slate-400 mb-2">各活动表现排行</div><div class="space-y-1.5">
+          <div class="flex items-center gap-2"><span class="w-20">美术展</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-brand-600 h-3 rounded" style="width:80%"></div></div><span class="text-xs">3.2k</span></div>
+          <div class="flex items-center gap-2"><span class="w-20">品牌日常</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-brand-600 h-3 rounded" style="width:60%"></div></div><span class="text-xs">2.4k</span></div>
+          <div class="flex items-center gap-2"><span class="w-20">音乐节</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-brand-600 h-3 rounded" style="width:28%"></div></div><span class="text-xs">1.1k</span></div>
+        </div></div>
       </div>
     </div>
   </div>
-  <div x-show="sub==='feedback-brand'" x-cloak class="space-y-4">
-    <button @click="sub=null" class="text-sm text-brand-600">← 返回 数据反馈</button>
-    <div><h2 class="text-xl font-bold">📈 品牌数据大盘 <span class="text-sm font-normal text-slate-400">只读</span></h2></div>
-    <div class="card space-y-3 text-sm">
-      <div class="grid grid-cols-3 gap-2 text-center"><div class="bg-sky-50 rounded-lg p-3"><div class="text-2xl font-bold text-sky-700">23</div><div class="text-xs text-slate-500">累计发布</div></div><div class="bg-emerald-50 rounded-lg p-3"><div class="text-2xl font-bold text-emerald-700">6.7k</div><div class="text-xs text-slate-500">总互动</div></div><div class="bg-amber-50 rounded-lg p-3"><div class="text-2xl font-bold text-amber-700">开幕速记</div><div class="text-xs text-slate-500">最佳篇</div></div></div>
-      <div class="rounded-lg border border-slate-200 p-3"><div class="text-xs text-slate-400 mb-2">各活动表现</div><div class="space-y-1.5">
-        <div class="flex items-center gap-2"><span class="w-20">美术展</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-brand-600 h-3 rounded" style="width:80%"></div></div><span class="text-xs">3.2k</span></div>
-        <div class="flex items-center gap-2"><span class="w-20">品牌日常</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-brand-600 h-3 rounded" style="width:60%"></div></div><span class="text-xs">2.4k</span></div>
-        <div class="flex items-center gap-2"><span class="w-20">音乐节</span><div class="flex-1 bg-slate-100 rounded h-3"><div class="bg-brand-600 h-3 rounded" style="width:28%"></div></div><span class="text-xs">1.1k</span></div>
-      </div></div>
+
+  <!-- 文章详情 弹框 -->
+  <div x-show="artModal" x-cloak class="fixed inset-0 z-50 bg-black/30 grid place-items-center p-4" @click.self="artModal=false">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-auto">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100"><div class="font-semibold" x-text="sel?sel.t:''"></div><button @click="artModal=false" class="text-slate-400 hover:text-slate-600">✕</button></div>
+      <div class="p-5 space-y-3">
+        <div class="bg-slate-50 rounded-lg p-4 text-sm leading-relaxed"><b>美术展开幕｜直接封神的一场敦煌之旅✨</b><br><br>姐妹些！开幕首日冲了…（正文）</div>
+        <div class="grid grid-cols-3 gap-2"><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图1</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图2</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图3</div></div>
+      </div>
     </div>
   </div>
 </section>
