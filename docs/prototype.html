@@ -354,82 +354,94 @@
 <!-- ===== ④ 排期版 ===== -->
 <section x-show="tab==='schedule'" x-cloak x-data="{
   opCampaign:'美术展', campaigns:['美术展','品牌日常','音乐节'], reco:false, freq:3, pubForm:null,
+  overviewModal:false, artModal:false, artTitle:'',
   pool:[{t:'修复故事',ty:'时效'}],
   slots:[],
   overview:[{d:'07.01',c:'美术展',ty:'时效',t:'开幕速记',st:'已发布'},{d:'07.03',c:'品牌日常',ty:'日常',t:'纹样设计',st:'待发'},{d:'07.05',c:'美术展',ty:'时效',t:'看展攻略',st:'已发布'},{d:'07.05',c:'音乐节',ty:'时效',t:'阵容预告',st:'待发',clash:true}],
   aireco(){this.reco=true; this.slots=[{d:'07.01（开幕）',t:'开幕速记',pub:false},{d:'07.03',t:'纹样设计',pub:false},{d:'07.05',t:'看展攻略',pub:true}]},
-  confirmPub(i){this.slots[i].pub=true; this.pubForm=null}}">
+  confirmPub(i){this.slots[i].pub=true; this.pubForm=null},
+  openArt(t){this.artTitle=t; this.artModal=true}}">
   <div class="space-y-4">
-    <div><h2 class="text-2xl font-bold">④ 排期版</h2><p class="text-lg text-slate-500">写好的图文，安排哪天发。头部看全品牌总览，下面按活动排期。</p></div>
+    <div><h2 class="text-2xl font-bold">④ 排期版</h2><p class="text-lg text-slate-500">写好的图文，安排哪天发。按日期排，点标题看文章。</p></div>
 
-    <!-- 头部：品牌排期总览（凸显·只读） -->
-    <div class="rounded-xl border-2 border-amber-300 bg-amber-50/50 p-4 shadow-sm">
-      <div class="flex items-center justify-between mb-2">
-        <div class="text-sm font-bold text-amber-700">📅 敦煌IP · 发布总览 <span class="text-xs font-normal text-slate-400">所有活动汇总 · 只读</span></div>
-        <span class="text-xs text-slate-400">本周 06.30–07.06</span>
-      </div>
-      <div class="grid md:grid-cols-2 gap-1.5 text-sm">
+    <!-- 控制条 -->
+    <div class="card flex flex-wrap items-center gap-3 text-sm">
+      <span class="text-slate-500">操作活动：</span>
+      <select x-model="opCampaign" class="border border-slate-200 rounded-lg px-2 py-1"><template x-for="c in campaigns" :key="c"><option x-text="c"></option></template></select>
+      <button class="btn !bg-amber-500 !text-white" @click="aireco()">✦ AI 推荐排期</button>
+      <span>每周 <input type="number" x-model="freq" class="w-12 border rounded px-1 text-center"> 篇</span>
+      <button class="btn btn-secondary ml-auto" @click="overviewModal=true">📅 发布总览</button>
+    </div>
+
+    <!-- 待排期池 -->
+    <div class="card">
+      <div class="text-xs font-semibold text-slate-500 mb-2">待排期池（图文完成·未排 · 点标题看文章）</div>
+      <div class="flex flex-wrap gap-2 text-sm"><template x-for="p in pool" :key="p.t">
+        <span class="flex items-center gap-2 bg-slate-50 rounded px-2 py-1.5"><span class="chip chip-amber" x-text="p.ty"></span><span class="text-brand-600 cursor-pointer hover:underline" @click="openArt(p.t)" x-text="p.t"></span><button class="btn btn-secondary !py-0.5 !text-xs">排入 ›</button></span>
+      </template>
+      <span x-show="!pool.length" class="text-xs text-slate-400">都排完了</span></div>
+    </div>
+
+    <!-- 排期日历：上下结构·按日期排序 -->
+    <div class="card space-y-3">
+      <div class="flex items-center justify-between"><div class="font-bold"><span x-text="opCampaign"></span> · 排期日历 <span class="text-xs font-normal text-slate-400">按日期排序 · 点标题看文章</span></div><button class="btn btn-secondary !py-1 !text-xs">＋ 新增周</button></div>
+      <template x-if="!reco"><div class="text-sm text-slate-400 rounded-xl border border-dashed border-slate-300 p-6 text-center">点上方"AI 推荐排期"，自动把图文完成的内容按日期排到日历 ↑</div></template>
+      <template x-if="reco"><div class="space-y-2">
+        <div class="text-xs font-semibold text-slate-400">第27周 06.30–07.06</div>
+        <template x-for="(s,i) in slots" :key="s.t">
+          <div>
+            <div class="flex justify-between items-center text-sm px-3 py-2.5 rounded-lg border" :class="i===0?'border-amber-200 bg-amber-50':'border-slate-200'">
+              <span>📅 <b class="text-slate-500 mr-2" x-text="s.d"></b> <span class="text-brand-600 cursor-pointer hover:underline font-medium" @click="openArt(s.t)" x-text="s.t"></span></span>
+              <span class="flex items-center gap-2">
+                <template x-if="s.pub"><span class="chip chip-emerald">✅已发布·小红书</span></template>
+                <template x-if="!s.pub"><span class="flex gap-1"><button class="btn btn-primary !py-1 !text-xs" @click="pubForm=i">发布</button><button class="btn btn-secondary !py-1 !text-xs">移除</button></span></template>
+              </span>
+            </div>
+            <div x-show="pubForm===i" x-cloak class="bg-slate-50 rounded-lg p-3 mt-1 text-xs space-y-2">
+              <div>平台 <label><input type="radio" :name="'p'+i" checked> 📕小红书</label> <label class="ml-1"><input type="radio" :name="'p'+i"> 📰公众号</label></div>
+              <div>链接 <input class="border rounded px-1 py-0.5 w-40" placeholder="发布后链接"> 时间 <input class="border rounded px-1 py-0.5 w-28" value="07.01 10:00"></div>
+              <button class="btn btn-primary !py-1 !text-xs" @click="confirmPub(i)">确认发布</button> <button class="btn btn-secondary !py-1 !text-xs" @click="pubForm=null">取消</button>
+            </div>
+          </div>
+        </template>
+      </div></template>
+    </div>
+
+    <!-- 说明下移 -->
+    <div class="grid md:grid-cols-3 gap-3">
+      <div class="expl border-amber-400"><div class="font-bold text-amber-700">💡 这是什么</div><p class="text-slate-600 mt-1 text-sm">发布日历，按日期从上到下排。点"发布总览"弹框看全品牌撞期；点标题看文章。</p></div>
+      <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 text-sm list-disc list-inside"><li>选活动 → AI 推荐排期</li><li>到点发布填平台/链接/时间</li><li>发布总览弹框看撞期</li></ul></div>
+      <div class="expl border-sky-400"><div class="font-bold text-sky-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1 text-sm">时效内容卡节点发；总览收进弹框不占地方；AI 推荐省心仍可人工调。</p></div>
+    </div>
+  </div>
+
+  <!-- 发布总览 弹框（按日期排序·只读·点标题看文章） -->
+  <div x-show="overviewModal" x-cloak class="fixed inset-0 z-40 bg-black/30 grid place-items-center p-4" @click.self="overviewModal=false">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-auto">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100"><div class="font-semibold">📅 敦煌IP · 发布总览 <span class="text-xs font-normal text-slate-400">所有活动 · 按日期 · 只读</span></div><button @click="overviewModal=false" class="text-slate-400 hover:text-slate-600">✕</button></div>
+      <div class="p-4 space-y-1.5 text-sm">
         <template x-for="o in overview" :key="o.t">
-          <div class="flex items-center gap-2 bg-white rounded px-2.5 py-1.5" :class="o.clash?'ring-1 ring-rose-300':''">
+          <div class="flex items-center gap-2 rounded px-2.5 py-2" :class="o.clash?'bg-rose-50 ring-1 ring-rose-200':'bg-slate-50'">
             <span class="text-slate-400 w-12 shrink-0" x-text="o.d"></span>
             <span class="chip shrink-0" :class="o.ty==='时效'?'chip-amber':'chip-slate'" x-text="o.c"></span>
-            <span class="truncate" x-text="o.t"></span>
+            <span class="text-brand-600 cursor-pointer hover:underline" @click="openArt(o.t)" x-text="o.t"></span>
             <span class="ml-auto text-xs shrink-0" :class="o.st==='已发布'?'text-emerald-600':'text-slate-400'" x-text="o.st==='已发布'?'✅已发':'✓图文'"></span>
             <span x-show="o.clash" class="chip chip-rose shrink-0">⚠撞期</span>
           </div>
         </template>
       </div>
     </div>
+  </div>
 
-    <!-- 左右：左=控制+待排池，右=某活动排期日历 -->
-    <div class="grid md:grid-cols-5 gap-4 items-start">
-      <div class="md:col-span-2 space-y-3">
-        <div class="card space-y-3">
-          <div class="text-sm"><span class="text-slate-500">操作活动：</span>
-            <select x-model="opCampaign" class="border border-slate-200 rounded-lg px-2 py-1 text-sm"><template x-for="c in campaigns" :key="c"><option x-text="c"></option></template></select></div>
-          <div class="flex items-center gap-2 text-sm"><button class="btn !bg-amber-500 !text-white" @click="aireco()">✦ AI 推荐排期</button><span>每周 <input type="number" x-model="freq" class="w-12 border rounded px-1 text-center"> 篇</span></div>
-          <div class="text-xs text-slate-400">AI 按活动时间窗（开幕/中期/闭幕）+ 选题类型自动排到日期，可手动改。</div>
-        </div>
-        <div class="card">
-          <div class="text-xs font-semibold text-slate-500 mb-2">待排期池（图文完成·未排）</div>
-          <div class="space-y-1 text-sm"><template x-for="p in pool" :key="p.t">
-            <div class="flex justify-between items-center bg-slate-50 rounded px-2 py-1.5"><span><span class="chip chip-amber" x-text="p.ty"></span> <span x-text="p.t"></span></span><button class="btn btn-secondary !py-0.5 !text-xs">排入 ›</button></div>
-          </template>
-          <div x-show="!pool.length" class="text-xs text-slate-400 py-1">都排完了</div></div>
-        </div>
+  <!-- 文章详情 弹框 -->
+  <div x-show="artModal" x-cloak class="fixed inset-0 z-50 bg-black/30 grid place-items-center p-4" @click.self="artModal=false">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-auto">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100"><div class="font-semibold" x-text="artTitle"></div><button @click="artModal=false" class="text-slate-400 hover:text-slate-600">✕</button></div>
+      <div class="p-5 space-y-3">
+        <div class="flex gap-2"><span class="chip chip-emerald">✓ 图文完成</span><span class="chip chip-slate">风格：沉浸式种草体</span></div>
+        <div class="bg-slate-50 rounded-lg p-4 text-sm leading-relaxed"><b>美术展开幕｜直接封神的一场敦煌之旅✨</b><br><br>姐妹些！开幕首日冲了，给你们扒拉出最值得打卡的 5 个机位…（正文）</div>
+        <div class="grid grid-cols-3 gap-2"><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图1</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图2</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图3</div></div>
       </div>
-      <div class="md:col-span-3">
-        <div class="card space-y-3">
-          <div class="flex items-center justify-between"><div class="font-bold"><span x-text="opCampaign"></span> · 排期日历</div><button class="btn btn-secondary !py-1 !text-xs">＋ 新增周</button></div>
-          <template x-if="!reco"><div class="text-sm text-slate-400 rounded-xl border border-dashed border-slate-300 p-6 text-center">点左边"AI 推荐排期"，自动把图文完成的内容排到日历 ←</div></template>
-          <template x-if="reco"><div class="space-y-2">
-            <div class="text-xs font-semibold text-slate-400">第27周 06.30–07.06</div>
-            <template x-for="(s,i) in slots" :key="s.t">
-              <div>
-                <div class="flex justify-between items-center text-sm px-2.5 py-2 rounded-lg border" :class="i===0?'border-amber-200 bg-amber-50':'border-slate-200'">
-                  <span>📅 <b x-text="s.d"></b> <span x-text="s.t"></span></span>
-                  <span class="flex items-center gap-2">
-                    <template x-if="s.pub"><span class="chip chip-emerald">✅已发布</span></template>
-                    <template x-if="!s.pub"><span class="flex gap-1"><button class="btn btn-primary !py-1 !text-xs" @click="pubForm=i">发布</button><button class="btn btn-secondary !py-1 !text-xs">移除</button></span></template>
-                  </span>
-                </div>
-                <div x-show="pubForm===i" x-cloak class="bg-slate-50 rounded-lg p-3 mt-1 text-xs space-y-2">
-                  <div>平台 <label><input type="radio" :name="'p'+i" checked> 📕小红书</label> <label class="ml-1"><input type="radio" :name="'p'+i"> 📰公众号</label></div>
-                  <div>链接 <input class="border rounded px-1 py-0.5 w-40" placeholder="发布后链接"> 时间 <input class="border rounded px-1 py-0.5 w-28" value="07.01 10:00"></div>
-                  <button class="btn btn-primary !py-1 !text-xs" @click="confirmPub(i)">确认发布</button> <button class="btn btn-secondary !py-1 !text-xs" @click="pubForm=null">取消</button>
-                </div>
-              </div>
-            </template>
-          </div></template>
-        </div>
-      </div>
-    </div>
-
-    <!-- 说明下移 -->
-    <div class="grid md:grid-cols-3 gap-3">
-      <div class="expl border-amber-400"><div class="font-bold text-amber-700">💡 这是什么</div><p class="text-slate-600 mt-1 text-sm">发布日历。头部是全品牌总览（撞期一眼看全），下面按活动排期，AI 先给推荐，可手动改。</p></div>
-      <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 text-sm list-disc list-inside"><li>选活动 → AI 推荐排期</li><li>到点发布填平台/链接/时间</li><li>头部总览看撞期</li></ul></div>
-      <div class="expl border-sky-400"><div class="font-bold text-sky-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1 text-sm">时效内容卡节点发；总览放头部显眼处统筹多活动不撞期；AI 推荐省心仍可人工调。</p></div>
     </div>
   </div>
 </section>
