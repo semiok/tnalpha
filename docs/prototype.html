@@ -362,12 +362,13 @@
   confirmPub(i){this.slots[i].pub=true; this.pubForm=null},
   openArt(t){this.artTitle=t; this.artModal=true}}">
   <div class="space-y-4">
-    <div><h2 class="text-2xl font-bold">④ 排期版</h2><p class="text-lg text-slate-500">写好的图文，安排哪天发。按日期排，点标题看文章。</p></div>
+    <div>
+      <nav class="text-xs text-slate-400 mb-1">敦煌IP / <b class="text-slate-500" x-text="opCampaign"></b> / 排期</nav>
+      <h2 class="text-2xl font-bold">④ 排期版</h2><p class="text-lg text-slate-500">写好的图文，安排哪天发。排期隶属于当前活动，按日期排，点标题看文章。</p></div>
 
-    <!-- 控制条 -->
+    <!-- 控制条（排期隶属 campaign，无需选活动） -->
     <div class="card flex flex-wrap items-center gap-3 text-sm">
-      <span class="text-slate-500">操作活动：</span>
-      <select x-model="opCampaign" class="border border-slate-200 rounded-lg px-2 py-1"><template x-for="c in campaigns" :key="c"><option x-text="c"></option></template></select>
+      <span class="chip chip-amber">活动：<span x-text="opCampaign"></span></span>
       <button class="btn !bg-amber-500 !text-white" @click="aireco()">✦ AI 推荐排期</button>
       <span>每周 <input type="number" x-model="freq" class="w-12 border rounded px-1 text-center"> 篇</span>
       <button class="btn btn-secondary ml-auto" @click="overviewModal=true">📅 发布总览</button>
