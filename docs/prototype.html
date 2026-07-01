@@ -165,7 +165,10 @@
   get daily(){return Math.round(this.count*this.ratio/100)}, get nsel(){return this.cands.filter(c=>c.sel).length},
   adopt(){this.cands.filter(c=>c.sel).forEach(c=>this.adopted.push({...c,st:'待写作'})); this.cands=this.cands.filter(c=>!c.sel); this.selected=null},
   adoptOne(c){this.adopted.push({...c,st:'待写作'}); this.cands=this.cands.filter(x=>x!==c); this.selected=null},
-  dropOne(c){this.cands=this.cands.filter(x=>x!==c); this.selected=null}}">
+  dropOne(c){this.cands=this.cands.filter(x=>x!==c); this.selected=null},
+  recycled:0,
+  discard(a){this.adopted=this.adopted.filter(x=>x!==a); if(this.selected===a)this.selected=null},
+  recycle(a){this.recycled++; this.adopted=this.adopted.filter(x=>x!==a); if(this.selected===a)this.selected=null}}">
   <div class="space-y-4">
     <div><h2 class="text-2xl font-bold">② 选题库</h2><p class="text-lg text-slate-500">AI 帮你想一批选题，你挑好的留下。点任意选题，右边看详情。</p></div>
     <div class="grid md:grid-cols-5 gap-4 items-start">
@@ -188,11 +191,20 @@
           <div x-show="!cands.length" class="text-xs text-slate-400 py-2">候选都处理完了，可重新推荐。</div>
           <button class="btn !bg-emerald-600 !text-white w-full text-center !py-2 mt-1" :disabled="!nsel" @click="adopt()" x-text="'✓ 采纳选中('+nsel+')'"></button>
         </div>
-        <div class="rounded-xl border border-slate-200 p-3">
-          <div class="text-xs font-semibold text-slate-500 mb-2">正式选题库（点看详情）</div>
-          <div class="space-y-1 text-sm"><template x-for="a in adopted" :key="a.t">
-            <div class="click flex justify-between rounded px-2 py-1.5 border" :class="selected===a?'border-violet-400 ring-2 ring-violet-200 bg-white':'border-transparent bg-slate-50'" @click="selected=a"><span x-text="a.t"></span><span class="chip chip-slate" x-text="a.st"></span></div>
-          </template></div>
+        <div class="rounded-xl border-2 border-violet-300 bg-violet-50/50 p-3 shadow-sm">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-sm font-bold text-violet-700">📚 正式选题库 <span class="chip chip-brand" x-text="adopted.length"></span></div>
+            <span class="text-xs text-slate-400" x-show="recycled">🗑 回收站 <span x-text="recycled"></span></span>
+          </div>
+          <div class="space-y-1.5 text-sm"><template x-for="a in adopted" :key="a.t">
+            <div class="click flex justify-between items-center rounded-lg px-2.5 py-2 border bg-white" :class="selected===a?'border-violet-400 ring-2 ring-violet-200':'border-slate-200'" @click="selected=a">
+              <span class="flex items-center gap-2"><span class="chip" :class="a.ty==='时效'?'chip-amber':'chip-slate'" x-text="a.ty"></span><span x-text="a.t"></span></span>
+              <span class="flex items-center gap-2"><span class="chip chip-slate" x-text="a.st"></span>
+                <button @click.stop="a.st==='待写作'?discard(a):recycle(a)" class="text-xs text-slate-400 hover:text-rose-500" x-text="a.st==='待写作'?'弃选':'🗑'" :title="a.st==='待写作'?'弃选（未生成文章，直接删）':'移动到回收站（已生成图文）'"></button></span>
+            </div>
+          </template>
+          <div x-show="!adopted.length" class="text-xs text-slate-400 py-2">还没有采纳的选题</div>
+          </div>
         </div>
       </div>
       <!-- 右：选题详情面板 -->
@@ -207,7 +219,8 @@
           <div x-show="selected.link"><b class="text-slate-500">关联：</b><span class="text-brand-600" x-text="selected.link"></span></div>
           <!-- 候选态：采纳/弃选；已采纳态：状态 -->
           <div x-show="!selected.st" class="flex gap-2 pt-1"><button class="btn !bg-emerald-600 !text-white" @click="adoptOne(selected)">✓ 采纳进库</button><button class="btn btn-secondary" @click="dropOne(selected)">✕ 弃选</button></div>
-          <div x-show="selected.st" class="flex items-center gap-2 pt-1"><span class="chip chip-slate">状态：<span x-text="selected.st"></span></span><button class="btn btn-primary !py-1.5 !text-xs" @click="tab='writing'">去写作 ›</button></div>
+          <div x-show="selected.st" class="flex items-center gap-2 pt-1"><span class="chip chip-slate">状态：<span x-text="selected.st"></span></span><button class="btn btn-primary !py-1.5 !text-xs" @click="tab='writing'">去写作 ›</button>
+            <button class="btn btn-secondary !py-1.5 !text-xs !text-rose-600" @click="selected.st==='待写作'?discard(selected):recycle(selected)" x-text="selected.st==='待写作'?'✕ 弃选':'🗑 移到回收站'"></button></div>
         </div></template>
       </div>
     </div>
@@ -234,7 +247,10 @@
   openStyles(){this.stylePick=this.styles.find(s=>s.n===this.def)||this.styles[0]; this.styleModal=true},
   pick(t){this.sel=t; this.art=(t.st==='图文完成'?'done':'idle')},
   gen(){this.art='gen1'; setTimeout(()=>this.art='article',1200)},
-  genImg(){this.art='gen2'; setTimeout(()=>{this.art='done'; if(this.sel)this.sel.st='图文完成'},1200)}}">
+  genImg(){this.art='gen2'; setTimeout(()=>{this.art='done'; if(this.sel)this.sel.st='图文完成'},1200)},
+  recycled:0,
+  discard(t){this.topics=this.topics.filter(x=>x!==t); if(this.sel===t){this.sel=null;this.art='idle'}},
+  recycle(t){this.recycled++; this.topics=this.topics.filter(x=>x!==t); if(this.sel===t){this.sel=null;this.art='idle'}}}">
   <div class="space-y-4">
     <div><h2 class="text-2xl font-bold">③ 写作引擎</h2><p class="text-lg text-slate-500">给采纳的选题生成图文。这页主要用来生成、查看文章。</p></div>
 
@@ -245,24 +261,29 @@
     </div>
 
     <div class="grid md:grid-cols-5 gap-4 items-start">
-      <!-- 左：选题列表 -->
+      <!-- 左：选题库列表（凸显） -->
       <div class="md:col-span-2 space-y-3">
-        <div class="rounded-xl border border-slate-200 p-3">
-          <div class="text-xs font-semibold text-slate-500 mb-2">待写作</div>
-          <div class="space-y-1 text-sm">
-            <template x-for="t in topics.filter(x=>x.st!=='图文完成')" :key="t.t">
-              <div class="click flex justify-between rounded px-2 py-1.5 border" :class="sel===t?'border-fuchsia-400 ring-2 ring-fuchsia-200 bg-white':'border-transparent bg-slate-50'" @click="pick(t)"><span x-text="t.t"></span><span class="chip chip-amber" x-text="t.st"></span></div>
-            </template>
-            <div x-show="!topics.filter(x=>x.st!=='图文完成').length" class="text-xs text-slate-400 py-1">都写完了 🎉</div>
+        <div class="rounded-xl border-2 border-fuchsia-300 bg-fuchsia-50/50 p-3 shadow-sm space-y-3">
+          <div class="flex items-center justify-between"><div class="text-sm font-bold text-fuchsia-700">📚 选题库</div><span class="text-xs text-slate-400" x-show="recycled">🗑 回收站 <span x-text="recycled"></span></span></div>
+          <div class="bg-white rounded-lg border border-slate-200 p-2.5">
+            <div class="text-xs font-semibold text-slate-500 mb-1.5">待写作</div>
+            <div class="space-y-1 text-sm">
+              <template x-for="t in topics.filter(x=>x.st!=='图文完成')" :key="t.t">
+                <div class="click flex justify-between items-center rounded px-2 py-1.5 border" :class="sel===t?'border-fuchsia-400 ring-2 ring-fuchsia-200 bg-white':'border-transparent bg-slate-50'" @click="pick(t)"><span x-text="t.t"></span>
+                  <span class="flex items-center gap-2"><span class="chip chip-amber" x-text="t.st"></span><button @click.stop="discard(t)" class="text-xs text-slate-400 hover:text-rose-500" title="弃选（未生成，直接删）">弃选</button></span></div>
+              </template>
+              <div x-show="!topics.filter(x=>x.st!=='图文完成').length" class="text-xs text-slate-400 py-1">都写完了 🎉</div>
+            </div>
           </div>
-        </div>
-        <div class="rounded-xl border border-slate-200 p-3">
-          <div class="text-xs font-semibold text-slate-500 mb-2">图文完成</div>
-          <div class="space-y-1 text-sm">
-            <template x-for="t in topics.filter(x=>x.st==='图文完成')" :key="t.t">
-              <div class="click flex justify-between rounded px-2 py-1.5 border" :class="sel===t?'border-fuchsia-400 ring-2 ring-fuchsia-200 bg-white':'border-transparent bg-slate-50'" @click="pick(t)"><span x-text="t.t"></span><span class="chip chip-emerald">✓ 完成</span></div>
-            </template>
-            <div x-show="!topics.filter(x=>x.st==='图文完成').length" class="text-xs text-slate-400 py-1">还没有完成的</div>
+          <div class="bg-white rounded-lg border border-slate-200 p-2.5">
+            <div class="text-xs font-semibold text-slate-500 mb-1.5">图文完成</div>
+            <div class="space-y-1 text-sm">
+              <template x-for="t in topics.filter(x=>x.st==='图文完成')" :key="t.t">
+                <div class="click flex justify-between items-center rounded px-2 py-1.5 border" :class="sel===t?'border-fuchsia-400 ring-2 ring-fuchsia-200 bg-white':'border-transparent bg-slate-50'" @click="pick(t)"><span x-text="t.t"></span>
+                  <span class="flex items-center gap-2"><span class="chip chip-emerald">✓ 完成</span><button @click.stop="recycle(t)" class="text-xs text-slate-400 hover:text-rose-500" title="移动到回收站（已生成图文）">🗑</button></span></div>
+              </template>
+              <div x-show="!topics.filter(x=>x.st==='图文完成').length" class="text-xs text-slate-400 py-1">还没有完成的</div>
+            </div>
           </div>
         </div>
       </div>
@@ -271,7 +292,9 @@
       <div class="md:col-span-3">
         <template x-if="!sel"><div class="card text-slate-400 text-sm grid place-items-center min-h-[220px]">← 点左边选题，这里生成 / 查看文章</div></template>
         <template x-if="sel"><div class="card space-y-3">
-          <div class="flex items-center justify-between"><div class="font-bold" x-text="sel.t"></div><span class="chip chip-slate">注入风格：<span x-text="def"></span></span></div>
+          <div class="flex items-center justify-between"><div class="font-bold" x-text="sel.t"></div>
+            <div class="flex items-center gap-2"><span class="chip chip-slate">注入风格：<span x-text="def"></span></span>
+              <button class="text-xs text-slate-400 hover:text-rose-500" @click="sel.st==='图文完成'?recycle(sel):discard(sel)" x-text="sel.st==='图文完成'?'🗑 回收站':'✕ 弃选'"></button></div></div>
           <div x-show="art==='idle'" class="py-6 text-center"><button class="btn btn-primary" @click="gen()">⚡ 生成文章</button><div class="text-xs text-slate-400 mt-2">套用默认风格「<span x-text="def"></span>」</div></div>
           <div x-show="art==='gen1'" class="py-6 text-center text-brand-600"><span class="spin"></span> 文章生成中…</div>
           <div x-show="art==='article'" class="space-y-3">
