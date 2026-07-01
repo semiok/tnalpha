@@ -221,54 +221,82 @@
 </section>
 
 <!-- ===== ③ 写作引擎 ===== -->
-<section x-show="tab==='writing'" x-cloak x-data="{def:'沉浸式种草体', styles:['沉浸式种草体','文化科普体','攻略清单体','故事叙事体','情绪共鸣体'], art:'idle',
-  gen(){this.art='gen1'; setTimeout(()=>this.art='article',1200)}, genImg(){this.art='gen2'; setTimeout(()=>this.art='done',1200)}}">
-  <div x-show="!sub" class="space-y-4">
-    <div><h2 class="text-2xl font-bold">③ 写作引擎</h2><p class="text-lg text-slate-500">先学"别人怎么写"，再按这个风格帮你写。</p></div>
-    <div class="grid md:grid-cols-2 gap-5 items-start">
-      <div class="card space-y-3">
-        <div class="text-xs text-slate-400">界面预览（设默认 / 生成，都有反应）</div>
-        <div class="text-sm text-slate-500">AI 扒了 5 种"写法风格"，点"设默认"切换：</div>
-        <div class="space-y-1.5">
+<section x-show="tab==='writing'" x-cloak x-data="{def:'沉浸式种草体', styles:['沉浸式种草体','文化科普体','攻略清单体','故事叙事体','情绪共鸣体'], mode:'article',
+  topics:[{t:'美术展沉浸式体验测评',st:'待写作'},{t:'敦煌纹样的现代设计',st:'待写作'},{t:'开幕首日现场速记',st:'图文完成'}],
+  sel:null, art:'idle',
+  pick(t){this.sel=t; this.mode='article'; this.art=(t.st==='图文完成'?'done':'idle')},
+  gen(){this.art='gen1'; setTimeout(()=>this.art='article',1200)},
+  genImg(){this.art='gen2'; setTimeout(()=>{this.art='done'; if(this.sel)this.sel.st='图文完成'},1200)}}">
+  <div class="space-y-4">
+    <div><h2 class="text-2xl font-bold">③ 写作引擎</h2><p class="text-lg text-slate-500">给采纳的选题生成图文。这页主要用来生成、查看文章。</p></div>
+
+    <!-- 写作风格：小入口（设定后不常改） -->
+    <div class="card !py-3 flex items-center justify-between text-sm">
+      <div>✍️ 默认写作风格：<b class="text-fuchsia-700">⭐ <span x-text="def"></span></b> <span class="text-xs text-slate-400 ml-1">（设定后不常改）</span></div>
+      <button class="btn btn-secondary !text-xs" @click="mode=(mode==='styles'?'article':'styles')" x-text="mode==='styles'?'← 返回文章':'管理写作风格 ›'"></button>
+    </div>
+
+    <div class="grid md:grid-cols-5 gap-4 items-start">
+      <!-- 左：选题列表 -->
+      <div class="md:col-span-2 space-y-3">
+        <div class="rounded-xl border border-slate-200 p-3">
+          <div class="text-xs font-semibold text-slate-500 mb-2">待写作</div>
+          <div class="space-y-1 text-sm">
+            <template x-for="t in topics.filter(x=>x.st!=='图文完成')" :key="t.t">
+              <div class="click flex justify-between rounded px-2 py-1.5 border" :class="sel===t?'border-fuchsia-400 ring-2 ring-fuchsia-200 bg-white':'border-transparent bg-slate-50'" @click="pick(t)"><span x-text="t.t"></span><span class="chip chip-amber" x-text="t.st"></span></div>
+            </template>
+            <div x-show="!topics.filter(x=>x.st!=='图文完成').length" class="text-xs text-slate-400 py-1">都写完了 🎉</div>
+          </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 p-3">
+          <div class="text-xs font-semibold text-slate-500 mb-2">图文完成</div>
+          <div class="space-y-1 text-sm">
+            <template x-for="t in topics.filter(x=>x.st==='图文完成')" :key="t.t">
+              <div class="click flex justify-between rounded px-2 py-1.5 border" :class="sel===t?'border-fuchsia-400 ring-2 ring-fuchsia-200 bg-white':'border-transparent bg-slate-50'" @click="pick(t)"><span x-text="t.t"></span><span class="chip chip-emerald">✓ 完成</span></div>
+            </template>
+            <div x-show="!topics.filter(x=>x.st==='图文完成').length" class="text-xs text-slate-400 py-1">还没有完成的</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右：文章生成/查看 或 风格管理 -->
+      <div class="md:col-span-3">
+        <!-- 风格管理（小入口点开） -->
+        <div x-show="mode==='styles'" x-cloak class="card space-y-2">
+          <div class="text-sm text-slate-500 mb-1">AI 扒了 5 种"写法风格"，选 1 种设默认（生成时自动套用）：</div>
           <template x-for="s in styles" :key="s">
             <div class="rounded-xl border p-3 flex justify-between items-center" :class="def===s?'border-fuchsia-300 bg-fuchsia-50':'border-slate-200'">
-              <div><b x-text="(def===s?'⭐ ':'')+s"></b> <span class="text-xs text-slate-400">段落·语气·用词 ｜ 🔗链接</span>
-                <a @click.prevent="sub='writing-style'" href="#" class="text-xs text-brand-600 ml-1" x-show="s==='沉浸式种草体'">看详情</a></div>
+              <div><b x-text="(def===s?'⭐ ':'')+s"></b> <span class="text-xs text-slate-400">段落·语气·用词 ｜ 🔗参考链接</span></div>
               <button class="btn !py-1 !text-xs" :class="def===s?'btn-secondary':'btn-primary'" @click="def=s" x-text="def===s?'默认':'设默认'"></button></div>
           </template>
         </div>
-        <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm space-y-2">
-          <div class="text-slate-500">生成文章（自动套用默认风格「<b x-text="def"></b>」）：</div>
-          <div x-show="art==='idle'"><button class="btn btn-primary" @click="gen()">⚡ 生成文章</button></div>
-          <div x-show="art==='gen1'" class="flex items-center gap-2 text-brand-600"><span class="spin"></span> 文章生成中…</div>
-          <div x-show="art==='article'" class="flex items-center gap-2"><span class="chip chip-emerald">✓ 文章已生成</span><button class="btn btn-primary !py-1.5 !text-xs" @click="genImg()">🖼 生成图片</button> <a @click.prevent="sub='writing-article'" href="#" class="text-xs text-brand-600">查看</a></div>
-          <div x-show="art==='gen2'" class="flex items-center gap-2 text-brand-600"><span class="spin"></span> 配图生成中…</div>
-          <div x-show="art==='done'" class="flex items-center gap-2"><span class="chip chip-emerald">✓ 图文完成</span><a @click.prevent="sub='writing-article'" href="#" class="text-xs text-brand-600">查看图文</a> <button class="btn btn-secondary !py-1 !text-xs" @click="art='idle'">重来</button></div>
+        <!-- 文章生成/查看 -->
+        <div x-show="mode==='article'" x-cloak>
+          <template x-if="!sel"><div class="card text-slate-400 text-sm grid place-items-center min-h-[220px]">← 点左边选题，这里生成 / 查看文章</div></template>
+          <template x-if="sel"><div class="card space-y-3">
+            <div class="flex items-center justify-between"><div class="font-bold" x-text="sel.t"></div><span class="chip chip-slate">注入风格：<span x-text="def"></span></span></div>
+            <div x-show="art==='idle'" class="py-6 text-center"><button class="btn btn-primary" @click="gen()">⚡ 生成文章</button><div class="text-xs text-slate-400 mt-2">套用默认风格「<span x-text="def"></span>」</div></div>
+            <div x-show="art==='gen1'" class="py-6 text-center text-brand-600"><span class="spin"></span> 文章生成中…</div>
+            <div x-show="art==='article'" class="space-y-3">
+              <div class="flex items-center gap-2"><span class="chip chip-emerald">✓ 文章已生成</span><button class="btn btn-primary !py-1.5 !text-xs" @click="genImg()">🖼 生成图片</button></div>
+              <div class="bg-slate-50 rounded-lg p-4 text-sm leading-relaxed"><b>美术展开幕｜直接封神的一场敦煌之旅✨</b><br><br>姐妹些！开幕首日冲了…（正文，配图待生成）</div>
+            </div>
+            <div x-show="art==='gen2'" class="py-6 text-center text-brand-600"><span class="spin"></span> 配图生成中…</div>
+            <div x-show="art==='done'" class="space-y-3">
+              <div class="flex items-center gap-2"><span class="chip chip-emerald">✓ 图文完成</span><button class="btn btn-secondary !py-1 !text-xs" @click="art='idle'">重新生成</button></div>
+              <div class="bg-slate-50 rounded-lg p-4 text-sm leading-relaxed"><b>美术展开幕｜直接封神的一场敦煌之旅✨</b><br><br>姐妹些！开幕首日冲了，给你们扒拉出最值得打卡的 5 个机位…（正文）</div>
+              <div class="grid grid-cols-3 gap-2"><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图1</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图2</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图3</div></div>
+            </div>
+          </div></template>
         </div>
       </div>
-      <div class="space-y-3">
-        <div class="expl border-fuchsia-400"><div class="font-bold text-fuchsia-700">💡 这是什么</div><p class="text-slate-600 mt-1">AI 找"同类感觉"爆款，总结几种风格，照风格生成文章 + 配图。</p></div>
-        <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li>抓 5 种风格（带链接）</li><li>选 1 种设默认</li><li>生成先文章后配图</li></ul></div>
-        <div class="expl border-amber-400"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">好内容要符合平台调性。学优秀同行表达，带链接可核对。</p></div>
-      </div>
     </div>
-  </div>
-  <div x-show="sub==='writing-style'" x-cloak class="space-y-4">
-    <button @click="sub=null" class="text-sm text-brand-600">← 返回 写作引擎</button>
-    <div><h2 class="text-xl font-bold">⭐ 沉浸式种草体 <span class="text-sm font-normal text-slate-400">风格详情</span></h2></div>
-    <div class="card space-y-3 text-sm">
-      <div class="grid grid-cols-3 gap-2 text-center"><div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">段落结构</div><div class="font-semibold mt-1">短句铺陈+场景代入</div></div><div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">语气</div><div class="font-semibold mt-1">亲切安利</div></div><div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400">用词</div><div class="font-semibold mt-1">口语化/网感</div></div></div>
-      <div class="bg-slate-50 rounded-lg p-3"><b class="text-slate-500">参考来源：</b><span class="text-brand-600">xiaohongshu.com/xxx</span></div>
-      <div class="bg-fuchsia-50 rounded-lg p-3"><b class="text-fuchsia-700">示例片段：</b>"姐妹些！这个展我直接逛了 3 小时不想走😭 一进门就是巨巨巨震撼的飞天…"</div>
-    </div>
-  </div>
-  <div x-show="sub==='writing-article'" x-cloak class="space-y-4">
-    <button @click="sub=null" class="text-sm text-brand-600">← 返回 写作引擎</button>
-    <div><h2 class="text-xl font-bold">生成结果预览</h2></div>
-    <div class="card space-y-3">
-      <div class="flex gap-2"><span class="chip chip-emerald">✓ 文章</span><span class="chip chip-emerald">✓ 配图</span><span class="chip chip-slate">风格：沉浸式种草体</span></div>
-      <div class="bg-slate-50 rounded-lg p-4 text-sm leading-relaxed"><b>美术展开幕｜直接封神的一场敦煌之旅✨</b><br><br>姐妹些！开幕首日冲了，给你们扒拉出最值得打卡的 5 个机位…（正文）</div>
-      <div class="grid grid-cols-3 gap-2"><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图1</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图2</div><div class="aspect-square bg-slate-200 rounded-lg grid place-items-center text-slate-400 text-xs">配图3</div></div>
+
+    <!-- 说明下移 -->
+    <div class="grid md:grid-cols-3 gap-3">
+      <div class="expl border-fuchsia-400"><div class="font-bold text-fuchsia-700">💡 这是什么</div><p class="text-slate-600 mt-1 text-sm">AI 找"同类感觉"爆款，总结几种写作风格，照风格生成文章 + 配图。</p></div>
+      <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><ul class="text-slate-600 mt-1 space-y-1 text-sm list-disc list-inside"><li>风格设定一次（上方小入口）</li><li>左边选采纳的选题</li><li>右边生成：先文章后配图</li></ul></div>
+      <div class="expl border-amber-400"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1 text-sm">这页主要用来<b>生成/查看文章</b>；风格设定后不常改，收进小入口不占地方。</p></div>
     </div>
   </div>
 </section>
