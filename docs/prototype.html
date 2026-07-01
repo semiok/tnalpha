@@ -69,91 +69,88 @@
   doAI(which){this[which]='ing'; setTimeout(()=>this[which]='done',1200)},
   upB(){this.brandDocs.push({n:'新品牌资料'+(this.brandDocs.length+1)+'.pdf'})},
   upC(){this.campDocs.push({n:'新活动资料'+(this.campDocs.length+1)+'.pdf',note:'—'})}}">
-  <!-- 一级：品牌总览（三层级入口） -->
-  <div x-show="!sub" class="space-y-4">
-    <div><h2 class="text-2xl font-bold">① 知识库</h2><p class="text-lg text-slate-500">三个层级：品牌库 · Campaign · 独立数据池。</p></div>
-    <div class="grid md:grid-cols-2 gap-5 items-start">
-      <div class="space-y-3">
-        <div class="text-xs text-slate-400">界面预览（蓝虚线框都可点进去）</div>
+  <div class="space-y-4" x-data="{detail:'brand'}">
+    <div><h2 class="text-2xl font-bold">① 知识库</h2><p class="text-lg text-slate-500">三个层级：品牌库 · Campaign · 独立数据池。点左边任意一项，右边看详情。</p></div>
+
+    <!-- 左右结构：左=三层入口，右=选中项详情 -->
+    <div class="grid md:grid-cols-5 gap-4 items-start">
+      <!-- 左列：入口列表 -->
+      <div class="md:col-span-2 space-y-3">
         <!-- 层级1 品牌库 -->
-        <div @click="sub='kb-brand'" class="click go card !p-4 border-2 border-dashed border-sky-300 bg-sky-50">
-          <div class="font-bold text-sky-800">📦 品牌库：敦煌IP <span class="chip chip-slate">最高层·长期</span></div>
-          <div class="text-sm text-slate-500 mt-1">点进去：传品牌文档 + AI 解析（品牌定义）</div>
+        <div @click="detail='brand'" class="click card !p-4 border-sky-200 bg-sky-50" :class="detail==='brand'?'ring-2 ring-sky-400':''">
+          <div class="font-bold text-sky-800">📦 品牌库：敦煌IP</div>
+          <div class="text-xs text-slate-500 mt-1">最高层·长期 · 传文档+AI解析</div>
         </div>
-        <!-- 层级2 campaign（品牌下） -->
+        <!-- 层级2 campaign -->
         <div class="card !p-4 space-y-2">
           <div class="text-xs font-semibold text-slate-400">该品牌下的 Campaign 活动</div>
           <template x-for="c in campaigns" :key="c.n">
-            <div @click="c.n==='敦煌当代美术展' && (sub='kb-campaign')" :class="c.n==='敦煌当代美术展'?'click go border-dashed border-amber-300 bg-amber-50':'border-slate-200'" class="rounded-xl border-2 p-3 flex justify-between items-center"><span>🗂 <span x-text="c.n"></span> <span class="chip" :class="c.tag==='常驻'?'chip-slate':'chip-amber'" x-text="c.tag"></span></span></div>
+            <div @click="detail = (c.n==='敦煌当代美术展'?'campaign':'campaign')"
+                 class="click rounded-lg border p-2.5 flex justify-between items-center text-sm"
+                 :class="detail==='campaign'&&c.n==='敦煌当代美术展'?'border-amber-300 bg-amber-50 ring-2 ring-amber-300':'border-slate-200'">
+              <span>🗂 <span x-text="c.n"></span></span><span class="chip" :class="c.tag==='常驻'?'chip-slate':'chip-amber'" x-text="c.tag"></span></div>
           </template>
-          <button class="btn btn-secondary !text-xs !py-1.5" @click="addCamp()">＋ 新建 campaign</button>
+          <button class="btn btn-secondary !text-xs !py-1.5 w-full" @click="addCamp()">＋ 新建 campaign</button>
         </div>
-        <!-- 层级3 独立数据池 -->
-        <div class="text-center text-xs text-slate-400">— 下面是独立的 · 不属于某个品牌 —</div>
-        <div @click="sub='kb-pool'" class="click go card !p-4 border-2 border-dashed border-slate-300 bg-slate-50">
-          <div class="font-bold text-slate-700">🗄 数据池 <span class="chip chip-slate">独立·跨品牌共享</span></div>
-          <div class="text-sm text-slate-500 mt-1">弱品牌相关的资料包 + 经验包（主题化），campaign 按需引用</div>
+        <!-- 层级3 数据池 -->
+        <div class="text-center text-xs text-slate-400">— 独立 · 不属于某个品牌 —</div>
+        <div @click="detail='pool'" class="click card !p-4 border-slate-300 bg-slate-50" :class="detail==='pool'?'ring-2 ring-slate-400':''">
+          <div class="font-bold text-slate-700">🗄 数据池 <span class="chip chip-slate">独立·跨品牌</span></div>
+          <div class="text-xs text-slate-500 mt-1">弱品牌相关的资料包+经验包 · 主题化</div>
         </div>
       </div>
-      <div class="space-y-3">
-        <div class="expl border-sky-400"><div class="font-bold text-sky-700">💡 三个层级</div><ul class="text-slate-600 mt-1 space-y-1 list-disc list-inside"><li><b>品牌库</b>(最高)：品牌文档 + AI 解析</li><li><b>Campaign</b>(品牌下)：活动资料 + AI 解析 + 引用数据池</li><li><b>数据池</b>(独立)：主题化资料包/经验包 + AI 解析</li></ul></div>
-        <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><p class="text-slate-600 mt-1">定义者进品牌库传资料→解析；建 campaign 传活动料→解析→引用数据池；数据池单独维护（新建主题传资料包，历史反馈自动进）。</p></div>
-        <div class="expl border-amber-400"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1">品牌/活动是<b>强相关</b>素材；数据池是<b>弱品牌相关</b>的通用资料包+经验包，独立出来跨品牌复用，还接住⑤沉淀的经验。</p></div>
+
+      <!-- 右列：详情面板 -->
+      <div class="md:col-span-3">
+        <!-- 品牌库详情 -->
+        <div x-show="detail==='brand'" class="card space-y-4">
+          <div><div class="font-bold">📦 品牌库：敦煌IP</div><p class="text-sm text-slate-500">传品牌文档 → AI 解析出品牌定义（调性/内容要求），供下游生成注入。</p></div>
+          <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2 flex justify-between">品牌文档（长期·低时效）<button class="btn btn-secondary !py-1 !text-xs" @click="upB()">⬆ 上传</button></div>
+            <div class="space-y-1.5 text-sm"><template x-for="f in brandDocs" :key="f.n"><div class="bg-slate-50 rounded px-3 py-2">📄 <span x-text="f.n"></span></div></template></div></div>
+          <div class="rounded-xl border border-slate-200 p-4">
+            <div class="flex justify-between items-center"><div class="text-sm font-semibold text-slate-600">AI 解析（品牌定义）</div>
+              <button class="btn btn-primary !py-1.5 !text-xs" @click="doAI('brandAI')" x-show="brandAI!=='ing'">🧠 AI 解析</button>
+              <span x-show="brandAI==='ing'" class="flex items-center gap-1 text-brand-600 text-xs"><span class="spin"></span> 解析中…</span></div>
+            <div x-show="brandAI==='done'" x-cloak class="mt-2 bg-sky-50 rounded-lg p-3 text-sm text-slate-600"><b class="text-sky-700">解析结果：</b>品牌调性=东方美学·当代转译；内容要求=以"感知距离"为母题，兼顾专业性与网感…</div>
+          </div>
+        </div>
+        <!-- campaign 详情 -->
+        <div x-show="detail==='campaign'" x-cloak class="card space-y-4">
+          <div class="flex justify-between items-center"><div class="font-bold">🗂 敦煌当代美术展</div><span class="space-x-2"><button class="btn btn-secondary !py-1 !text-xs">编辑</button><button class="btn btn-danger !py-1 !text-xs">删除</button></span></div>
+          <div class="text-sm text-slate-500">起止：2026-07-01 ～ 09-30</div>
+          <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2 flex justify-between">活动资料（点上传加一行）<button class="btn btn-secondary !py-1 !text-xs" @click="upC()">⬆ 上传</button></div>
+            <div class="space-y-1.5 text-sm"><template x-for="f in campDocs" :key="f.n"><div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>📄 <span x-text="f.n"></span></span><span class="chip chip-slate">备注：<span x-text="f.note"></span></span></div></template></div></div>
+          <div class="rounded-xl border border-slate-200 p-4">
+            <div class="flex justify-between items-center"><div class="text-sm font-semibold text-slate-600">AI 解析（本活动调性）</div>
+              <button class="btn btn-primary !py-1.5 !text-xs" @click="doAI('campAI')" x-show="campAI!=='ing'">🧠 AI 解析</button>
+              <span x-show="campAI==='ing'" class="flex items-center gap-1 text-brand-600 text-xs"><span class="spin"></span> 解析中…</span></div>
+            <div x-show="campAI==='done'" x-cloak class="mt-2 bg-amber-50 rounded-lg p-3 text-sm text-slate-600"><b class="text-amber-700">解析结果：</b>本活动重点=开幕造势 + 沉浸式体验；建议角度=打卡攻略、修复故事…</div>
+          </div>
+          <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2">引用数据池（弱相关参考）</div>
+            <div class="flex flex-wrap gap-2 text-sm"><template x-for="r in refs" :key="r"><span class="chip chip-emerald" x-text="'✅ '+r"></span></template>
+              <button class="btn btn-secondary !py-0.5 !text-xs" @click="detail='pool'">＋ 从数据池引用</button></div></div>
+          <button @click="tab='topic'" class="click btn btn-primary w-full !py-3 text-center">进入本活动的选题库 ›</button>
+        </div>
+        <!-- 数据池详情 -->
+        <div x-show="detail==='pool'" x-cloak class="card space-y-3">
+          <div><div class="font-bold">🗄 数据池（独立·跨品牌共享）</div><p class="text-sm text-slate-500">弱品牌相关的资料包 + 经验包。每个主题可传资料包并 AI 解析；历史反馈自动进来。</p></div>
+          <div class="flex justify-between items-center"><input class="border border-slate-200 rounded-lg px-3 py-2 text-sm flex-1 mr-2" placeholder="🔍 搜索主题…"><button class="btn btn-primary !text-xs" @click="addTopic()">＋ 新建主题</button></div>
+          <div class="space-y-2 text-sm"><template x-for="p in pool" :key="p.n">
+            <div class="flex justify-between items-center bg-slate-50 rounded px-3 py-2.5">
+              <span><span class="chip" :class="p.k==='经验包'?'chip-emerald':'chip-brand'" x-text="p.k"></span> <span class="ml-1" x-text="p.n"></span>
+                <span x-show="p.auto" class="chip chip-rose ml-1">来自⑤·自动</span></span>
+              <span class="text-xs" :class="p.ai?'text-emerald-600':'text-slate-400'" x-text="p.ai?'✓ 已AI解析':'待解析'"></span></div>
+          </template></div>
+          <div class="text-xs text-slate-400">📚 资料包=通用参考资料；🧠 经验包=历史发布数据 + AI 总结经验（⑤沉淀）。</div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- 二级：品牌库详情（传文档 + AI解析） -->
-  <div x-show="sub==='kb-brand'" x-cloak class="space-y-4">
-    <button @click="sub=null" class="text-sm text-brand-600">← 返回 知识库</button>
-    <div><h2 class="text-xl font-bold">📦 品牌库：敦煌IP <span class="text-sm font-normal text-slate-400">最高层</span></h2><p class="text-sm text-slate-500">传品牌文档，AI 解析出品牌定义（调性/内容要求），供下游生成注入。</p></div>
-    <div class="card space-y-4">
-      <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2 flex justify-between">品牌文档（长期·低时效）<button class="btn btn-secondary !py-1 !text-xs" @click="upB()">⬆ 上传</button></div>
-        <div class="space-y-1.5 text-sm"><template x-for="f in brandDocs" :key="f.n"><div class="bg-slate-50 rounded px-3 py-2">📄 <span x-text="f.n"></span></div></template></div></div>
-      <div class="rounded-xl border border-slate-200 p-4">
-        <div class="flex justify-between items-center"><div class="text-sm font-semibold text-slate-600">AI 解析（品牌定义）</div>
-          <button class="btn btn-primary !py-1.5 !text-xs" @click="doAI('brandAI')" x-show="brandAI!=='ing'">🧠 AI 解析</button>
-          <span x-show="brandAI==='ing'" class="flex items-center gap-1 text-brand-600 text-xs"><span class="spin"></span> 解析中…</span></div>
-        <div x-show="brandAI==='done'" x-cloak class="mt-2 bg-sky-50 rounded-lg p-3 text-sm text-slate-600"><b class="text-sky-700">解析结果：</b>品牌调性=东方美学·当代转译；内容要求=以"感知距离"为母题，兼顾专业性与网感…</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 二级：campaign 详情（传资料 + AI解析 + 引用数据池） -->
-  <div x-show="sub==='kb-campaign'" x-cloak class="space-y-4">
-    <button @click="sub=null" class="text-sm text-brand-600">← 返回 知识库</button>
-    <div><h2 class="text-xl font-bold">🗂 敦煌当代美术展 <span class="text-sm font-normal text-slate-400">Campaign</span></h2></div>
-    <div class="card space-y-4">
-      <div class="flex justify-between items-center text-sm"><span><b>起止：</b>2026-07-01 ～ 09-30</span><span class="space-x-2"><button class="btn btn-secondary">编辑</button><button class="btn btn-danger">删除</button></span></div>
-      <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2 flex justify-between">活动资料（点上传加一行）<button class="btn btn-secondary !py-1 !text-xs" @click="upC()">⬆ 上传</button></div>
-        <div class="space-y-1.5 text-sm"><template x-for="f in campDocs" :key="f.n"><div class="flex justify-between bg-slate-50 rounded px-3 py-2"><span>📄 <span x-text="f.n"></span></span><span class="chip chip-slate">备注：<span x-text="f.note"></span></span></div></template></div></div>
-      <div class="rounded-xl border border-slate-200 p-4">
-        <div class="flex justify-between items-center"><div class="text-sm font-semibold text-slate-600">AI 解析（本活动调性）</div>
-          <button class="btn btn-primary !py-1.5 !text-xs" @click="doAI('campAI')" x-show="campAI!=='ing'">🧠 AI 解析</button>
-          <span x-show="campAI==='ing'" class="flex items-center gap-1 text-brand-600 text-xs"><span class="spin"></span> 解析中…</span></div>
-        <div x-show="campAI==='done'" x-cloak class="mt-2 bg-amber-50 rounded-lg p-3 text-sm text-slate-600"><b class="text-amber-700">解析结果：</b>本活动重点=开幕造势 + 沉浸式体验；建议角度=打卡攻略、修复故事…</div>
-      </div>
-      <div class="rounded-xl border border-slate-200 p-4"><div class="text-sm font-semibold text-slate-600 mb-2">引用数据池（弱相关参考）</div>
-        <div class="flex flex-wrap gap-2 text-sm"><template x-for="r in refs" :key="r"><span class="chip chip-emerald" x-text="'✅ '+r"></span></template>
-          <button class="btn btn-secondary !py-0.5 !text-xs" @click="sub='kb-pool'">＋ 从数据池引用</button></div></div>
-      <button @click="tab='topic'; sub=null" class="click btn btn-primary w-full !py-3 text-center">进入本活动的选题库 ›</button>
-    </div>
-  </div>
-
-  <!-- 二级：独立数据池（主题化 + 新建主题 + AI解析 + 经验包） -->
-  <div x-show="sub==='kb-pool'" x-cloak class="space-y-4">
-    <button @click="sub=null" class="text-sm text-brand-600">← 返回 知识库</button>
-    <div><h2 class="text-xl font-bold">🗄 数据池 <span class="text-sm font-normal text-slate-400">独立·跨品牌共享</span></h2><p class="text-sm text-slate-500">弱品牌相关的资料包 + 经验包。每个主题可传资料包并 AI 解析；历史反馈经验自动进来。</p></div>
-    <div class="card space-y-3">
-      <div class="flex justify-between items-center"><input class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-64" placeholder="🔍 搜索主题…"><button class="btn btn-primary !text-xs" @click="addTopic()">＋ 新建主题</button></div>
-      <div class="space-y-2 text-sm"><template x-for="p in pool" :key="p.n">
-        <div class="flex justify-between items-center bg-slate-50 rounded px-3 py-2.5">
-          <span><span class="chip" :class="p.k==='经验包'?'chip-emerald':'chip-brand'" x-text="p.k"></span> <span class="ml-1" x-text="p.n"></span>
-            <span x-show="p.auto" class="chip chip-rose ml-1">来自⑤·自动</span></span>
-          <span class="text-xs" :class="p.ai?'text-emerald-600':'text-slate-400'" x-text="p.ai?'✓ 已AI解析':'待解析'"></span>
-        </div>
-      </template></div>
-      <div class="text-xs text-slate-400">📚 资料包=上传的通用参考资料；🧠 经验包=历史发布数据 + AI 总结的经验（⑤沉淀）。</div>
+    <!-- 说明（往下放·全宽三栏） -->
+    <div class="grid md:grid-cols-3 gap-3">
+      <div class="expl border-sky-400"><div class="font-bold text-sky-700">💡 三个层级</div><ul class="text-slate-600 mt-1 space-y-1 text-sm list-disc list-inside"><li><b>品牌库</b>(最高)：品牌文档 + AI 解析</li><li><b>Campaign</b>(品牌下)：活动资料 + AI 解析 + 引用数据池</li><li><b>数据池</b>(独立)：主题化资料包/经验包 + AI 解析</li></ul></div>
+      <div class="expl border-emerald-400"><div class="font-bold text-emerald-700">📝 怎么用</div><p class="text-slate-600 mt-1 text-sm">定义者进品牌库传资料→解析；建 campaign 传活动料→解析→引用数据池；数据池单独维护（新建主题传资料包，历史反馈自动进）。</p></div>
+      <div class="expl border-amber-400"><div class="font-bold text-amber-700">🎯 为什么这么设计</div><p class="text-slate-600 mt-1 text-sm">品牌/活动是<b>强相关</b>素材；数据池是<b>弱品牌相关</b>的通用资料包+经验包，独立出来跨品牌复用，还接住⑤沉淀的经验。</p></div>
     </div>
   </div>
 </section>
