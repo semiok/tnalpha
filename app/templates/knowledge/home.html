@@ -2,7 +2,10 @@
 {% from "components/ui.html" import page_header, card_open, card_close, empty_state %}
 {% block content %}
   {{ page_header("①知识库", "品牌 / Campaign") }}
-  <p class="text-sm text-slate-500 -mt-3 mb-5">一个品牌 = 一套知识库。点进去管理资料和活动。</p>
+  <div class="flex items-center justify-between -mt-3 mb-5">
+    <p class="text-sm text-slate-500">一个品牌 = 一套知识库。点进去管理资料和活动。</p>
+    <a href="/pool" class="text-sm text-brand-600 hover:text-brand-700">全局数据池 →</a>
+  </div>
 
   <div class="grid grid-cols-3 gap-4">
     {% for b in brands %}

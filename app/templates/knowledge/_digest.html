@@ -1,0 +1,9 @@
+{#
+  AI 解析结果片段——HTMX 局部刷新用（swap 进 #brand-digest / #campaign-digest）。
+  route: parse_brand / parse_campaign 渲染此模板返回。
+#}
+{% if digest %}
+<div class="text-sm text-slate-600 whitespace-pre-wrap bg-slate-50 rounded-lg p-3">{{ digest }}</div>
+{% else %}
+<div class="text-slate-400 text-sm py-3">尚未解析，点「AI 解析」生成摘要。</div>
+{% endif %}
