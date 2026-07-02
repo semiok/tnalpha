@@ -8,11 +8,12 @@ tnalpha 是内容生产协作平台。多人各用 AI 负责一个模块，GitHu
 
 先读这几样，再写第一行代码：
 1. 本文件（规则）
-2. `ARCHITECTURE.md`（技术框架 + 目录结构 + 模块间接口契约）
-3. `DESIGN.md`（UI/交互规范）
-4. `需求文档.md`（对应你模块的章节）
-5. **`app/modules/knowledge/`（参考样板——照它抄写法）**
-6. 你的 Linear issue 描述（模块要做什么 + 验收标准）
+2. `CONTRIBUTING.md`（**协作流程**：怎么开发 / 本地验证 / 提 PR，贡献者做什么、维护者做什么）
+3. `ARCHITECTURE.md`（技术框架 + 目录结构 + 模块间接口契约）
+4. `DESIGN.md`（UI/交互规范）
+5. `需求文档.md`（对应你模块的章节）
+6. **`app/modules/knowledge/`（参考样板——照它抄写法）**
+7. 你的 Linear issue 描述（模块要做什么 + 验收标准）
 
 ## 1. 铁律（违反 = PR 不合并）
 

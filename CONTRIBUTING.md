@@ -14,17 +14,29 @@
 3. 建环境：`python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 4. 让你的 AI 读 `CLAUDE.md`（它会告诉 AI 该读哪些、守哪些规矩）。
 
-## 认领任务 → 开发 → 合并（标准闭环）
+## 标准协作流程（谁做什么，务必分清）
+
+**你（贡献者/模块负责人）做 1–5；维护者做 6–8。你把 PR 开好（第 5 步）活就完了，剩下等 review。**
 
 ```
-1. Linear 上认领一个 issue（如 MET-7 ②选题库），拖到 In Progress
+── 贡献者（你 + 你的 AI）──
+1. Linear 认领 issue（如 MET-7），拖到 In Progress
 2. 从 main 切分支：git checkout main && git pull && git checkout -b topic/xxx
-3. 让 AI 照 CLAUDE.md + 你的 issue + knowledge 样板 开发（TDD）
-4. 本地 pytest 全绿 0 warnings
-5. 提交 → push → 开 PR，标题带 issue 号：[MET-7] ...
-6. 维护者 review → 合并（squash）
-7. 合并后 Linear issue 自动 → Done（GitHub 集成）
+3. 照 CLAUDE.md + 你的 issue + knowledge 样板 开发（TDD，先写测试）
+4. 本地验证（两样都要，缺一不可）：
+     · .venv/bin/pytest -q                          → 全绿、0 warnings
+     · .venv/bin/uvicorn app.main:app --port 8820   → 浏览器点自己模块，确认真能用
+5. 提交 → push 分支 → 开 PR，标题带 [MET-N]，描述写清「做了什么 + 怎么测的」
+── 维护者 ──
+6. Review PR（可派 code-review agent 审契约/安全/质量）——别人 AI 的代码不盲合
+7. 审过 → 合并 main（squash）→ Linear issue 自动 Done
+8. 部署最新 main 到验证环境，人工点检
 ```
+
+**三条铁律**：
+- **不直接推 main**，一律走分支 + PR。
+- **本地不只跑 pytest，还要起服务点一遍**——测试绿 ≠ 界面能用。
+- **review 关不能省**：多 AI 协作，代码合进 main 前必须有人（或 review agent）把关契约与质量。MET-6 的 review 就抓出过会被照抄传播的缺陷。
 
 ## 分支 & 提交
 
