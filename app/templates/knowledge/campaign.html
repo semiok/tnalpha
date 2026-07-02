@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, text_input, file_input %}
+{% block content %}
+  {{ page_header("①知识库", campaign.name, crumbs=[
+      ("首页","/"), (brand.name, "/brands/" ~ brand.id), (campaign.name, "")]) }}
+
+  <div class="mb-4 flex items-center gap-2">
+    {% if campaign.is_default %}{{ chip("品牌日常·常驻", "slate") }}
+    {% elif campaign.start_date %}{{ chip(campaign.start_date.strftime('%Y.%m.%d') ~ "–" ~ (campaign.end_date.strftime('%m.%d') if campaign.end_date else "?"), "amber") }}{% endif %}
+  </div>
+
+  {# ── 活动资料 + AI 解析 ── #}
+  {{ card_open("活动资料（强时效·AI 读）") }}
+    <div class="space-y-2 mb-3">
+      {% for d in docs %}
+      <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 text-sm">
+        <span>📄 {{ d.filename }}{% if d.note %} <span class="text-slate-400">· {{ d.note }}</span>{% endif %}</span>
+        <span class="text-xs text-slate-400">{{ d.created_at.strftime('%Y-%m-%d') }}</span>
+      </div>
+      {% else %}
+      {{ empty_state("还没有活动资料。") }}
+      {% endfor %}
+    </div>
+    {% if request.state.level >= 2 %}
+    <form method="post" action="/campaigns/{{ campaign.id }}/docs" enctype="multipart/form-data"
+          class="flex flex-wrap items-center gap-2">
+      {{ file_input("file", required=True) }}
+      {{ text_input("note", placeholder="备注（开幕/中期/闭幕）") }}
+      {{ button("上传资料", variant="secondary", type="submit") }}
+    </form>
+    {% endif %}
+  {{ card_close() }}
+
+  {{ card_open("AI 解析结果") }}
+    {% if request.state.level >= 2 %}
+    <div class="mb-2">{{ button("AI 解析活动资料", variant="secondary",
+        hx_post="/campaigns/" ~ campaign.id ~ "/parse", hx_target="#campaign-digest", hx_swap="innerHTML") }}</div>
+    {% endif %}
+    <div id="campaign-digest">
+      {% set digest = campaign.campaign_digest %}{% include "knowledge/_digest.html" with context %}
+    </div>
+  {{ card_close() }}
+
+  {% if request.state.level >= 2 and not campaign.is_default %}
+  <div>{{ button("删除该 campaign", variant="danger",
+      hx_post="/campaigns/" ~ campaign.id ~ "/delete",
+      hx_confirm="删除该 campaign？其活动资料将一并删除，不可恢复。") }}</div>
+  {% endif %}
+{% endblock %}

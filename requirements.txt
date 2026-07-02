@@ -11,3 +11,4 @@ python-pptx
 openpyxl
 pytest
 httpx
+httpx2  # starlette TestClient 1.3+ 需要（否则 import 期 DeprecationWarning，filterwarnings=error 会挂）

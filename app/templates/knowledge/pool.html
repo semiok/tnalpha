@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, table_open, table_close, text_input, textarea, select_input %}
+{% block content %}
+  {{ page_header("①知识库", "全局数据池", crumbs=[("首页","/"), ("数据池", "")]) }}
+  <p class="text-sm text-slate-500 -mt-3 mb-5">
+    资料包（①上传）+ 经验包（⑤复盘沉淀）。②选题库读这里做推荐参考。
+  </p>
+
+  {{ card_open("数据池条目") }}
+    {% if topics %}
+    {{ table_open(["标题", "类型", "触网", "来源", "品牌", "时间"]) }}
+      {% for t in topics %}
+      <tr class="border-b border-slate-50">
+        <td class="py-2">{{ t.title }}</td>
+        <td>{{ chip(t.kind, "brand" if t.kind == "经验包" else "slate") }}</td>
+        <td>{{ chip("触网", "emerald") if t.web_access else chip("不触网", "amber") }}</td>
+        <td class="text-slate-500">{{ t.source }}</td>
+        <td class="text-slate-500">{{ t.brand_tag or "通用" }}</td>
+        <td class="text-xs text-slate-400">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
+      </tr>
+      {% endfor %}
+    {{ table_close() }}
+    {% else %}
+    {{ empty_state("数据池还是空的，添加一个资料包开始。") }}
+    {% endif %}
+  {{ card_close() }}
+
+  {% if request.state.level >= 2 %}
+  {{ card_open("新增资料包") }}
+    <form method="post" action="/pool" class="space-y-3">
+      {{ text_input("title", placeholder="标题", required=True, extra="w-full") }}
+      <div class="flex flex-wrap items-center gap-3 text-sm">
+        {{ select_input("kind", ["资料包", "经验包"]) }}
+        <label class="flex items-center gap-2 text-slate-600">
+          {# checkbox 语义：勾选→提交 "true"→True；不勾→不提交→路由 Form(False) 兜底为 False #}
+          <input type="checkbox" name="web_access" value="true" checked> 触网
+        </label>
+        {{ text_input("brand_tag", placeholder="品牌 tag（可空=通用）") }}
+      </div>
+      {{ textarea("content", placeholder="内容摘要 / 解析结果") }}
+      {{ button("＋ 添加到数据池", variant="primary", type="submit") }}
+    </form>
+  {{ card_close() }}
+  {% endif %}
+{% endblock %}
