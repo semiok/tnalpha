@@ -191,7 +191,7 @@ def pool_list(request: Request, session: Session = Depends(get_session)):
 @router.post("/pool")
 def create_pool_topic(request: Request,
                       title: str = Form(...), kind: str = Form("资料包"),
-                      web_access: bool = Form(True), brand_tag: str = Form(""),
+                      web_access: bool = Form(False), brand_tag: str = Form(""),
                       content: str = Form(""),
                       session: Session = Depends(get_session)):
     auth.require_level(request, 2)

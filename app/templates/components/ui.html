@@ -61,6 +61,27 @@
 </label>
 {% endmacro %}
 
+{# 独立表单输入控件（用于内联/自定义布局的 <form>，样式统一，勿在模块里手写 input 样式）#}
+{% macro text_input(name, placeholder="", value="", type="text", required=False, extra="") %}
+<input type="{{ type }}" name="{{ name }}" value="{{ value }}" placeholder="{{ placeholder }}" {{ 'required' if required else '' }}
+  class="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none {{ extra }}">
+{% endmacro %}
+
+{% macro textarea(name, placeholder="", rows=3, extra="w-full") %}
+<textarea name="{{ name }}" rows="{{ rows }}" placeholder="{{ placeholder }}"
+  class="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none {{ extra }}"></textarea>
+{% endmacro %}
+
+{% macro select_input(name, options) %}
+<select name="{{ name }}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+  {% for o in options %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
+</select>
+{% endmacro %}
+
+{% macro file_input(name, accept="", required=False) %}
+<input type="file" name="{{ name }}"{% if accept %} accept="{{ accept }}"{% endif %} {{ 'required' if required else '' }} class="text-sm">
+{% endmacro %}
+
 {# 空状态占位 #}
 {% macro empty_state(text) %}
 <div class="text-slate-400 text-sm py-6 text-center">{{ text }}</div>

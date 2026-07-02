@@ -44,10 +44,12 @@ Token 固定在 `base.html` 的 Tailwind 配置里，全站用 class 引用，**
 | `button(label, variant, ...)` | 按钮 | variant: primary/secondary/danger/ghost；hx_* 透传 |
 | `card_open(title, actions)` / `card_close()` | 白卡片容器 | — |
 | `chip(label, color)` | 小标签 | color: slate/emerald/amber/rose/brand |
-| `field(label, name, type, value)` | 表单项（label+input） | — |
+| `field(label, name, type, value)` | 表单项（label+input，竖排） | — |
+| `text_input(name, placeholder, type, required, extra)` | 独立文本/日期输入（内联表单用）| type: text/date…；extra: 附加 class 如 w-full |
+| `textarea(name, placeholder, rows)` / `select_input(name, options)` / `file_input(name, accept, required)` | 独立 textarea / 下拉 / 文件 | select 的 options=列表 |
+| `table_open(headers)` / `table_close()` | 表格 | headers=[…] |
 | `modal_open(title)` / `modal_close(footer)` | 弹框 | — |
 | `empty_state(text)` | 空列表占位 | — |
-| `table_open(headers)` / `table_close()` | 表格 | headers=[…] |
 
 新组件需求 → 加进 `ui.html` 并更新本表，**不要在模块里写一次性样式**。
 

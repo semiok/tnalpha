@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, text_input, file_input %}
 {% block content %}
   {{ page_header("①知识库", brand.name, crumbs=[("首页","/"), (brand.name, "")]) }}
 
@@ -11,7 +11,9 @@
         hx_post="/brands/" ~ brand.id ~ "/parse", hx_target="#brand-digest", hx_swap="innerHTML") }}</div>
     {% endif %}
     <div class="text-xs text-slate-400 mb-1">AI 解析结果</div>
-    <div id="brand-digest">{% include "knowledge/_digest.html" with context %}</div>
+    <div id="brand-digest">
+      {% set digest = brand.brand_digest %}{% include "knowledge/_digest.html" with context %}
+    </div>
   {{ card_close() }}
 
   {# ── 品牌资料（低时效文档） ── #}
@@ -29,7 +31,7 @@
     {% if request.state.level >= 2 %}
     <form method="post" action="/brands/{{ brand.id }}/docs" enctype="multipart/form-data"
           class="flex items-center gap-2">
-      <input type="file" name="file" required class="text-sm">
+      {{ file_input("file", required=True) }}
       {{ button("上传资料", variant="secondary", type="submit") }}
     </form>
     {% endif %}
@@ -55,12 +57,9 @@
     {% if request.state.level >= 2 %}
     <form method="post" action="/campaigns" class="mt-3 flex flex-wrap items-end gap-2">
       <input type="hidden" name="brand_id" value="{{ brand.id }}">
-      <input name="name" required placeholder="活动名称"
-             class="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
-      <input type="date" name="start_date"
-             class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-500">
-      <input type="date" name="end_date"
-             class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-500">
+      {{ text_input("name", placeholder="活动名称", required=True) }}
+      {{ text_input("start_date", type="date") }}
+      {{ text_input("end_date", type="date") }}
       {{ button("＋ 新建 campaign", variant="secondary", type="submit") }}
     </form>
     {% endif %}

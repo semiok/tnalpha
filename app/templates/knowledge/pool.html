@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, table_open, table_close %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, table_open, table_close, text_input, textarea, select_input %}
 {% block content %}
   {{ page_header("①知识库", "全局数据池", crumbs=[("首页","/"), ("数据池", "")]) }}
   <p class="text-sm text-slate-500 -mt-3 mb-5">
@@ -28,21 +28,16 @@
   {% if request.state.level >= 2 %}
   {{ card_open("新增资料包") }}
     <form method="post" action="/pool" class="space-y-3">
-      <input name="title" required placeholder="标题"
-             class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
-      <div class="flex flex-wrap gap-3 text-sm">
-        <select name="kind" class="border border-slate-200 rounded-lg px-3 py-2 text-slate-600">
-          <option value="资料包">资料包</option>
-          <option value="经验包">经验包</option>
-        </select>
+      {{ text_input("title", placeholder="标题", required=True, extra="w-full") }}
+      <div class="flex flex-wrap items-center gap-3 text-sm">
+        {{ select_input("kind", ["资料包", "经验包"]) }}
         <label class="flex items-center gap-2 text-slate-600">
+          {# checkbox 语义：勾选→提交 "true"→True；不勾→不提交→路由 Form(False) 兜底为 False #}
           <input type="checkbox" name="web_access" value="true" checked> 触网
         </label>
-        <input name="brand_tag" placeholder="品牌 tag（可空=通用）"
-               class="border border-slate-200 rounded-lg px-3 py-2 text-slate-600">
+        {{ text_input("brand_tag", placeholder="品牌 tag（可空=通用）") }}
       </div>
-      <textarea name="content" rows="3" placeholder="内容摘要 / 解析结果"
-                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none"></textarea>
+      {{ textarea("content", placeholder="内容摘要 / 解析结果") }}
       {{ button("＋ 添加到数据池", variant="primary", type="submit") }}
     </form>
   {{ card_close() }}
