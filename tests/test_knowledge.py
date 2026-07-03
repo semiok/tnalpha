@@ -173,6 +173,9 @@ def test_readonly_renders_prototype_shell(owner_client, monkeypatch):
     assert "敦煌IP" in home and "敦煌当代美术展" in home   # ①知识库那屏内容
     assert "模型配置" in home and "退出登录" in home       # 顶栏融了真实 app 入口
     assert 'action="/brands"' not in home               # 不是动态首页
+    from app import __version__
+    assert f"v{__version__}" in home                     # 版本号已注入演示壳（占位符替换）
+    assert "__APP_VERSION__" not in home                 # 占位符不残留
 
 
 def test_readonly_detail_routes_redirect_home(owner_client, monkeypatch):

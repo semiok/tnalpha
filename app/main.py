@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
+from app import __version__
 from app.core import auth, auth_routes, config, settings_routes
 from app.core.db import init_db
 from app.modules.knowledge import routes as knowledge_routes
@@ -19,7 +20,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="tnalpha", lifespan=lifespan)
+app = FastAPI(title="tnalpha", version=__version__, lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -29,6 +30,7 @@ async def require_login(request: Request, call_next):
     request.state.role = role
     request.state.level = auth.level_of(role)
     request.state.knowledge_writable = config.KNOWLEDGE_WRITABLE  # 知识库写入口显隐（暂停时静态预览）
+    request.state.version = __version__
     if request.url.path not in auth.PUBLIC_PATHS and role is None:
         return RedirectResponse("/login", status_code=303)
     return await call_next(request)

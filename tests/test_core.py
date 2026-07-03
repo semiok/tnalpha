@@ -1,11 +1,19 @@
 """core 抽象层测试：llm stub / sources stub / storage 落盘。"""
 import io
 import os
+import re
 import types
 
 import pytest
 
 from app.core import llm, sources, storage
+
+
+def test_version_semver_and_exposed():
+    from app import __version__
+    from app.main import app
+    assert re.fullmatch(r"\d+\.\d+\.\d+", __version__)   # 语义化版本
+    assert app.version == __version__                    # FastAPI 元数据同源
 
 
 def test_llm_generate_text_nonempty_and_deterministic():
