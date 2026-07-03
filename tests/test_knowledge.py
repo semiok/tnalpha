@@ -147,3 +147,36 @@ def test_anon_redirected_to_login(anon_client):
     resp = anon_client.post("/brands", data={"name": "x"}, follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"].endswith("/login")
+
+
+# ── 文档真实解析（复用 tngen 逻辑）──
+
+def _docx_bytes(text: str) -> bytes:
+    import io
+    from docx import Document
+    d = Document()
+    d.add_paragraph(text)
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def test_upload_extracts_text_and_parse_uses_it(owner_client, fresh_db):
+    from sqlmodel import Session, select
+    from app.modules.knowledge.models import Brand, BrandDoc
+    brand_id = _create_brand(owner_client)
+    content = "敦煌的色彩体系与矿物颜料工艺"
+    docx = ("brand.docx", _docx_bytes(content),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    r = owner_client.post(f"/brands/{brand_id}/docs", files={"file": docx},
+                          follow_redirects=False)
+    assert r.status_code == 303
+    # 上传时抽了文本存库
+    with Session(fresh_db) as s:
+        doc = s.exec(select(BrandDoc).where(BrandDoc.brand_id == brand_id)).first()
+        assert doc is not None and content in doc.extracted_text
+    # AI 解析读到真实文档内容 → digest 非空且带 task 标记
+    r2 = owner_client.post(f"/brands/{brand_id}/parse")
+    assert r2.status_code == 200
+    with Session(fresh_db) as s:
+        assert "brand_digest" in s.get(Brand, brand_id).brand_digest
