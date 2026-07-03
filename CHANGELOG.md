@@ -3,6 +3,16 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.0] - 2026-07-03
+
+### 新增
+- **右上角「开发/演示」模式切换**：定义者一键切换全站模式——**开发模式**(动态知识库，能新建品牌/上传/AI解析) ⇄ **演示模式**(原型六模块只读演示壳)。状态存 DB(`AppSetting`)持久保存，重启/`--reload` 不丢。
+
+### 变更
+- **默认改为演示模式**（`KNOWLEDGE_WRITABLE` 默认 `false`）：clone 下来 / 未配 env 时先看只读演示壳，与线上部署一致——协作者不再困惑"本地是动态、线上是演示壳"。要开发点右上角切一下即可。env 只决定 DB 首次建行的初值，之后以 DB（页面切换）为准。
+
+[0.2.0]: https://github.com/semiok/tnalpha/releases/tag/v0.2.0
+
 ## [0.1.0] - 2026-07-03
 
 首个里程碑：能登录、能演示六模块全貌、能配真实模型。

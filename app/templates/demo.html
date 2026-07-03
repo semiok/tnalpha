@@ -33,6 +33,10 @@
     <div><div class="font-bold text-lg leading-tight">tnalpha · 内容生产协作平台 <span class="align-middle text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 font-mono">v__APP_VERSION__</span></div>
       <div class="text-xs text-slate-400">🚧 演示框架（静态假数据，按钮可点不入库）· 右侧「模型配置」已可真用</div></div>
     <div class="ml-auto flex items-center gap-4 text-sm whitespace-nowrap">
+      <form method="post" action="/settings/knowledge-writable" style="display:inline">
+        <button type="submit" title="切换 开发/演示 模式（全站，点击即切、持久保存到本环境）"
+          style="padding:.25rem .55rem;border-radius:.375rem;border:none;cursor:pointer;font-size:.75rem;font-weight:500;background:#fef3c7;color:#b45309;">👁 演示模式 · 点击切换</button>
+      </form>
       <a href="/settings/llm" class="text-brand-600 hover:text-brand-700 font-medium">模型配置</a>
       <a href="/logout" class="text-slate-400 hover:text-slate-600">退出登录</a>
     </div>

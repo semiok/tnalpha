@@ -8,7 +8,7 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import Session
 from starlette.requests import Request
 
-from app.core import auth, config
+from app.core import auth, config, runtime
 from app.core.db import get_session
 from app.core.settings import get_llm_settings
 
@@ -20,6 +20,14 @@ _MASK = "••••••"  # api_key 打码占位；POST 收到此值/空 →
 
 def _masked(key: str) -> str:
     return f"{_MASK}{key[-4:]}" if key else ""
+
+
+@router.post("/settings/knowledge-writable")
+def toggle_knowledge_writable(request: Request):
+    """右上角「开发/演示」按钮：切换全站模式并持久到 DB，切完回首页看新模式。"""
+    auth.require_level(request, 2)
+    runtime.set_knowledge_writable(not runtime.knowledge_writable())
+    return RedirectResponse("/", status_code=303)
 
 
 @router.get("/settings/llm")

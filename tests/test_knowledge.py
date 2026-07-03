@@ -163,9 +163,9 @@ def _docx_bytes(text: str) -> bytes:
 
 # ── 只读演示模式（KNOWLEDGE_WRITABLE=false）：整个原型全貌当演示壳 ──
 
-def test_readonly_renders_prototype_shell(owner_client, monkeypatch):
-    from app.core import config
-    monkeypatch.setattr(config, "KNOWLEDGE_WRITABLE", False)
+def test_readonly_renders_prototype_shell(owner_client):
+    from app.core import runtime
+    runtime.set_knowledge_writable(False)               # 切演示模式
     home = owner_client.get("/").text
     # 六模块 tab 导航齐全
     for tab in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈", "⑥权限"):
@@ -178,10 +178,10 @@ def test_readonly_renders_prototype_shell(owner_client, monkeypatch):
     assert "__APP_VERSION__" not in home                 # 占位符不残留
 
 
-def test_readonly_detail_routes_redirect_home(owner_client, monkeypatch):
-    from app.core import config
+def test_readonly_detail_routes_redirect_home(owner_client):
+    from app.core import runtime
     brand_id = _create_brand(owner_client)             # 后端 CRUD 代码保留，仍可建
-    monkeypatch.setattr(config, "KNOWLEDGE_WRITABLE", False)
+    runtime.set_knowledge_writable(False)              # 切演示模式
     r = owner_client.get(f"/brands/{brand_id}", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/"
     assert owner_client.get("/pool", follow_redirects=False).status_code == 303
@@ -189,9 +189,31 @@ def test_readonly_detail_routes_redirect_home(owner_client, monkeypatch):
 
 
 def test_writable_default_shows_dynamic_home(owner_client):
-    # 默认可写：GET / 是动态首页（有建品牌表单），不是静态框架
+    # 开发模式（测试基线）：GET / 是动态首页（有建品牌表单），不是演示壳
     home = owner_client.get("/").text
     assert "新建品牌" in home and "敦煌IP" not in home
+
+
+# ── 右上角「开发/演示」模式切换（DB 持久）──
+
+def test_toggle_flips_mode_and_persists(owner_client):
+    from app.core import runtime
+    runtime.set_knowledge_writable(False)                     # 起始：演示模式
+    r = owner_client.post("/settings/knowledge-writable", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert runtime.knowledge_writable() is True               # 切到开发模式并持久
+    assert "新建品牌" in owner_client.get("/").text            # 动态首页
+    owner_client.post("/settings/knowledge-writable")         # 再点 → 切回演示
+    assert runtime.knowledge_writable() is False
+    assert "②选题库" in owner_client.get("/").text            # 演示壳
+
+
+def test_toggle_requires_owner(editor_client):
+    assert editor_client.post("/settings/knowledge-writable").status_code == 403
+
+
+def test_toggle_button_shown_to_owner(owner_client):
+    assert "点击切换" in owner_client.get("/").text            # 顶栏切换按钮（开发模式 base.html）
 
 
 def test_upload_extracts_text_and_parse_uses_it(owner_client, fresh_db):
