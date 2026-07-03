@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from sqlmodel import Session, select
 
+from app import __version__
 from app.core import auth, config, docparse, llm, storage
 from app.core.db import get_session
 from app.modules.knowledge.models import (
@@ -37,7 +38,8 @@ def home(request: Request, session: Session = Depends(get_session)):
     # 只读演示：整个原型全貌当演示壳（六模块 tab + 各屏静态假数据，纯静态、不读 DB、不经 Jinja）。
     # 顶栏融了真实 app 的「模型配置」+「退出登录」。后端 CRUD 代码保留，翻 KNOWLEDGE_WRITABLE 即恢复动态。
     if not config.KNOWLEDGE_WRITABLE:
-        return HTMLResponse(_DEMO_HTML.read_text(encoding="utf-8"))
+        html = _DEMO_HTML.read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
+        return HTMLResponse(html)
     brands = session.exec(select(Brand).order_by(Brand.id)).all()
     return templates.TemplateResponse(request, "knowledge/home.html", {"brands": brands})
 
