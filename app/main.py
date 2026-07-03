@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
 from app import __version__
-from app.core import auth, auth_routes, config, settings_routes
+from app.core import auth, auth_routes, runtime, settings_routes
 from app.core.db import init_db
 from app.modules.knowledge import routes as knowledge_routes
 
@@ -29,7 +29,7 @@ async def require_login(request: Request, call_next):
     role = auth.current_role(request)
     request.state.role = role
     request.state.level = auth.level_of(role)
-    request.state.knowledge_writable = config.KNOWLEDGE_WRITABLE  # 知识库写入口显隐（暂停时静态预览）
+    request.state.knowledge_writable = runtime.knowledge_writable()  # 开发/演示模式（DB 持久，右上角可切）
     request.state.version = __version__
     if request.url.path not in auth.PUBLIC_PATHS and role is None:
         return RedirectResponse("/login", status_code=303)

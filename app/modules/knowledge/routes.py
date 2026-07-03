@@ -13,7 +13,7 @@ from starlette.requests import Request
 from sqlmodel import Session, select
 
 from app import __version__
-from app.core import auth, config, docparse, llm, storage
+from app.core import auth, docparse, llm, runtime, storage
 from app.core.db import get_session
 from app.modules.knowledge.models import (
     Brand, BrandDoc, Campaign, CampaignDoc, PoolTopic,
@@ -37,7 +37,7 @@ def _parse_date(value: str) -> date | None:
 def home(request: Request, session: Session = Depends(get_session)):
     # 只读演示：整个原型全貌当演示壳（六模块 tab + 各屏静态假数据，纯静态、不读 DB、不经 Jinja）。
     # 顶栏融了真实 app 的「模型配置」+「退出登录」。后端 CRUD 代码保留，翻 KNOWLEDGE_WRITABLE 即恢复动态。
-    if not config.KNOWLEDGE_WRITABLE:
+    if not runtime.knowledge_writable():
         html = _DEMO_HTML.read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
         return HTMLResponse(html)
     brands = session.exec(select(Brand).order_by(Brand.id)).all()
@@ -60,7 +60,7 @@ def create_brand(request: Request, name: str = Form(...),
 
 @router.get("/brands/{brand_id}")
 def brand_detail(brand_id: int, request: Request, session: Session = Depends(get_session)):
-    if not config.KNOWLEDGE_WRITABLE:                     # 只读：二级页并入静态框架单页
+    if not runtime.knowledge_writable():                     # 只读：二级页并入静态框架单页
         return RedirectResponse("/", status_code=303)
     brand = session.get(Brand, brand_id)
     if not brand:
@@ -132,7 +132,7 @@ def create_campaign(request: Request,
 @router.get("/campaigns/{campaign_id}")
 def campaign_detail(campaign_id: int, request: Request,
                     session: Session = Depends(get_session)):
-    if not config.KNOWLEDGE_WRITABLE:                     # 只读：并入静态框架单页
+    if not runtime.knowledge_writable():                     # 只读：并入静态框架单页
         return RedirectResponse("/", status_code=303)
     campaign = session.get(Campaign, campaign_id)
     if not campaign:
@@ -207,7 +207,7 @@ def delete_campaign(campaign_id: int, request: Request,
 
 @router.get("/pool")
 def pool_list(request: Request, session: Session = Depends(get_session)):
-    if not config.KNOWLEDGE_WRITABLE:                     # 只读：并入静态框架单页
+    if not runtime.knowledge_writable():                     # 只读：并入静态框架单页
         return RedirectResponse("/", status_code=303)
     topics = session.exec(select(PoolTopic).order_by(PoolTopic.id.desc())).all()
     return templates.TemplateResponse(request, "knowledge/pool.html", {"topics": topics})

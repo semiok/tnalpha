@@ -20,13 +20,19 @@
     <a href="/" class="w-8 h-8 rounded-lg bg-brand-600 text-white grid place-items-center font-bold">t</a>
     <div class="font-bold">tnalpha <span class="text-slate-400 font-normal text-sm">· 内容生产协作平台</span></div>
     {% if request.state.version is defined %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 font-mono">v{{ request.state.version }}</span>{% endif %}
-    {% if request.state.level is defined and request.state.level >= 2 %}
-    <a href="/settings/llm" class="ml-auto text-xs text-slate-500 hover:text-brand-600">模型配置</a>
-    {% endif %}
-    <span class="{{ '' if request.state.level is defined and request.state.level >= 2 else 'ml-auto' }} text-xs text-slate-400">
-      {{ {"owner":"定义者","editor":"选题者","publisher":"发布者"}.get(request.state.role, "") if request.state.role else "" }}
-    </span>
-    {% if request.state.role %}<a href="/logout" class="text-xs text-slate-400 hover:text-slate-600">退出登录</a>{% endif %}
+    <div class="ml-auto flex items-center gap-3 text-xs">
+      {% if request.state.level is defined and request.state.level >= 2 %}
+      <form method="post" action="/settings/knowledge-writable" class="inline">
+        <button type="submit" title="切换 开发/演示 模式（全站，点击即切、持久保存到本环境）"
+          class="px-2 py-1 rounded font-medium {{ 'bg-emerald-100 text-emerald-700' if request.state.knowledge_writable else 'bg-amber-100 text-amber-700' }} hover:opacity-80">
+          {{ '🔓 开发模式' if request.state.knowledge_writable else '👁 演示模式' }} · 点击切换
+        </button>
+      </form>
+      <a href="/settings/llm" class="text-slate-500 hover:text-brand-600">模型配置</a>
+      {% endif %}
+      <span class="text-slate-400">{{ {"owner":"定义者","editor":"选题者","publisher":"发布者"}.get(request.state.role, "") if request.state.role else "" }}</span>
+      {% if request.state.role %}<a href="/logout" class="text-slate-400 hover:text-slate-600">退出登录</a>{% endif %}
+    </div>
   </header>
 
   <main class="max-w-5xl mx-auto p-6">{% block content %}{% endblock %}</main>

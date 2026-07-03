@@ -10,9 +10,13 @@ SECRET_KEY = os.environ.get("TNALPHA_SECRET_KEY", "tnalpha-dev-secret-change-me"
 # 文件上传根目录
 DATA_DIR = os.environ.get("TNALPHA_DATA_DIR", "data")
 
-# 知识库写功能开关：false=前端隐藏所有写入口、页面退化为静态只读预览（功能开发中）。
-# 后端路由代码保留不动，翻开此开关即恢复全功能。部署演示时设 TNALPHA_KNOWLEDGE_WRITABLE=false。
-KNOWLEDGE_WRITABLE = os.environ.get("TNALPHA_KNOWLEDGE_WRITABLE", "true").strip().lower() not in ("false", "0", "no")
+# 知识库/全站模式开关的【初始默认值】。运行时真实状态存 DB（AppSetting，见 core/settings.py），
+# 定义者在页面右上角「开发/演示」按钮点击切换、持久保存（重启/reload 不丢）。
+#   True  = 开发模式：GET / 是动态知识库（能新建品牌/上传/AI解析）
+#   False = 演示模式：GET / 是原型六模块只读演示壳
+# 默认 False：clone 下来/未配 env 时先看演示壳（与线上一致，协作者不困惑），要开发点右上角切换即可。
+# env TNALPHA_KNOWLEDGE_WRITABLE 只决定「DB 首次建行时」的初值；之后以 DB 为准。
+KNOWLEDGE_WRITABLE = os.environ.get("TNALPHA_KNOWLEDGE_WRITABLE", "false").strip().lower() not in ("false", "0", "no")
 
 # ── LLM provider（DB 设置为主，下面是建默认行时的初值 / env 兜底）──
 # 文本 provider：stub | openai(兼容API) | claude-cli(订阅授权)；图像：stub | codex(订阅授权)
