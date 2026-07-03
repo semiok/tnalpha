@@ -4,9 +4,10 @@
 写操作一律 `auth.require_level(request, 2)` 服务端守卫，模板再按 level 显隐。
 """
 from datetime import date
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from sqlmodel import Session, select
@@ -19,6 +20,7 @@ from app.modules.knowledge.models import (
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+_DEMO_HTML = Path("app/templates/demo.html")  # 只读演示壳（原型全貌，纯静态）
 
 _ANALYZE_CHARS = 12000  # AI 解析喂给 LLM 的最大字符数（防超长）
 
@@ -32,10 +34,10 @@ def _parse_date(value: str) -> date | None:
 
 @router.get("/")
 def home(request: Request, session: Session = Depends(get_session)):
-    # 只读演示：知识库退化为「原型左右结构静态框架」单页（敦煌IP 假数据，不读 DB）。
-    # 后端 CRUD 代码保留，翻 KNOWLEDGE_WRITABLE 开关即恢复动态首页。
+    # 只读演示：整个原型全貌当演示壳（六模块 tab + 各屏静态假数据，纯静态、不读 DB、不经 Jinja）。
+    # 顶栏融了真实 app 的「模型配置」+「退出登录」。后端 CRUD 代码保留，翻 KNOWLEDGE_WRITABLE 即恢复动态。
     if not config.KNOWLEDGE_WRITABLE:
-        return templates.TemplateResponse(request, "knowledge/static_home.html", {})
+        return HTMLResponse(_DEMO_HTML.read_text(encoding="utf-8"))
     brands = session.exec(select(Brand).order_by(Brand.id)).all()
     return templates.TemplateResponse(request, "knowledge/home.html", {"brands": brands})
 

@@ -161,16 +161,18 @@ def _docx_bytes(text: str) -> bytes:
     return buf.getvalue()
 
 
-# ── 只读演示模式（KNOWLEDGE_WRITABLE=false）：知识库退化为原型静态框架单页 ──
+# ── 只读演示模式（KNOWLEDGE_WRITABLE=false）：整个原型全貌当演示壳 ──
 
-def test_readonly_renders_static_framework(owner_client, monkeypatch):
+def test_readonly_renders_prototype_shell(owner_client, monkeypatch):
     from app.core import config
     monkeypatch.setattr(config, "KNOWLEDGE_WRITABLE", False)
     home = owner_client.get("/").text
-    # 原型的敦煌IP 左右结构框架
-    assert "敦煌IP" in home and "敦煌当代美术展" in home and "数据池" in home
-    assert "静态框架预览" in home                       # 只读演示横幅
-    assert 'action="/brands"' not in home              # 不是动态首页（无建品牌表单）
+    # 六模块 tab 导航齐全
+    for tab in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈", "⑥权限"):
+        assert tab in home
+    assert "敦煌IP" in home and "敦煌当代美术展" in home   # ①知识库那屏内容
+    assert "模型配置" in home and "退出登录" in home       # 顶栏融了真实 app 入口
+    assert 'action="/brands"' not in home               # 不是动态首页
 
 
 def test_readonly_detail_routes_redirect_home(owner_client, monkeypatch):
