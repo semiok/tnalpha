@@ -10,6 +10,7 @@ engine = create_engine(config.DATABASE_URL, echo=False, connect_args=_connect_ar
 
 def init_db() -> None:
     """建表（开发用；生产用 Alembic 迁移）。导入所有模块的 models 后调用。"""
+    import app.core.settings  # noqa: F401  注册 LLMSetting 表
     import app.modules.knowledge.models  # noqa: F401  注册表
     SQLModel.metadata.create_all(engine)
 

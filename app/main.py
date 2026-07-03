@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
-from app.core import auth, auth_routes
+from app.core import auth, auth_routes, config, settings_routes
 from app.core.db import init_db
 from app.modules.knowledge import routes as knowledge_routes
 
@@ -28,12 +28,14 @@ async def require_login(request: Request, call_next):
     role = auth.current_role(request)
     request.state.role = role
     request.state.level = auth.level_of(role)
+    request.state.knowledge_writable = config.KNOWLEDGE_WRITABLE  # 知识库写入口显隐（暂停时静态预览）
     if request.url.path not in auth.PUBLIC_PATHS and role is None:
         return RedirectResponse("/login", status_code=303)
     return await call_next(request)
 
 
 app.include_router(auth_routes.router)
+app.include_router(settings_routes.router)
 app.include_router(knowledge_routes.router)
 
 

@@ -1,7 +1,9 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, table_open, table_close, text_input, textarea, select_input %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, table_open, table_close, text_input, textarea, select_input, notice %}
 {% block content %}
+  {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
   {{ page_header("①知识库", "全局数据池", crumbs=[("首页","/"), ("数据池", "")]) }}
+  {% if not request.state.knowledge_writable %}{{ notice("🚧 知识库功能开发中，当前为只读预览。") }}{% endif %}
   <p class="text-sm text-slate-500 -mt-3 mb-5">
     资料包（①上传）+ 经验包（⑤复盘沉淀）。②选题库读这里做推荐参考。
   </p>
@@ -25,7 +27,7 @@
     {% endif %}
   {{ card_close() }}
 
-  {% if request.state.level >= 2 %}
+  {% if can_edit %}
   {{ card_open("新增资料包") }}
     <form method="post" action="/pool" class="space-y-3">
       {{ text_input("title", placeholder="标题", required=True, extra="w-full") }}

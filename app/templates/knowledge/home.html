@@ -1,7 +1,9 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, empty_state %}
+{% from "components/ui.html" import page_header, card_open, card_close, empty_state, notice %}
 {% block content %}
+  {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
   {{ page_header("①知识库", "品牌 / Campaign") }}
+  {% if not request.state.knowledge_writable %}{{ notice("🚧 知识库功能开发中，当前为只读预览；模型配置已可用（右上角「模型配置」）。") }}{% endif %}
   <div class="flex items-center justify-between -mt-3 mb-5">
     <p class="text-sm text-slate-500">一个品牌 = 一套知识库。点进去管理资料和活动。</p>
     <a href="/pool" class="text-sm text-brand-600 hover:text-brand-700">全局数据池 →</a>
@@ -15,7 +17,7 @@
     </a>
     {% endfor %}
 
-    {% if request.state.level >= 2 %}
+    {% if can_edit %}
     <form method="post" action="/brands" class="bg-white rounded-xl border-2 border-dashed border-slate-300 p-5 grid place-items-center">
       <div class="w-full text-center">
         <input name="name" required placeholder="新品牌名称" class="w-full text-sm border border-slate-200 rounded-lg px-2 py-1.5 mb-2">
@@ -25,5 +27,5 @@
     {% endif %}
   </div>
 
-  {% if not brands and request.state.level < 2 %}{{ empty_state("还没有品牌，等定义者创建。") }}{% endif %}
+  {% if not brands and not can_edit %}{{ empty_state("还没有品牌。") }}{% endif %}
 {% endblock %}

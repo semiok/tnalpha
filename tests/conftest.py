@@ -9,8 +9,10 @@ from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
 # 导入 models 以注册到 SQLModel.metadata
+import app.core.settings  # noqa: F401  注册 LLMSetting
 import app.modules.knowledge.models  # noqa: F401
 from app.core import auth, config
+from app.core import db as _dbmod
 from app.core.db import get_session
 from app.main import app
 
@@ -25,6 +27,8 @@ def fresh_db(tmp_path, monkeypatch):
         poolclass=StaticPool,
     )
     SQLModel.metadata.create_all(engine)
+    # llm 路由每次调用读 db.engine（动态引用）→ 指到测试库，否则读到真实库
+    monkeypatch.setattr(_dbmod, "engine", engine)
 
     def _override():
         with Session(engine) as session:
