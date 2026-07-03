@@ -43,6 +43,23 @@ def test_sources_unknown_raises():
         sources.search("nope", "x")
 
 
+def test_docparse_unsupported_returns_empty(tmp_path):
+    from app.core import docparse
+    p = tmp_path / "note.txt"
+    p.write_text("hi", encoding="utf-8")
+    assert docparse.extract_text(str(p)) == ""
+
+
+def test_docparse_docx_extracts_text(tmp_path):
+    from app.core import docparse
+    from docx import Document
+    d = Document()
+    d.add_paragraph("敦煌壁画的矿物颜料工艺")
+    fp = tmp_path / "brand.docx"
+    d.save(str(fp))
+    assert "敦煌壁画的矿物颜料工艺" in docparse.extract_text(str(fp))
+
+
 def test_storage_save_upload_writes_file(tmp_path, monkeypatch):
     from app.core import config
     monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))

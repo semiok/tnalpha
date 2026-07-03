@@ -29,6 +29,7 @@ class BrandDoc(SQLModel, table=True):
     brand_id: int = Field(foreign_key="brand.id", index=True)
     filename: str
     file_path: str
+    extracted_text: str = ""      # 上传时抽出的正文（core/docparse），AI 解析读它
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -51,6 +52,7 @@ class CampaignDoc(SQLModel, table=True):
     filename: str
     file_path: str
     note: str = ""                # 备注标识，如"开幕/中期/闭幕"
+    extracted_text: str = ""      # 上传时抽出的正文（core/docparse），AI 解析读它
     created_at: datetime = Field(default_factory=_now)
 
 

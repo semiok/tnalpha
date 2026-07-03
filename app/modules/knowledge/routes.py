@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from sqlmodel import Session, select
 
-from app.core import auth, llm, storage
+from app.core import auth, docparse, llm, storage
 from app.core.db import get_session
 from app.modules.knowledge.models import (
     Brand, BrandDoc, Campaign, CampaignDoc, PoolTopic,
@@ -19,6 +19,8 @@ from app.modules.knowledge.models import (
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+_ANALYZE_CHARS = 12000  # AI 解析喂给 LLM 的最大字符数（防超长）
 
 
 def _parse_date(value: str) -> date | None:
@@ -72,7 +74,8 @@ def upload_brand_doc(brand_id: int, request: Request,
     if not brand:
         raise HTTPException(404, "品牌不存在")
     path = storage.save_upload(file, subdir=f"brand/{brand_id}")
-    session.add(BrandDoc(brand_id=brand_id, filename=file.filename, file_path=path))
+    session.add(BrandDoc(brand_id=brand_id, filename=file.filename, file_path=path,
+                         extracted_text=docparse.extract_text(path)))
     session.commit()
     return RedirectResponse(f"/brands/{brand_id}", status_code=303)
 
@@ -84,7 +87,12 @@ def parse_brand(brand_id: int, request: Request, session: Session = Depends(get_
     brand = session.get(Brand, brand_id)
     if not brand:
         raise HTTPException(404, "品牌不存在")
-    brand.brand_digest = llm.generate_text(brand.brand_prompt, task="brand_digest")
+    docs = session.exec(select(BrandDoc).where(BrandDoc.brand_id == brand_id)).all()
+    material = "\n\n".join(
+        [brand.brand_prompt] + [f"【{d.filename}】\n{d.extracted_text}"
+                                for d in docs if d.extracted_text]).strip()
+    brand.brand_digest = llm.generate_text(material[:_ANALYZE_CHARS] or brand.name,
+                                           task="brand_digest")
     session.add(brand)
     session.commit()
     return templates.TemplateResponse(
@@ -135,7 +143,8 @@ def upload_campaign_doc(campaign_id: int, request: Request,
         raise HTTPException(404, "活动不存在")
     path = storage.save_upload(file, subdir=f"campaign/{campaign_id}")
     session.add(CampaignDoc(campaign_id=campaign_id, filename=file.filename,
-                            file_path=path, note=note))
+                            file_path=path, note=note,
+                            extracted_text=docparse.extract_text(path)))
     session.commit()
     return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
 
@@ -150,8 +159,10 @@ def parse_campaign(campaign_id: int, request: Request,
         raise HTTPException(404, "活动不存在")
     docs = session.exec(
         select(CampaignDoc).where(CampaignDoc.campaign_id == campaign_id)).all()
-    material = f"{campaign.name}\n" + "\n".join(f"- {d.filename}（{d.note}）" for d in docs)
-    campaign.campaign_digest = llm.generate_text(material, task="campaign_digest")
+    material = f"活动：{campaign.name}\n\n" + "\n\n".join(
+        f"【{d.filename}｜{d.note}】\n{d.extracted_text}" for d in docs)
+    campaign.campaign_digest = llm.generate_text(material[:_ANALYZE_CHARS],
+                                                 task="campaign_digest")
     session.add(campaign)
     session.commit()
     return templates.TemplateResponse(
