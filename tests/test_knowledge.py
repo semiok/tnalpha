@@ -161,24 +161,32 @@ def _docx_bytes(text: str) -> bytes:
     return buf.getvalue()
 
 
-# ── 只读预览模式（KNOWLEDGE_WRITABLE=false）：隐藏写入口，但后端代码保留 ──
+# ── 只读演示模式（KNOWLEDGE_WRITABLE=false）：知识库退化为原型静态框架单页 ──
 
-def test_readonly_hides_write_ui_and_shows_banner(owner_client, monkeypatch):
+def test_readonly_renders_static_framework(owner_client, monkeypatch):
     from app.core import config
-    brand_id = _create_brand(owner_client)            # 后端不拦，仍可建（代码保留、可逆）
     monkeypatch.setattr(config, "KNOWLEDGE_WRITABLE", False)
     home = owner_client.get("/").text
-    assert "新建品牌" not in home                       # 写入口隐藏
-    assert "只读预览" in home                           # 顶部开发中横幅
-    brand = owner_client.get(f"/brands/{brand_id}").text
-    assert "上传资料" not in brand and "AI 解析品牌定义" not in brand and "新建 campaign" not in brand
-    assert "新增资料包" not in owner_client.get("/pool").text
+    # 原型的敦煌IP 左右结构框架
+    assert "敦煌IP" in home and "敦煌当代美术展" in home and "数据池" in home
+    assert "静态框架预览" in home                       # 只读演示横幅
+    assert 'action="/brands"' not in home              # 不是动态首页（无建品牌表单）
 
 
-def test_writable_default_shows_write_ui(owner_client):
-    # 默认可写：定义者能看到写入口，且无开发中横幅
+def test_readonly_detail_routes_redirect_home(owner_client, monkeypatch):
+    from app.core import config
+    brand_id = _create_brand(owner_client)             # 后端 CRUD 代码保留，仍可建
+    monkeypatch.setattr(config, "KNOWLEDGE_WRITABLE", False)
+    r = owner_client.get(f"/brands/{brand_id}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert owner_client.get("/pool", follow_redirects=False).status_code == 303
+    assert owner_client.get(f"/campaigns/1", follow_redirects=False).status_code == 303
+
+
+def test_writable_default_shows_dynamic_home(owner_client):
+    # 默认可写：GET / 是动态首页（有建品牌表单），不是静态框架
     home = owner_client.get("/").text
-    assert "新建品牌" in home and "只读预览" not in home
+    assert "新建品牌" in home and "敦煌IP" not in home
 
 
 def test_upload_extracts_text_and_parse_uses_it(owner_client, fresh_db):
