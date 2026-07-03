@@ -1,2 +1,2 @@
 """tnalpha 应用包。版本号单一权威来源（见 CHANGELOG.md）。"""
-__version__ = "0.2.0"
+__version__ = "0.3.0"

@@ -3,6 +3,16 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.3.0] - 2026-07-03
+
+### 新增
+- **文本/图像模型 API 独立配置**（MET-16，@lindong）：模型配置页把文本与图像模型的 Base URL / Model / API Key 分开保存、分别打码、留空不覆盖、互不影响。新增 **MiniMax 图像 provider**（`image-01`，走 `core/llm` 抽象）+ 文本 `minimax-m3`（OpenAI 兼容）；选 MiniMax 自动填预设。
+
+### 修复
+- **补齐 `llmsetting.image_*` 三列的 Alembic 迁移**（带 `server_default`，兼容已有数据的库），移除启动时 `ALTER TABLE` 补列的 hack——schema 回归 Alembic 版本管理，消除迁移历史与模型的漂移。
+
+[0.3.0]: https://github.com/semiok/tnalpha/releases/tag/v0.3.0
+
 ## [0.2.0] - 2026-07-03
 
 ### 新增
