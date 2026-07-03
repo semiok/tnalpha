@@ -2,7 +2,7 @@
 
 对外签名不变（generate_text/generate_image），调用方无需改动。
 provider 由定义者在「模型配置」页设置（存 DB），router 每次读 DB 选：
-  文本 stub | openai | claude-cli ；图像 stub | codex 。
+  文本 stub | openai | minimax-m3 | claude-cli ；图像 stub | codex | minimax-m3 。
 任何 provider 失败 / 未配置 → 回退 stub，保证端到端不崩。
 
     from app.core import llm
@@ -12,7 +12,7 @@ provider 由定义者在「模型配置」页设置（存 DB），router 每次�
 from sqlmodel import Session
 
 from app.core import config, db
-from app.core.llm import claude_cli, codex_image, openai_compat, stub
+from app.core.llm import claude_cli, codex_image, minimax_image, openai_compat, stub
 
 
 def _settings() -> dict:
@@ -24,14 +24,18 @@ def _settings() -> dict:
             return {
                 "text_provider": st.text_provider, "image_provider": st.image_provider,
                 "openai_base_url": st.openai_base_url, "openai_api_key": st.openai_api_key,
-                "openai_model": st.openai_model, "claude_model": st.claude_model,
+                "openai_model": st.openai_model, "image_base_url": st.image_base_url,
+                "image_api_key": st.image_api_key, "image_model": st.image_model,
+                "claude_model": st.claude_model,
             }
     except Exception as e:
         print(f"[llm] 读 DB 设置失败，回退 config 默认：{e}")
         return {
             "text_provider": config.TEXT_PROVIDER, "image_provider": config.IMAGE_PROVIDER,
             "openai_base_url": config.OPENAI_BASE_URL, "openai_api_key": config.OPENAI_API_KEY,
-            "openai_model": config.OPENAI_MODEL, "claude_model": config.CLAUDE_MODEL,
+            "openai_model": config.OPENAI_MODEL, "image_base_url": config.IMAGE_BASE_URL,
+            "image_api_key": config.IMAGE_API_KEY, "image_model": config.IMAGE_PROVIDER_MODEL,
+            "claude_model": config.CLAUDE_MODEL,
         }
 
 
@@ -39,7 +43,7 @@ def generate_text(prompt: str, task: str = "default") -> str:
     st = _settings()
     p = st["text_provider"]
     try:
-        if p == "openai":
+        if p in ("openai", "minimax-m3"):
             return openai_compat.generate_text(
                 prompt, st["openai_base_url"], st["openai_api_key"],
                 st["openai_model"], timeout=config.LLM_TIMEOUT)
@@ -56,6 +60,10 @@ def generate_image(prompt: str) -> str:
     try:
         if p == "codex":
             return codex_image.generate_image(prompt)
+        if p == "minimax-m3":
+            return minimax_image.generate_image(
+                prompt, st["image_base_url"], st["image_api_key"],
+                st["image_model"], timeout=config.IMAGE_TIMEOUT)
     except Exception as e:
         print(f"[llm] 图像 provider '{p}' 失败，回退 stub：{e}")
     return stub.generate_image(prompt)

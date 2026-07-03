@@ -19,13 +19,18 @@ DATA_DIR = os.environ.get("TNALPHA_DATA_DIR", "data")
 KNOWLEDGE_WRITABLE = os.environ.get("TNALPHA_KNOWLEDGE_WRITABLE", "false").strip().lower() not in ("false", "0", "no")
 
 # ── LLM provider（DB 设置为主，下面是建默认行时的初值 / env 兜底）──
-# 文本 provider：stub | openai(兼容API) | claude-cli(订阅授权)；图像：stub | codex(订阅授权)
+# 文本 provider：stub | openai(兼容API) | minimax-m3 | claude-cli(订阅授权)
+# 图像 provider：stub | codex(订阅授权) | minimax-m3
 TEXT_PROVIDER = os.environ.get("TNALPHA_TEXT_PROVIDER", "stub")
 IMAGE_PROVIDER = os.environ.get("TNALPHA_IMAGE_PROVIDER", "stub")
 # openai 兼容（OpenAI/DeepSeek/Moonshot/MiniMax/Ollama…）
 OPENAI_BASE_URL = os.environ.get("TNALPHA_OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = os.environ.get("TNALPHA_OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("TNALPHA_OPENAI_MODEL", "gpt-4o-mini")
+# 图像 API 单独配置，避免图像 provider 覆盖文本模型的 key/base/model。
+IMAGE_BASE_URL = os.environ.get("TNALPHA_IMAGE_BASE_URL", "https://api.minimax.chat/v1")
+IMAGE_API_KEY = os.environ.get("TNALPHA_IMAGE_API_KEY", "")
+IMAGE_PROVIDER_MODEL = os.environ.get("TNALPHA_IMAGE_PROVIDER_MODEL", "image-01")
 # claude-cli（本机 claude CLI 订阅授权）
 CLAUDE_MODEL = os.environ.get("TNALPHA_CLAUDE_MODEL", "sonnet")
 LLM_TIMEOUT = int(os.environ.get("TNALPHA_LLM_TIMEOUT", "180"))

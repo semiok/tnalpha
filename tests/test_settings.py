@@ -14,9 +14,17 @@ from app.core import llm
 # 路由分发用的假设置（绕过 DB）
 _OPENAI = {"text_provider": "openai", "image_provider": "stub",
            "openai_base_url": "https://x/v1", "openai_api_key": "sk", "openai_model": "m",
+           "image_base_url": "https://img/v1", "image_api_key": "img-sk", "image_model": "image-01",
            "claude_model": "sonnet"}
+_MINIMAX = {
+    **_OPENAI,
+    "text_provider": "minimax-m3",
+    "openai_base_url": "https://api.minimax.chat/v1",
+    "openai_model": "MiniMax-M3",
+}
 _CLAUDE = {**_OPENAI, "text_provider": "claude-cli", "claude_model": "opus"}
 _CODEX = {**_OPENAI, "text_provider": "stub", "image_provider": "codex"}
+_MINIMAX_IMAGE = {**_MINIMAX, "text_provider": "stub", "image_provider": "minimax-m3"}
 
 
 # ── openai 兼容 provider 本体 ──
@@ -66,6 +74,23 @@ def test_router_dispatches_to_openai(monkeypatch):
     assert seen == {"base_url": "https://x/v1", "api_key": "sk", "model": "m"}
 
 
+def test_router_dispatches_minimax_m3_as_openai_compatible(monkeypatch):
+    monkeypatch.setattr(llm, "_settings", lambda: _MINIMAX)
+    seen = {}
+
+    def fake(prompt, base_url, api_key, model, timeout=60):
+        seen.update(base_url=base_url, api_key=api_key, model=model)
+        return "MINIMAX结果"
+
+    monkeypatch.setattr(llm.openai_compat, "generate_text", fake)
+    assert llm.generate_text("hi") == "MINIMAX结果"
+    assert seen == {
+        "base_url": "https://api.minimax.chat/v1",
+        "api_key": "sk",
+        "model": "MiniMax-M3",
+    }
+
+
 def test_router_dispatches_to_claude_cli_with_model(monkeypatch):
     monkeypatch.setattr(llm, "_settings", lambda: _CLAUDE)
     seen = {}
@@ -101,6 +126,30 @@ def test_router_image_falls_back_to_stub_on_error(monkeypatch):
     assert out.endswith(".png") and "placeholder" in out
 
 
+def test_router_dispatches_minimax_image(monkeypatch):
+    monkeypatch.setattr(llm, "_settings", lambda: _MINIMAX_IMAGE)
+    seen = {}
+
+    def fake(prompt, base_url, api_key, model="image-01", timeout=60):
+        seen.update(base_url=base_url, api_key=api_key, model=model)
+        return "https://img.example/out.jpg"
+
+    monkeypatch.setattr(llm.minimax_image, "generate_image", fake)
+    assert llm.generate_image("敦煌飞天") == "https://img.example/out.jpg"
+    assert seen == {"base_url": "https://img/v1", "api_key": "img-sk", "model": "image-01"}
+
+
+def test_router_minimax_image_falls_back_to_stub_on_error(monkeypatch):
+    monkeypatch.setattr(llm, "_settings", lambda: _MINIMAX_IMAGE)
+
+    def boom(*a, **k):
+        raise RuntimeError("MiniMax 图片接口失败")
+
+    monkeypatch.setattr(llm.minimax_image, "generate_image", boom)
+    out = llm.generate_image("敦煌飞天")
+    assert out.endswith(".png") and "placeholder" in out
+
+
 def test_router_unconfigured_uses_stub(monkeypatch):
     monkeypatch.setattr(llm, "_settings", lambda: {**_OPENAI, "text_provider": "stub"})
     assert "[stub:default]" in llm.generate_text("hi")
@@ -116,12 +165,14 @@ def test_settings_read_from_db(fresh_db):
         st.text_provider = "openai"
         st.openai_api_key = "sk-live"
         st.openai_model = "gpt-x"
+        st.image_api_key = "img-live"
         s.add(st)
         s.commit()
     got = llm._settings()                                     # 路由动态读 db.engine
     assert got["text_provider"] == "openai"
     assert got["openai_api_key"] == "sk-live"
     assert got["openai_model"] == "gpt-x"
+    assert got["image_api_key"] == "img-live"
 
 
 # ── 配置页：权限 ──
@@ -131,7 +182,10 @@ def test_page_owner_ok(owner_client):
     assert r.status_code == 200
     assert "模型配置" in r.text
     # 三种模式齐全
-    assert "claude-cli" in r.text and "codex" in r.text and "其他 API" in r.text
+    assert "claude-cli" in r.text and "codex" in r.text
+    assert "minimax-m3" in r.text
+    assert "https://api.minimax.chat/v1" in r.text and "MiniMax-M3" in r.text
+    assert "image-01" in r.text
 
 
 def test_page_editor_forbidden(editor_client):
@@ -152,7 +206,9 @@ def test_editor_cannot_post(editor_client):
 def _post(client, **over):
     data = {"text_provider": "openai", "image_provider": "stub",
             "openai_base_url": "https://x/v1", "openai_api_key": "sk-secret",
-            "openai_model": "m", "claude_model": "sonnet"}
+            "openai_model": "m", "image_base_url": "https://img/v1",
+            "image_api_key": "img-secret", "image_model": "image-01",
+            "claude_model": "sonnet"}
     data.update(over)
     return client.post("/settings/llm", data=data, follow_redirects=False)
 
@@ -179,3 +235,56 @@ def test_masked_key_not_overwrite(owner_client):
     _post(owner_client, openai_api_key="sk-original-7777")
     _post(owner_client, openai_api_key="••••••7777")          # 回填打码值（用户没改 key）
     assert llm._settings()["openai_api_key"] == "sk-original-7777"
+
+
+def test_text_and_image_keys_are_saved_independently(owner_client):
+    r = _post(
+        owner_client,
+        openai_api_key="sk-text-1111",
+        image_provider="minimax-m3",
+        image_api_key="sk-image-2222",
+    )
+    assert r.status_code == 303
+    got = llm._settings()
+    assert got["openai_api_key"] == "sk-text-1111"
+    assert got["image_api_key"] == "sk-image-2222"
+    assert got["openai_base_url"] == "https://x/v1"
+    assert got["image_base_url"] == "https://api.minimax.chat/v1"
+
+
+def test_empty_image_key_keeps_existing(owner_client):
+    _post(owner_client, image_provider="minimax-m3", image_api_key="sk-image-9999")
+    _post(owner_client, image_provider="minimax-m3", image_api_key="")
+    assert llm._settings()["image_api_key"] == "sk-image-9999"
+
+
+def test_minimax_m3_option_defaults_model(owner_client):
+    r = _post(
+        owner_client,
+        text_provider="minimax-m3",
+        openai_base_url="https://wrong.example/v1",
+        openai_model="wrong-model",
+    )
+    assert r.status_code == 303
+    got = llm._settings()
+    assert got["text_provider"] == "minimax-m3"
+    assert got["openai_base_url"] == "https://api.minimax.chat/v1"
+    assert got["openai_model"] == "MiniMax-M3"
+    assert got["image_base_url"] == "https://img/v1"
+
+
+def test_minimax_m3_image_option_defaults_model(owner_client):
+    r = _post(
+        owner_client,
+        text_provider="stub",
+        image_provider="minimax-m3",
+        openai_base_url="https://wrong.example/v1",
+        openai_model="wrong-model",
+    )
+    assert r.status_code == 303
+    got = llm._settings()
+    assert got["image_provider"] == "minimax-m3"
+    assert got["openai_base_url"] == "https://wrong.example/v1"
+    assert got["openai_model"] == "wrong-model"
+    assert got["image_base_url"] == "https://api.minimax.chat/v1"
+    assert got["image_model"] == "image-01"
