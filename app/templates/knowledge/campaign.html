@@ -1,8 +1,10 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, text_input, file_input %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, text_input, file_input, notice %}
 {% block content %}
+  {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
   {{ page_header("①知识库", campaign.name, crumbs=[
       ("首页","/"), (brand.name, "/brands/" ~ brand.id), (campaign.name, "")]) }}
+  {% if not request.state.knowledge_writable %}{{ notice("🚧 知识库功能开发中，当前为只读预览。") }}{% endif %}
 
   <div class="mb-4 flex items-center gap-2">
     {% if campaign.is_default %}{{ chip("品牌日常·常驻", "slate") }}
@@ -21,7 +23,7 @@
       {{ empty_state("还没有活动资料。") }}
       {% endfor %}
     </div>
-    {% if request.state.level >= 2 %}
+    {% if can_edit %}
     <form method="post" action="/campaigns/{{ campaign.id }}/docs" enctype="multipart/form-data"
           class="flex flex-wrap items-center gap-2">
       {{ file_input("file", required=True) }}
@@ -32,7 +34,7 @@
   {{ card_close() }}
 
   {{ card_open("AI 解析结果") }}
-    {% if request.state.level >= 2 %}
+    {% if can_edit %}
     <div class="mb-2">{{ button("AI 解析活动资料", variant="secondary",
         hx_post="/campaigns/" ~ campaign.id ~ "/parse", hx_target="#campaign-digest", hx_swap="innerHTML") }}</div>
     {% endif %}
@@ -41,7 +43,7 @@
     </div>
   {{ card_close() }}
 
-  {% if request.state.level >= 2 and not campaign.is_default %}
+  {% if can_edit and not campaign.is_default %}
   <div>{{ button("删除该 campaign", variant="danger",
       hx_post="/campaigns/" ~ campaign.id ~ "/delete",
       hx_confirm="删除该 campaign？其活动资料将一并删除，不可恢复。") }}</div>

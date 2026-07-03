@@ -72,9 +72,9 @@
   class="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none {{ extra }}"></textarea>
 {% endmacro %}
 
-{% macro select_input(name, options) %}
+{% macro select_input(name, options, selected=None) %}
 <select name="{{ name }}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
-  {% for o in options %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
+  {% for o in options %}<option value="{{ o }}"{{ ' selected' if o == selected else '' }}>{{ o }}</option>{% endfor %}
 </select>
 {% endmacro %}
 
@@ -85,6 +85,16 @@
 {# 空状态占位 #}
 {% macro empty_state(text) %}
 <div class="text-slate-400 text-sm py-6 text-center">{{ text }}</div>
+{% endmacro %}
+
+{# 横幅提示条。color: amber|brand|slate #}
+{% macro notice(text, color="amber") %}
+{% set c = {
+  "amber":"bg-amber-50 text-amber-700 border-amber-200",
+  "brand":"bg-brand-50 text-brand-700 border-brand-200",
+  "slate":"bg-slate-50 text-slate-600 border-slate-200"
+} %}
+<div class="border {{ c[color] }} rounded-lg px-4 py-2.5 text-sm mb-4">{{ text }}</div>
 {% endmacro %}
 
 {# 弹框：放进 #modal-slot。配对 modal_close(footer)。 #}
