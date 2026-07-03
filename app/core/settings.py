@@ -11,11 +11,14 @@ from app.core import config
 
 class LLMSetting(SQLModel, table=True):
     id: int | None = Field(default=1, primary_key=True)
-    text_provider: str = "stub"       # stub | openai | claude-cli
-    image_provider: str = "stub"      # stub | codex
+    text_provider: str = "stub"       # stub | openai | minimax-m3 | claude-cli
+    image_provider: str = "stub"      # stub | codex | minimax-m3
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    image_base_url: str = "https://api.minimax.chat/v1"
+    image_api_key: str = ""
+    image_model: str = "image-01"
     claude_model: str = "sonnet"
 
 
@@ -26,7 +29,9 @@ def get_llm_settings(session: Session) -> LLMSetting:
         s = LLMSetting(
             id=1, text_provider=config.TEXT_PROVIDER, image_provider=config.IMAGE_PROVIDER,
             openai_base_url=config.OPENAI_BASE_URL, openai_api_key=config.OPENAI_API_KEY,
-            openai_model=config.OPENAI_MODEL, claude_model=config.CLAUDE_MODEL)
+            openai_model=config.OPENAI_MODEL, image_base_url=config.IMAGE_BASE_URL,
+            image_api_key=config.IMAGE_API_KEY, image_model=config.IMAGE_PROVIDER_MODEL,
+            claude_model=config.CLAUDE_MODEL)
         session.add(s)
         try:
             session.commit()

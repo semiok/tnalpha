@@ -2,48 +2,97 @@
 {% from "components/ui.html" import page_header, card_open, card_close, button, chip, text_input, select_input %}
 {% block content %}
   {{ page_header("设置", "模型配置", crumbs=[("首页","/"), ("模型配置","")]) }}
-  <p class="text-sm text-slate-500 -mt-3 mb-5">选文本/图像用哪个模型，改完立即生效（无需重启）。仅定义者可配。</p>
 
   <form method="post" action="/settings/llm" class="space-y-4">
-    {# ── 文本模型 ── #}
-    {{ card_open("文本模型（选题解析 / 写作）") }}
-      <label class="block text-sm text-slate-600 mb-2">模式</label>
-      {{ select_input("text_provider", ["stub", "openai", "claude-cli"], selected=st.text_provider) }}
-      <div class="mt-2 text-xs text-slate-400">
-        当前：<b>{{ st.text_provider }}</b> ·
-        stub=假数据(免key) ｜ openai=其他API(填下方) ｜ claude-cli=Claude订阅授权
-        {% if claude_ready %}{{ chip("✓ 检测到 claude CLI", "emerald") }}{% else %}{{ chip("✗ 未检测到 claude CLI", "rose") }}{% endif %}
+    {{ card_open("文本模型") }}
+      <div class="grid gap-4 md:grid-cols-[220px_1fr]">
+        <label class="block">
+          <span class="block text-sm text-slate-600 mb-1">Provider</span>
+          {{ select_input("text_provider", ["stub", "openai", "minimax-m3", "claude-cli"], selected=st.text_provider) }}
+        </label>
+        <div data-text-api class="grid gap-3 md:grid-cols-3">
+          <label class="block">
+            <span class="block text-sm text-slate-600 mb-1">Base URL</span>
+            {{ text_input("openai_base_url", value=st.openai_base_url, extra="w-full") }}
+          </label>
+          <label class="block">
+            <span class="block text-sm text-slate-600 mb-1">Model</span>
+            {{ text_input("openai_model", value=st.openai_model, extra="w-full") }}
+          </label>
+          <label class="block">
+            <span class="block text-sm text-slate-600 mb-1">API Key</span>
+            {{ text_input("openai_api_key", placeholder=masked_text_key or "sk-...", extra="w-full") }}
+            <span class="block text-xs text-slate-400 mt-1">{% if masked_text_key %}已配置 {{ masked_text_key }}，留空不改{% else %}未配置{% endif %}</span>
+          </label>
+        </div>
+        <div data-text-status class="text-xs text-slate-400">
+          {% if claude_ready %}{{ chip("已检测到 claude CLI", "emerald") }}{% else %}{{ chip("未检测到 claude CLI", "rose") }}{% endif %}
+        </div>
       </div>
     {{ card_close() }}
 
-    {# ── 其他 API（OpenAI 兼容）── #}
-    {{ card_open("其他 API（OpenAI 兼容：OpenAI / DeepSeek / Moonshot / 通义 / Ollama…）") }}
-      <label class="block text-sm text-slate-600 mb-1">Base URL</label>
-      {{ text_input("openai_base_url", value=st.openai_base_url, extra="w-full") }}
-      <label class="block text-sm text-slate-600 mb-1 mt-3">Model</label>
-      {{ text_input("openai_model", value=st.openai_model, extra="w-full") }}
-      <label class="block text-sm text-slate-600 mb-1 mt-3">API Key</label>
-      {{ text_input("openai_api_key", placeholder=masked_key or "sk-...", extra="w-full") }}
-      <div class="text-xs text-slate-400 mt-1">
-        {% if masked_key %}已配置 {{ masked_key }}，留空不改动{% else %}未配置{% endif %} · key 存本机、不外传
+    {{ card_open("图像模型") }}
+      <div class="grid gap-4 md:grid-cols-[220px_1fr]">
+        <label class="block">
+          <span class="block text-sm text-slate-600 mb-1">Provider</span>
+          {{ select_input("image_provider", ["stub", "codex", "minimax-m3"], selected=st.image_provider) }}
+        </label>
+        <div data-image-api class="grid gap-3 md:grid-cols-2">
+          <label class="block">
+            <span class="block text-sm text-slate-600 mb-1">Base URL</span>
+            {{ text_input("image_base_url", value=st.image_base_url, extra="w-full") }}
+          </label>
+          <label class="block">
+            <span class="block text-sm text-slate-600 mb-1">API Key</span>
+            {{ text_input("image_api_key", placeholder=masked_image_key or "sk-...", extra="w-full") }}
+            <span class="block text-xs text-slate-400 mt-1">{% if masked_image_key %}已配置 {{ masked_image_key }}，留空不改{% else %}未配置{% endif %}</span>
+          </label>
+        </div>
+        <div data-image-status class="text-xs text-slate-400">
+          {% if codex_ready %}{{ chip("已检测到 Codex 授权", "emerald") }}{% else %}{{ chip("未检测到 Codex 授权", "rose") }}{% endif %}
+        </div>
       </div>
     {{ card_close() }}
 
-    {# ── 图像模型 ── #}
-    {{ card_open("图像模型（配图）") }}
-      <label class="block text-sm text-slate-600 mb-2">模式</label>
-      {{ select_input("image_provider", ["stub", "codex"], selected=st.image_provider) }}
-      <div class="mt-2 text-xs text-slate-400">
-        当前：<b>{{ st.image_provider }}</b> · stub=占位图 ｜ codex=Codex订阅授权
-        {% if codex_ready %}{{ chip("✓ 检测到 ~/.codex/auth.json", "emerald") }}{% else %}{{ chip("✗ 未检测到 Codex 授权", "rose") }}{% endif %}
-      </div>
-    {{ card_close() }}
-
-    <div>
-      <label class="block text-sm text-slate-600 mb-1">Claude 模型（claude-cli 模式用）</label>
-      {{ text_input("claude_model", value=st.claude_model) }}
-    </div>
+    <input type="hidden" name="claude_model" value="{{ st.claude_model }}">
+    <input type="hidden" name="image_model" value="{{ st.image_model or minimax_image_model }}">
 
     <div>{{ button("保存配置", variant="primary", type="submit") }}</div>
   </form>
+  <script>
+    (() => {
+      const provider = document.querySelector('[name="text_provider"]');
+      const imageProvider = document.querySelector('[name="image_provider"]');
+      const baseUrl = document.querySelector('[name="openai_base_url"]');
+      const model = document.querySelector('[name="openai_model"]');
+      const imageBaseUrl = document.querySelector('[name="image_base_url"]');
+      const imageModel = document.querySelector('[name="image_model"]');
+      const textApi = document.querySelector('[data-text-api]');
+      const textStatus = document.querySelector('[data-text-status]');
+      const imageApi = document.querySelector('[data-image-api]');
+      const imageStatus = document.querySelector('[data-image-status]');
+      const minimaxBaseUrl = "{{ minimax_m3_base_url }}";
+      const minimaxModel = "{{ minimax_m3_model }}";
+      const minimaxImageModel = "{{ minimax_image_model }}";
+      function applyPreset() {
+        const textNeedsApi = provider && ["openai", "minimax-m3"].includes(provider.value);
+        const imageNeedsApi = imageProvider && imageProvider.value === "minimax-m3";
+        if (textApi) textApi.hidden = !textNeedsApi;
+        if (textStatus) textStatus.hidden = provider?.value !== "claude-cli";
+        if (imageApi) imageApi.hidden = !imageNeedsApi;
+        if (imageStatus) imageStatus.hidden = imageProvider?.value !== "codex";
+        if (provider && provider.value === "minimax-m3") {
+          if (baseUrl) baseUrl.value = minimaxBaseUrl;
+          if (model) model.value = minimaxModel;
+        }
+        if (imageProvider && imageProvider.value === "minimax-m3") {
+          if (imageBaseUrl) imageBaseUrl.value = minimaxBaseUrl;
+          if (imageModel) imageModel.value = minimaxImageModel;
+        }
+      }
+      provider?.addEventListener("change", applyPreset);
+      imageProvider?.addEventListener("change", applyPreset);
+      applyPreset();
+    })();
+  </script>
 {% endblock %}
