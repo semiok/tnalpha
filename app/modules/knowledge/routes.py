@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from sqlmodel import Session, select
 
-from app.core import auth, docparse, llm, storage
+from app.core import auth, config, docparse, llm, storage
 from app.core.db import get_session
 from app.modules.knowledge.models import (
     Brand, BrandDoc, Campaign, CampaignDoc, PoolTopic,
@@ -32,6 +32,10 @@ def _parse_date(value: str) -> date | None:
 
 @router.get("/")
 def home(request: Request, session: Session = Depends(get_session)):
+    # 只读演示：知识库退化为「原型左右结构静态框架」单页（敦煌IP 假数据，不读 DB）。
+    # 后端 CRUD 代码保留，翻 KNOWLEDGE_WRITABLE 开关即恢复动态首页。
+    if not config.KNOWLEDGE_WRITABLE:
+        return templates.TemplateResponse(request, "knowledge/static_home.html", {})
     brands = session.exec(select(Brand).order_by(Brand.id)).all()
     return templates.TemplateResponse(request, "knowledge/home.html", {"brands": brands})
 
@@ -52,6 +56,8 @@ def create_brand(request: Request, name: str = Form(...),
 
 @router.get("/brands/{brand_id}")
 def brand_detail(brand_id: int, request: Request, session: Session = Depends(get_session)):
+    if not config.KNOWLEDGE_WRITABLE:                     # 只读：二级页并入静态框架单页
+        return RedirectResponse("/", status_code=303)
     brand = session.get(Brand, brand_id)
     if not brand:
         raise HTTPException(404, "品牌不存在")
@@ -122,6 +128,8 @@ def create_campaign(request: Request,
 @router.get("/campaigns/{campaign_id}")
 def campaign_detail(campaign_id: int, request: Request,
                     session: Session = Depends(get_session)):
+    if not config.KNOWLEDGE_WRITABLE:                     # 只读：并入静态框架单页
+        return RedirectResponse("/", status_code=303)
     campaign = session.get(Campaign, campaign_id)
     if not campaign:
         raise HTTPException(404, "活动不存在")
@@ -195,6 +203,8 @@ def delete_campaign(campaign_id: int, request: Request,
 
 @router.get("/pool")
 def pool_list(request: Request, session: Session = Depends(get_session)):
+    if not config.KNOWLEDGE_WRITABLE:                     # 只读：并入静态框架单页
+        return RedirectResponse("/", status_code=303)
     topics = session.exec(select(PoolTopic).order_by(PoolTopic.id.desc())).all()
     return templates.TemplateResponse(request, "knowledge/pool.html", {"topics": topics})
 
