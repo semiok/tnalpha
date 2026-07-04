@@ -3,6 +3,18 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.0] - 2026-07-04
+
+### 新增
+- **①知识库 v2 · 品牌库定义 + 资料文档 AI 解析**（MET-12 续）：正式环境交互重构——默认单品牌「敦煌当代美术馆」，品牌库管理进入 tngen 式**品牌定义页**；主页 campaign 列表可新增、数据池管理入口、campaign 可引用数据池内容。**资料文档 AI 解析照搬 tngen**：单篇文档解读（只读文字）+ **深度读图**（勾选后 claude 读 PDF 图片页出视觉风格）→ 综合成「文档解读综合」+「综合视觉风格」→ 自动填入「主题调性 / 内容要求」，定义者可改可存。默认模型 = Claude。
+- **按模块配置模型（预留接口）**：`LLMSetting` 按 `scope` 分行，`scope="default"` 为默认锚点（=知识库），**未配置的模块自动继承默认**；`llm.generate_text/generate_image` 加 `module=` 参数按模块路由，文本/图像各自判断来源。未来模块两步即接入（调用处传 `module=` + 存一行 scope），resolver 不改。无 claude CLI 的贡献者改用 minimax provider 即可（见 `ARCHITECTURE.md §3` / `settings.py`）。
+- **六模块导航进开发模式** + ②③④⑤⑥ 占位骨架（`app/modules/{topic,writing,schedule,feedback,permissions}/`）：菜单已连通，各模块开发者往对应目录填功能。
+
+### 修复
+- **claude-cli provider 真解析可用**：识别 claude 把认证错误打到 stdout（rc=0）的情况并回退 stub、不把 `Failed to authenticate` 当解读存库；`stdin=DEVNULL` 避免 headless 进交互；深度读图走 `-p ... --allowedTools Read` 读 PDF 图片页。**launchd 服务用独立 `CLAUDE_CONFIG_DIR` 登录**解决与其他 claude 会话争抢 OAuth token 导致的 401（订阅支持多会话）。
+
+[0.4.0]: https://github.com/semiok/tnalpha/releases/tag/v0.4.0
+
 ## [0.3.0] - 2026-07-03
 
 ### 新增

@@ -15,19 +15,12 @@ from app.core import config, db
 from app.core.llm import claude_cli, codex_image, minimax_image, openai_compat, stub
 
 
-def _settings() -> dict:
-    """读 DB 设置；DB 不可用/无表时回退 config 默认（保证测试与首启不崩）。"""
+def _settings(scope: str = "default") -> dict:
+    """读某模块 scope 的有效 DB 设置（模块未配→继承 default）；DB 不可用/无表时回退 config 默认。"""
     try:
-        from app.core.settings import get_llm_settings
+        from app.core.settings import resolve_llm_settings
         with Session(db.engine) as s:
-            st = get_llm_settings(s)
-            return {
-                "text_provider": st.text_provider, "image_provider": st.image_provider,
-                "openai_base_url": st.openai_base_url, "openai_api_key": st.openai_api_key,
-                "openai_model": st.openai_model, "image_base_url": st.image_base_url,
-                "image_api_key": st.image_api_key, "image_model": st.image_model,
-                "claude_model": st.claude_model,
-            }
+            return resolve_llm_settings(s, scope)
     except Exception as e:
         print(f"[llm] 读 DB 设置失败，回退 config 默认：{e}")
         return {
@@ -39,8 +32,11 @@ def _settings() -> dict:
         }
 
 
-def generate_text(prompt: str, task: str = "default") -> str:
-    st = _settings()
+def generate_text(prompt: str, task: str = "default", pdf_path: str | None = None,
+                  module: str = "default") -> str:
+    """module=模块名，按模块选模型（未配→继承 default=知识库锚点）。task 仅供 stub 标注。
+    pdf_path 非空=深度读图（只 claude-cli 支持读 PDF 图片页；其余 provider 忽略 pdf、仅按文本生成）。"""
+    st = _settings(module)
     p = st["text_provider"]
     try:
         if p in ("openai", "minimax-m3"):
@@ -48,14 +44,16 @@ def generate_text(prompt: str, task: str = "default") -> str:
                 prompt, st["openai_base_url"], st["openai_api_key"],
                 st["openai_model"], timeout=config.LLM_TIMEOUT)
         if p == "claude-cli":
-            return claude_cli.generate_text(prompt, st["claude_model"], timeout=config.LLM_TIMEOUT)
+            return claude_cli.generate_text(prompt, st["claude_model"],
+                                            timeout=config.LLM_TIMEOUT, pdf_path=pdf_path)
     except Exception as e:
         print(f"[llm] 文本 provider '{p}' 失败，回退 stub：{e}")
     return stub.generate_text(prompt, task=task)
 
 
-def generate_image(prompt: str) -> str:
-    st = _settings()
+def generate_image(prompt: str, module: str = "default") -> str:
+    """module=模块名，按模块选图像模型（未配→继承 default）。"""
+    st = _settings(module)
     p = st["image_provider"]
     try:
         if p == "codex":

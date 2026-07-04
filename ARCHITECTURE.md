@@ -48,7 +48,9 @@ tnalpha/
 
 - **db**：`get_session`（FastAPI 依赖，每请求一个 Session）；`init_db` 建表（导入所有模块 models）。
 - **auth**：`require_level(request, n)` 服务端守卫（level 不足抛 403）；中间件已把 `request.state.role/level` 塞好，模板直接用。
-- **llm**：`core/llm` 暴露统一函数（如 `generate_text(prompt, task) / generate_image(...)`）。**含 stub provider**，没接真实模型时返回假数据，保证端到端能跑。模块不直接调 API。
+- **llm**：`core/llm` 暴露统一函数 `generate_text(prompt, task, pdf_path=None, module="default") / generate_image(prompt, module="default")`。**含 stub provider**，没接真实模型时返回假数据，保证端到端能跑。模块不直接调 API。
+  - **按模块配置模型（契约）**：`module=` 决定用哪套模型；配置存 `LLMSetting`（按 `scope` 分行）。`scope="default"` 是默认锚点（当前=知识库）；**未配置的模块自动继承 default**。你的模块要用单独的模型，只需：① 调用处传 `module="<你的模块目录名>"`；② 存一行 `LLMSetting(scope="<模块名>", ...)`（`text_provider`/`image_provider` 填 `"inherit"`/留空=继承 default）。resolver（`resolve_llm_settings`）不用改。文本与图像各自判断来源——写作引擎可"文本继承知识库、图像用自己那套"。
+  - **无 claude CLI 的贡献者**：本机没 claude 命令时，别用 `claude-cli` provider（会回退 stub）。到「模型配置」页把 Provider 换成 `minimax-m3` 或 `openai`（填自己的 Base URL/Model/API Key）；本地 DB 与维护者隔离，互不影响。
 - **sources**：`core/sources` 暴露 `SourceAdapter` 接口 + 注册表 + `search(source, query)`。**含 stub adapter** 返回假热点/笔记。真实源（热点/小红书/公众号/网络）按接口后接。
 - **storage / tasks**：文件存储、慢任务的抽象接口（本地磁盘 / 线程起步）。
 

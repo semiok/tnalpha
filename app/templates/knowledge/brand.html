@@ -1,71 +1,89 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, text_input, file_input, notice %}
+{% from "components/ui.html" import page_header, card_open, card_close, button, empty_state, textarea, file_input, chip %}
 {% block content %}
   {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
-  {{ page_header("①知识库", brand.name, crumbs=[("首页","/"), (brand.name, "")]) }}
-  {% if not request.state.knowledge_writable %}{{ notice("🚧 知识库功能开发中，当前为只读预览。") }}{% endif %}
+  {{ page_header("①知识库", "品牌定义", crumbs=[("首页","/"), (brand.name, ""), ("品牌定义","")]) }}
+  <p class="text-sm text-brand-600 -mt-3 mb-5">生成时 prompt 优先级高于文档。</p>
 
-  {# ── 品牌定义 + AI 解析 ── #}
-  {{ card_open("品牌定义（低时效·长期）") }}
-    <div class="text-sm text-slate-600 whitespace-pre-wrap mb-3">{{ brand.brand_prompt or "（未填写品牌定义）" }}</div>
-    {% if can_edit %}
-    <div class="mb-2">{{ button("AI 解析品牌定义", variant="secondary",
-        hx_post="/brands/" ~ brand.id ~ "/parse", hx_target="#brand-digest", hx_swap="innerHTML") }}</div>
-    {% endif %}
-    <div class="text-xs text-slate-400 mb-1">AI 解析结果</div>
-    <div id="brand-digest">
-      {% set digest = brand.brand_digest %}{% include "knowledge/_digest.html" with context %}
-    </div>
-  {{ card_close() }}
+  {# ── AI 解读（综合，可折叠）：文档解读 + 视觉风格 ── #}
+  <div class="bg-white rounded-xl border border-slate-200 p-4 mb-4 space-y-2">
+    <details class="group">
+      <summary class="cursor-pointer text-sm font-semibold text-slate-700 select-none">
+        📄 文档解读（综合）<span class="text-slate-400 font-normal ml-1 group-open:hidden">点击展开</span></summary>
+      <div class="mt-2 text-sm text-slate-600 whitespace-pre-wrap">{{ brand.doc_digest or "尚未解析，上传资料后点「AI 解析」。" }}</div>
+    </details>
+    <hr class="border-slate-100">
+    <details class="group">
+      <summary class="cursor-pointer text-sm font-semibold text-slate-700 select-none">
+        🎨 综合视觉风格 <span class="text-slate-400 font-normal ml-1 group-open:hidden">点击展开</span></summary>
+      <div class="mt-2 text-sm text-slate-600 whitespace-pre-wrap">{{ brand.style_digest or "无（勾选文档「深度读图」并解析后生成）。" }}</div>
+    </details>
+  </div>
 
-  {# ── 品牌资料（低时效文档） ── #}
-  {{ card_open("品牌资料（低时效文档）") }}
-    <div class="space-y-2 mb-3">
-      {% for d in docs %}
-      <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 text-sm">
-        <span>📄 {{ d.filename }}</span>
-        <span class="text-xs text-slate-400">{{ d.created_at.strftime('%Y-%m-%d') }}</span>
-      </div>
-      {% else %}
-      {{ empty_state("还没有品牌资料。") }}
-      {% endfor %}
-    </div>
-    {% if can_edit %}
-    <form method="post" action="/brands/{{ brand.id }}/docs" enctype="multipart/form-data"
-          class="flex items-center gap-2">
-      {{ file_input("file", required=True) }}
-      {{ button("上传资料", variant="secondary", type="submit") }}
+  <div class="grid md:grid-cols-2 gap-4 items-start">
+    {# ── 左：主题调性 / 内容要求（AI 自动填，定义者可改可存）── #}
+    <form method="post" action="/brands/{{ brand.id }}/define">
+      {{ card_open("品牌定义") }}
+        <label class="block text-sm text-slate-600 mb-1">主题调性 Prompt</label>
+        {{ textarea("brand_prompt", rows=8, value=brand.brand_prompt, placeholder="AI 解析资料后自动填；可改。品牌基调/文风/受众/母题") }}
+        <label class="block text-sm text-slate-600 mb-1 mt-3">内容要求 / 注意事项</label>
+        {{ textarea("content_notes", rows=6, value=brand.content_notes, placeholder="AI 解析资料后自动填；可改。字数/平台/史料准确/配图/尾注") }}
+        {% if can_edit %}<div class="mt-3">{{ button("保存品牌定义", variant="primary", type="submit") }}</div>
+        {% else %}<div class="text-xs text-slate-400 mt-2">（只读，定义者可编辑）</div>{% endif %}
+      {{ card_close() }}
     </form>
-    {% endif %}
-  {{ card_close() }}
 
-  {# ── Campaign 活动 ── #}
-  {{ card_open("Campaign 活动") }}
-    <div class="space-y-2">
-      {% for c in campaigns %}
-      <a href="/campaigns/{{ c.id }}"
-         class="flex items-center justify-between px-3 py-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 transition">
-        <div class="flex items-center gap-2">
-          <span class="font-medium text-sm">🗂 {{ c.name }}</span>
-          {% if c.is_default %}{{ chip("常驻·无时效", "slate") }}
-          {% elif c.start_date %}{{ chip(c.start_date.strftime('%m.%d') ~ "–" ~ (c.end_date.strftime('%m.%d') if c.end_date else "?"), "amber") }}{% endif %}
+    {# ── 右：资料文档 + AI 解析 ── #}
+    {{ card_open("资料文档") }}
+      {% if can_edit %}
+      <form method="post" action="/brands/{{ brand.id }}/docs" enctype="multipart/form-data" class="flex items-center gap-2 mb-2">
+        {{ file_input("file", required=True) }}
+        {{ button("上传", variant="secondary", type="submit") }}
+      </form>
+      {# AI 解析按钮 / 解析中轮询 #}
+      {% if brand.analysis_status == "running" %}
+        {% include "knowledge/_analysis_poll.html" %}
+      {% else %}
+        <form method="post" action="/brands/{{ brand.id }}/analyze" class="mb-1">
+          {{ button("🧠 AI 解析（重生成全部解读）", variant="primary", type="submit", extra="w-full") }}
+        </form>
+        {% if brand.analysis_status == "failed" %}<div class="text-xs text-rose-600 mb-1">解析失败：{{ brand.analysis_error }}</div>{% endif %}
+      {% endif %}
+      {% endif %}
+
+      <div class="space-y-2 mt-2">
+        {% for d in docs %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+          <div class="flex items-center justify-between">
+            <span>📄 {{ d.filename }}</span>
+            <span class="flex items-center gap-3 text-xs">
+              {% if can_edit %}
+              <form method="post" action="/brands/{{ brand.id }}/docs/{{ d.id }}/deep-read" class="inline flex items-center gap-1">
+                <label class="flex items-center gap-1 {{ 'text-brand-600' if d.deep_read else 'text-slate-400' }} cursor-pointer">
+                  <input type="checkbox" onchange="this.form.submit()" {{ 'checked' if d.deep_read else '' }}> 深度读图
+                </label>
+              </form>
+              {% endif %}
+              <a href="/brands/{{ brand.id }}/docs/{{ d.id }}/download" class="text-brand-600 hover:text-brand-700">下载</a>
+              {% if can_edit %}
+              <form method="post" action="/brands/{{ brand.id }}/docs/{{ d.id }}/delete" class="inline" onsubmit="return confirm('删除该文档？')">
+                <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+              </form>
+              {% endif %}
+            </span>
+          </div>
+          {% if d.ai_analysis %}
+          <details class="mt-1"><summary class="cursor-pointer text-xs text-brand-600 select-none">🧠 查看详情（单篇解读）</summary>
+            <div class="mt-1 text-xs text-slate-500 whitespace-pre-wrap">{{ d.ai_analysis }}{% if d.style_summary %}
+
+🎨 视觉风格：{{ d.style_summary }}{% endif %}</div>
+          </details>
+          {% endif %}
         </div>
-        <span class="text-xs text-slate-400">进入 →</span>
-      </a>
-      {% else %}
-      {{ empty_state("还没有活动。") }}
-      {% endfor %}
-    </div>
-    {% if can_edit %}
-    <form method="post" action="/campaigns" class="mt-3 flex flex-wrap items-end gap-2">
-      <input type="hidden" name="brand_id" value="{{ brand.id }}">
-      {{ text_input("name", placeholder="活动名称", required=True) }}
-      {{ text_input("start_date", type="date") }}
-      {{ text_input("end_date", type="date") }}
-      {{ button("＋ 新建 campaign", variant="secondary", type="submit") }}
-    </form>
-    {% endif %}
-  {{ card_close() }}
-
-  <div class="text-sm"><a href="/pool" class="text-brand-600 hover:text-brand-700">→ 全局数据池</a></div>
+        {% else %}
+        {{ empty_state("还没有资料文档。") }}
+        {% endfor %}
+      </div>
+    {{ card_close() }}
+  </div>
 {% endblock %}

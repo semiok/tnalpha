@@ -11,7 +11,12 @@ from starlette.responses import RedirectResponse
 from app import __version__
 from app.core import auth, auth_routes, runtime, settings_routes
 from app.core.db import init_db
+from app.modules.feedback import routes as feedback_routes
 from app.modules.knowledge import routes as knowledge_routes
+from app.modules.permissions import routes as permissions_routes
+from app.modules.schedule import routes as schedule_routes
+from app.modules.topic import routes as topic_routes
+from app.modules.writing import routes as writing_routes
 
 
 @asynccontextmanager
@@ -39,6 +44,12 @@ async def require_login(request: Request, call_next):
 app.include_router(auth_routes.router)
 app.include_router(settings_routes.router)
 app.include_router(knowledge_routes.router)
+# 模块占位骨架（②③④⑤⑥）：菜单已连通，各贡献者往对应 app/modules/<name>/ 填功能
+app.include_router(topic_routes.router)
+app.include_router(writing_routes.router)
+app.include_router(schedule_routes.router)
+app.include_router(feedback_routes.router)
+app.include_router(permissions_routes.router)
 
 
 @app.get("/health")
