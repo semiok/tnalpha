@@ -46,6 +46,7 @@ def llm_settings_page(request: Request, session: Session = Depends(get_session))
         "minimax_m3_base_url": MINIMAX_M3_BASE_URL,
         "minimax_m3_model": MINIMAX_M3_MODEL,
         "minimax_image_model": MINIMAX_IMAGE_MODEL,
+        "saved": request.query_params.get("saved") == "1",
     }
     return templates.TemplateResponse(request, "settings/llm.html", ctx)
 
@@ -56,7 +57,7 @@ def save_llm_settings(request: Request,
                       openai_base_url: str = Form(""), openai_api_key: str = Form(""),
                       openai_model: str = Form(""), image_base_url: str = Form(""),
                       image_api_key: str = Form(""), image_model: str = Form(""),
-                      claude_model: str = Form("sonnet"),
+                      claude_model: str = Form("sonnet"), codex_model: str = Form("gpt-5.5"),
                       session: Session = Depends(get_session)):
     auth.require_level(request, 2)
     st = get_llm_settings(session)
@@ -75,6 +76,7 @@ def save_llm_settings(request: Request,
         st.image_base_url = image_base_url or st.image_base_url
         st.image_model = image_model or st.image_model
     st.claude_model = claude_model or st.claude_model
+    st.codex_model = codex_model or st.codex_model
     # 空 / 打码占位 → 保持原 key 不覆盖（避免打码回填清空）
     if openai_api_key and not openai_api_key.startswith(_MASK):
         st.openai_api_key = openai_api_key
@@ -82,4 +84,4 @@ def save_llm_settings(request: Request,
         st.image_api_key = image_api_key
     session.add(st)
     session.commit()
-    return RedirectResponse("/settings/llm", status_code=303)
+    return RedirectResponse("/settings/llm?saved=1", status_code=303)

@@ -37,7 +37,7 @@ _INHERIT = ("", "inherit")   # 模块 provider 取此值 → 继承 default
 class LLMSetting(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     scope: str = Field(default=DEFAULT_LLM_SCOPE, unique=True, index=True)  # default=锚点；其余=模块名
-    text_provider: str = "stub"       # stub | openai | minimax-m3 | claude-cli | inherit(模块继承default)
+    text_provider: str = "stub"       # stub | openai | minimax-m3 | claude-cli | codex | inherit(模块继承default)
     image_provider: str = "stub"      # stub | codex | minimax-m3 | inherit
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str = ""
@@ -45,7 +45,8 @@ class LLMSetting(SQLModel, table=True):
     image_base_url: str = "https://api.minimax.chat/v1"
     image_api_key: str = ""
     image_model: str = "image-01"
-    claude_model: str = "sonnet"
+    claude_model: str = "sonnet"      # claude-cli 用（sonnet/opus）
+    codex_model: str = "gpt-5.5"      # codex 授权文本用（gpt-5.5，思考 high）
 
 
 def get_llm_settings(session: Session, scope: str = DEFAULT_LLM_SCOPE) -> LLMSetting | None:
@@ -58,7 +59,7 @@ def get_llm_settings(session: Session, scope: str = DEFAULT_LLM_SCOPE) -> LLMSet
             openai_base_url=config.OPENAI_BASE_URL, openai_api_key=config.OPENAI_API_KEY,
             openai_model=config.OPENAI_MODEL, image_base_url=config.IMAGE_BASE_URL,
             image_api_key=config.IMAGE_API_KEY, image_model=config.IMAGE_PROVIDER_MODEL,
-            claude_model=config.CLAUDE_MODEL)
+            claude_model=config.CLAUDE_MODEL, codex_model=config.CODEX_TEXT_MODEL)
         session.add(s)
         try:
             session.commit()
@@ -83,6 +84,7 @@ def resolve_llm_settings(session: Session, scope: str = DEFAULT_LLM_SCOPE) -> di
         "text_provider": text_src.text_provider, "image_provider": image_src.image_provider,
         "openai_base_url": text_src.openai_base_url, "openai_api_key": text_src.openai_api_key,
         "openai_model": text_src.openai_model, "claude_model": text_src.claude_model,
+        "codex_model": text_src.codex_model,
         "image_base_url": image_src.image_base_url, "image_api_key": image_src.image_api_key,
         "image_model": image_src.image_model,
     }

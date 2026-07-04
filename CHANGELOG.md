@@ -3,6 +3,17 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.0] - 2026-07-04
+
+### 新增
+- **Codex 授权文本 provider**（`codex`）：走本机 `~/.codex/auth.json` OAuth → Codex Responses API 生成文本，用 ChatGPT 订阅、零 API 费。默认 **gpt-5.5 + 思考 high**（文字模型，与图片 `gpt-image-1-mini` 分开）。**支持深度读图**——PDF 作 `input_file`（base64 data URI）随请求发出，gpt-5.5 直接读图片页，实测能准确描述封面色/章节色/书法字体等只有看图才知道的细节。模型配置页文本 Provider 新增 `codex` 选项 + 「已检测到 Codex 授权」徽章；`LLMSetting.codex_model` 可配。
+
+### 修复
+- **模型配置页交互**：授权模式（`claude-cli` / `codex`）下正确隐藏 Base URL / Model / API Key（改用内联 `style.display` 切换——修 Tailwind `grid` class 的 `display:grid` 盖掉 HTML `hidden` 属性、导致 API 字段一直显示的旧坑）。
+- **保存反馈**：保存配置后跳转带 `?saved=1`，页面弹出「✓ 配置已保存」提示条，2.5s 自动消失。
+
+[0.5.0]: https://github.com/semiok/tnalpha/releases/tag/v0.5.0
+
 ## [0.4.0] - 2026-07-04
 
 ### 新增
