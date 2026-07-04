@@ -3,6 +3,13 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.7.1] - 2026-07-04
+
+### 新增
+- **②↔① 最小共享契约** `app/modules/topic/contract.py`：`KnowledgeContext.load(session, brand_id, campaign_id)`（②从①读到的分层输入：品牌层/活动简报/数据池资料包·经验包，读法统一）+ `TopicCandidate`（选题候选形状）。两个 ② 实现（维护者/lindong）各写各的选题库，只需都 import 这一个契约、读法与产出对齐即可互换——不加引擎注册表/共享外壳/开关，保持最简。
+
+[0.7.1]: https://github.com/semiok/tnalpha/releases/tag/v0.7.1
+
 ## [0.7.0] - 2026-07-04
 
 ### 变更
