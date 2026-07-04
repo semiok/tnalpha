@@ -42,9 +42,9 @@ CODEX_RESPONSES_URL = os.environ.get("TNALPHA_CODEX_URL",
                                      "https://chatgpt.com/backend-api/codex/responses")
 CODEX_ENVELOPE_MODEL = os.environ.get("TNALPHA_CODEX_ENVELOPE_MODEL", "gpt-5.5")
 CODEX_CLIENT_VERSION = os.environ.get("TNALPHA_CODEX_CLIENT_VERSION", "2026.5.7")
-# codex 文本（授权模式）：默认 gpt-5.5 + 思考 high，与图片模型(gpt-image-1-mini)分开
+# codex 文本（授权模式）：默认 gpt-5.5 + 思考 medium（速度/质量平衡），与图片模型(gpt-image-1-mini)分开
 CODEX_TEXT_MODEL = os.environ.get("TNALPHA_CODEX_TEXT_MODEL", "gpt-5.5")
-CODEX_REASONING_EFFORT = os.environ.get("TNALPHA_CODEX_REASONING", "high")
+CODEX_REASONING_EFFORT = os.environ.get("TNALPHA_CODEX_REASONING", "medium")
 IMAGE_MODEL = os.environ.get("TNALPHA_IMAGE_MODEL", "gpt-image-1-mini")
 IMAGE_SIZE = os.environ.get("TNALPHA_IMAGE_SIZE", "1024x1024")
 IMAGE_QUALITY = os.environ.get("TNALPHA_IMAGE_QUALITY", "low")
