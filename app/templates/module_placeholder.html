@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, notice, empty_state %}
+{% block content %}
+  {{ page_header(mod_num ~ "模块", mod_name) }}
+  {{ notice("🚧 " ~ mod_name ~ " · 开发中——菜单已连通，功能待填充（负责人：" ~ owner ~ "）。照 ①知识库 样板与 CLAUDE.md/ARCHITECTURE.md 往这个模块里填。", "amber") }}
+  {{ empty_state("空模块页。往 app/modules/" ~ mod_dir ~ "/ 里填 models/routes/模板即可。") }}
+{% endblock %}

@@ -33,23 +33,37 @@ def test_openai_compat_calls_endpoint(monkeypatch):
     from app.core.llm import openai_compat
     seen = {}
 
-    class FakeResp:
+    class FakeStream:
+        def __init__(self, headers, json):
+            seen.update(auth=headers["Authorization"], model=json["model"],
+                        stream=json.get("stream"))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def raise_for_status(self):
             pass
 
-        def json(self):
-            return {"choices": [{"message": {"content": "  真实回答  "}}]}
+        def iter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"真实"}}]}'
+            yield ""                                            # SSE 空行
+            yield 'data: {"choices":[{"delta":{"content":"回答"}}]}'
+            yield "data: [DONE]"
 
-    def fake_post(url, headers, json, timeout):
-        seen.update(url=url, auth=headers["Authorization"], model=json["model"])
-        return FakeResp()
+    def fake_stream(method, url, headers, json, timeout):
+        seen["url"] = url
+        return FakeStream(headers, json)
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "stream", fake_stream)
     out = openai_compat.generate_text("你好", "https://api.deepseek.com/v1", "sk-abc", "deepseek-chat")
-    assert out == "真实回答"                                   # 去空白 + 取 content
+    assert out == "真实回答"                                   # 累积 SSE delta
     assert seen["url"] == "https://api.deepseek.com/v1/chat/completions"
     assert seen["auth"] == "Bearer sk-abc"
     assert seen["model"] == "deepseek-chat"
+    assert seen["stream"] is True                             # 流式
 
 
 def test_openai_compat_without_key_raises():
@@ -61,7 +75,7 @@ def test_openai_compat_without_key_raises():
 # ── 路由分发（monkeypatch _settings 绕过 DB）──
 
 def test_router_dispatches_to_openai(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: _OPENAI)
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _OPENAI)
     seen = {}
 
     def fake(prompt, base_url, api_key, model, timeout=60):
@@ -75,7 +89,7 @@ def test_router_dispatches_to_openai(monkeypatch):
 
 
 def test_router_dispatches_minimax_m3_as_openai_compatible(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: _MINIMAX)
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _MINIMAX)
     seen = {}
 
     def fake(prompt, base_url, api_key, model, timeout=60):
@@ -91,11 +105,47 @@ def test_router_dispatches_minimax_m3_as_openai_compatible(monkeypatch):
     }
 
 
-def test_router_dispatches_to_claude_cli_with_model(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: _CLAUDE)
+def test_claude_cli_uses_configured_bin(monkeypatch):
+    from app.core import config
+    from app.core.llm import claude_cli
+
+    monkeypatch.setattr(config, "CLAUDE_BIN", "/custom/path/claude")
     seen = {}
 
-    def fake(prompt, model="sonnet", timeout=180):
+    class _R:
+        returncode = 0
+        stdout = "OK"
+        stderr = ""
+
+    def fake_run(args, **kw):
+        seen["bin"] = args[0]
+        return _R()
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+    assert claude_cli.generate_text("hi") == "OK"
+    assert seen["bin"] == "/custom/path/claude"   # 用可配置 CLAUDE_BIN，不写死 "claude"
+
+
+def test_claude_cli_auth_error_raises(monkeypatch):
+    """claude 401 把错误文本打到 stdout（rc=0）→ 必须 raise，不能当解读返回。"""
+    import pytest
+    from app.core.llm import claude_cli
+
+    class _R:
+        returncode = 0
+        stdout = 'Failed to authenticate. API Error: 401 {"type":"error"}'
+        stderr = ""
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", lambda *a, **k: _R())
+    with pytest.raises(RuntimeError):
+        claude_cli.generate_text("hi")
+
+
+def test_router_dispatches_to_claude_cli_with_model(monkeypatch):
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _CLAUDE)
+    seen = {}
+
+    def fake(prompt, model="sonnet", timeout=180, pdf_path=None):
         seen["model"] = model
         return "CLAUDE结果"
 
@@ -105,7 +155,7 @@ def test_router_dispatches_to_claude_cli_with_model(monkeypatch):
 
 
 def test_router_text_falls_back_to_stub_on_error(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: _OPENAI)
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _OPENAI)
 
     def boom(*a, **k):
         raise RuntimeError("网络炸了")
@@ -116,7 +166,7 @@ def test_router_text_falls_back_to_stub_on_error(monkeypatch):
 
 
 def test_router_image_falls_back_to_stub_on_error(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: _CODEX)
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _CODEX)
 
     def boom(*a, **k):
         raise RuntimeError("codex 未授权")
@@ -127,7 +177,7 @@ def test_router_image_falls_back_to_stub_on_error(monkeypatch):
 
 
 def test_router_dispatches_minimax_image(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: _MINIMAX_IMAGE)
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _MINIMAX_IMAGE)
     seen = {}
 
     def fake(prompt, base_url, api_key, model="image-01", timeout=60):
@@ -140,7 +190,7 @@ def test_router_dispatches_minimax_image(monkeypatch):
 
 
 def test_router_minimax_image_falls_back_to_stub_on_error(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: _MINIMAX_IMAGE)
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _MINIMAX_IMAGE)
 
     def boom(*a, **k):
         raise RuntimeError("MiniMax 图片接口失败")
@@ -151,7 +201,7 @@ def test_router_minimax_image_falls_back_to_stub_on_error(monkeypatch):
 
 
 def test_router_unconfigured_uses_stub(monkeypatch):
-    monkeypatch.setattr(llm, "_settings", lambda: {**_OPENAI, "text_provider": "stub"})
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: {**_OPENAI, "text_provider": "stub"})
     assert "[stub:default]" in llm.generate_text("hi")
 
 
@@ -288,3 +338,60 @@ def test_minimax_m3_image_option_defaults_model(owner_client):
     assert got["openai_model"] == "wrong-model"
     assert got["image_base_url"] == "https://api.minimax.chat/v1"
     assert got["image_model"] == "image-01"
+
+
+# ── 按模块配置模型（预留接口）：resolve 继承/覆盖 + generate_text 按 module 路由 ──
+
+def test_resolve_unconfigured_module_inherits_default(fresh_db):
+    """未配置的模块 → 继承 default（知识库锚点）。"""
+    from sqlmodel import Session
+    from app.core.settings import get_llm_settings, resolve_llm_settings
+    with Session(fresh_db) as s:
+        d = get_llm_settings(s)                       # default 行
+        d.text_provider = "claude-cli"; d.claude_model = "opus"
+        s.add(d); s.commit()
+        r = resolve_llm_settings(s, "topic")          # 选题库还没配
+        assert r["text_provider"] == "claude-cli" and r["claude_model"] == "opus"
+
+
+def test_resolve_module_override(fresh_db):
+    """模块存了自己的 scope 行 → 覆盖 default。"""
+    from sqlmodel import Session
+    from app.core.settings import LLMSetting, get_llm_settings, resolve_llm_settings
+    with Session(fresh_db) as s:
+        d = get_llm_settings(s); d.text_provider = "stub"; s.add(d); s.commit()
+        s.add(LLMSetting(scope="topic", text_provider="openai", openai_model="gpt-x"))
+        s.commit()
+        r = resolve_llm_settings(s, "topic")
+        assert r["text_provider"] == "openai" and r["openai_model"] == "gpt-x"
+
+
+def test_resolve_writing_text_inherits_image_own(fresh_db):
+    """写作引擎：文本 inherit 继承知识库，图像用自己那套（文本/图像各自判断）。"""
+    from sqlmodel import Session
+    from app.core.settings import LLMSetting, get_llm_settings, resolve_llm_settings
+    with Session(fresh_db) as s:
+        d = get_llm_settings(s)
+        d.text_provider = "claude-cli"; d.image_provider = "stub"; s.add(d); s.commit()
+        s.add(LLMSetting(scope="writing", text_provider="inherit",
+                         image_provider="minimax-m3", image_model="image-01",
+                         image_base_url="https://img/v1", image_api_key="k"))
+        s.commit()
+        r = resolve_llm_settings(s, "writing")
+        assert r["text_provider"] == "claude-cli"     # 文本继承 default
+        assert r["image_provider"] == "minimax-m3"    # 图像用自己
+        assert r["image_api_key"] == "k"
+
+
+def test_generate_text_routes_by_module(fresh_db, monkeypatch):
+    """generate_text(module=...) 路由到该模块 provider；未配模块回退 default(=stub)。"""
+    from sqlmodel import Session
+    from app.core.settings import LLMSetting, get_llm_settings
+    with Session(fresh_db) as s:
+        d = get_llm_settings(s); d.text_provider = "stub"; s.add(d); s.commit()
+        s.add(LLMSetting(scope="topic", text_provider="openai",
+                         openai_base_url="https://t/v1", openai_api_key="tk", openai_model="tm"))
+        s.commit()
+    monkeypatch.setattr(llm.openai_compat, "generate_text", lambda *a, **k: "TOPIC")
+    assert llm.generate_text("hi", module="topic") == "TOPIC"        # 路由到 topic 的 openai
+    assert "[stub" in llm.generate_text("hi", module="knowledge")    # 知识库未单配 → default=stub

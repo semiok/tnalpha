@@ -1,0 +1,7 @@
+{# HTMX 自轮询：解析中每 2s 拉状态；done/failed → 204+HX-Refresh 整页刷新看结果 #}
+<div hx-get="/brands/{{ brand.id }}/analysis-status" hx-trigger="load delay:2s"
+     hx-target="this" hx-swap="outerHTML"
+     class="flex items-center gap-2 text-sm text-brand-600 bg-brand-50 rounded-lg px-3 py-2">
+  <span class="inline-block w-3.5 h-3.5 border-2 border-brand-200 border-t-brand-600 rounded-full animate-spin"></span>
+  🧠 AI 解析中…（读文档、深度读图、生成解读并反推调性/要求，稍候）
+</div>

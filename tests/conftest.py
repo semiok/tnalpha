@@ -17,6 +17,14 @@ from app.core.db import get_session
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def _force_stub_llm(monkeypatch):
+    """全测试强制 LLM=stub：config 默认已改 claude-cli，不拦会真调本机 Claude
+    （无 fresh_db 的裸 llm 测试走 config 回退路径）。"""
+    monkeypatch.setattr(config, "TEXT_PROVIDER", "stub")
+    monkeypatch.setattr(config, "IMAGE_PROVIDER", "stub")
+
+
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
     """全新内存库 + 依赖覆盖；上传目录指向 tmp，避免污染工作区。"""
@@ -31,6 +39,14 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(_dbmod, "engine", engine)
     # 测试基线=开发模式（动态知识库）；只读测试内自行 set False
     runtime.set_knowledge_writable(True)
+    # 测试强制 LLM=stub（本机有 claude CLI，默认 claude-cli 会真调用、破坏确定性）
+    from app.core.settings import get_llm_settings
+    with Session(engine) as _s:
+        _st = get_llm_settings(_s)
+        _st.text_provider = "stub"
+        _st.image_provider = "stub"
+        _s.add(_st)
+        _s.commit()
 
     def _override():
         with Session(engine) as session:

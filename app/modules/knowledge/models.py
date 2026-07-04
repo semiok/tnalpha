@@ -14,22 +14,28 @@ def _now() -> datetime:
 
 
 class Brand(SQLModel, table=True):
-    """品牌：知识库顶层，长期不变。"""
+    """品牌：知识库顶层，长期不变。品牌定义逻辑照 tngen（AI 解文档→反推调性/要求）。"""
     id: int | None = Field(default=None, primary_key=True)
     name: str
-    brand_prompt: str = ""        # 品牌定义 prompt
-    content_notes: str = ""       # 内容要求
-    brand_digest: str = ""        # brand_prompt 的 AI 解析结果（core/llm 生成）
+    brand_prompt: str = ""        # 主题调性（人可改，AI 解析后自动填、可覆盖，生成时优先级最高）
+    content_notes: str = ""       # 内容要求 / 注意事项（同上）
+    doc_digest: str = ""          # 文档解读（综合）——AI 读全部资料文档聚合
+    style_digest: str = ""        # 综合视觉风格——AI 深度读图聚合，供配图参考
+    analysis_status: str = "idle" # idle | running | done | failed（后台解析状态）
+    analysis_error: str = ""
     created_at: datetime = Field(default_factory=_now)
 
 
 class BrandDoc(SQLModel, table=True):
-    """品牌层资料（低时效文档）。"""
+    """品牌层资料（低时效文档）。ai_analysis=单篇文档解读；深度读图出 style_summary。"""
     id: int | None = Field(default=None, primary_key=True)
     brand_id: int = Field(foreign_key="brand.id", index=True)
     filename: str
     file_path: str
     extracted_text: str = ""      # 上传时抽出的正文（core/docparse），AI 解析读它
+    ai_analysis: str = ""         # 单篇文档解读（AI 读 extracted_text）
+    style_summary: str = ""       # 单篇视觉风格（深度读图·claude 读 PDF 图片页）
+    deep_read: bool = False       # 深度读图开关（需读图的文档勾选，用 vision）
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -53,6 +59,14 @@ class CampaignDoc(SQLModel, table=True):
     file_path: str
     note: str = ""                # 备注标识，如"开幕/中期/闭幕"
     extracted_text: str = ""      # 上传时抽出的正文（core/docparse），AI 解析读它
+    created_at: datetime = Field(default_factory=_now)
+
+
+class CampaignPoolRef(SQLModel, table=True):
+    """campaign ⇄ 数据池 引用（多对多）。campaign 只引用数据池条目，不单独上传。"""
+    id: int | None = Field(default=None, primary_key=True)
+    campaign_id: int = Field(foreign_key="campaign.id", index=True)
+    pool_topic_id: int = Field(foreign_key="pooltopic.id", index=True)
     created_at: datetime = Field(default_factory=_now)
 
 

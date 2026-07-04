@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from sqlmodel import Session, select
@@ -15,8 +15,9 @@ from sqlmodel import Session, select
 from app import __version__
 from app.core import auth, docparse, llm, runtime, storage
 from app.core.db import get_session
+from app.modules.knowledge import analysis
 from app.modules.knowledge.models import (
-    Brand, BrandDoc, Campaign, CampaignDoc, PoolTopic,
+    Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, PoolTopic,
 )
 
 router = APIRouter()
@@ -24,11 +25,25 @@ templates = Jinja2Templates(directory="app/templates")
 _DEMO_HTML = Path("app/templates/demo.html")  # 只读演示壳（原型全貌，纯静态）
 
 _ANALYZE_CHARS = 12000  # AI 解析喂给 LLM 的最大字符数（防超长）
+_DEFAULT_BRAND_NAME = "敦煌当代美术馆"  # 单品牌默认（新增/删除品牌 UI 已隐藏）
 
 
 def _parse_date(value: str) -> date | None:
     value = (value or "").strip()
     return date.fromisoformat(value) if value else None
+
+
+def _default_brand(session: Session) -> Brand:
+    """取默认品牌；无则建"敦煌当代美术馆" + 其"品牌日常"常驻 campaign（仿 get_llm_settings）。"""
+    brand = session.exec(select(Brand).order_by(Brand.id)).first()
+    if brand is None:
+        brand = Brand(name=_DEFAULT_BRAND_NAME)
+        session.add(brand)
+        session.commit()
+        session.refresh(brand)
+        session.add(Campaign(brand_id=brand.id, name="品牌日常", is_default=True))
+        session.commit()
+    return brand
 
 
 # ─────────────────────────────── 品牌 ───────────────────────────────
@@ -40,8 +55,12 @@ def home(request: Request, session: Session = Depends(get_session)):
     if not runtime.knowledge_writable():
         html = _DEMO_HTML.read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
         return HTMLResponse(html)
-    brands = session.exec(select(Brand).order_by(Brand.id)).all()
-    return templates.TemplateResponse(request, "knowledge/home.html", {"brands": brands})
+    brand = _default_brand(session)          # 单品牌：默认「敦煌当代美术馆」
+    campaigns = session.exec(
+        select(Campaign).where(Campaign.brand_id == brand.id)
+        .order_by(Campaign.is_default.desc(), Campaign.id)).all()
+    return templates.TemplateResponse(
+        request, "knowledge/home.html", {"brand": brand, "campaigns": campaigns})
 
 
 @router.post("/brands")
@@ -65,14 +84,49 @@ def brand_detail(brand_id: int, request: Request, session: Session = Depends(get
     brand = session.get(Brand, brand_id)
     if not brand:
         raise HTTPException(404, "品牌不存在")
-    campaigns = session.exec(
-        select(Campaign).where(Campaign.brand_id == brand_id)
-        .order_by(Campaign.is_default.desc(), Campaign.id)).all()
     docs = session.exec(
         select(BrandDoc).where(BrandDoc.brand_id == brand_id)
         .order_by(BrandDoc.id.desc())).all()
+    # 品牌定义页 = 主题调性/内容要求 + 文档 + AI 解析（campaign 挪到首页）
     return templates.TemplateResponse(request, "knowledge/brand.html",
-                                      {"brand": brand, "campaigns": campaigns, "docs": docs})
+                                      {"brand": brand, "docs": docs})
+
+
+@router.post("/brands/{brand_id}/define")
+def save_brand_define(brand_id: int, request: Request,
+                      brand_prompt: str = Form(""), content_notes: str = Form(""),
+                      session: Session = Depends(get_session)):
+    """保存品牌定义（主题调性 Prompt + 内容要求）。"""
+    auth.require_level(request, 2)
+    brand = session.get(Brand, brand_id)
+    if not brand:
+        raise HTTPException(404, "品牌不存在")
+    brand.brand_prompt = brand_prompt
+    brand.content_notes = content_notes
+    session.add(brand)
+    session.commit()
+    return RedirectResponse(f"/brands/{brand_id}", status_code=303)
+
+
+@router.get("/brands/{brand_id}/docs/{doc_id}/download")
+def download_brand_doc(brand_id: int, doc_id: int, session: Session = Depends(get_session)):
+    doc = session.get(BrandDoc, doc_id)
+    if not doc or doc.brand_id != brand_id or not Path(doc.file_path).exists():
+        raise HTTPException(404, "文档不存在")
+    return FileResponse(doc.file_path, filename=doc.filename)
+
+
+@router.post("/brands/{brand_id}/docs/{doc_id}/delete")
+def delete_brand_doc(brand_id: int, doc_id: int, request: Request,
+                     session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    doc = session.get(BrandDoc, doc_id)
+    if not doc or doc.brand_id != brand_id:
+        raise HTTPException(404, "文档不存在")
+    Path(doc.file_path).unlink(missing_ok=True)
+    session.delete(doc)
+    session.commit()
+    return RedirectResponse(f"/brands/{brand_id}", status_code=303)
 
 
 @router.post("/brands/{brand_id}/docs")
@@ -90,24 +144,46 @@ def upload_brand_doc(brand_id: int, request: Request,
     return RedirectResponse(f"/brands/{brand_id}", status_code=303)
 
 
-@router.post("/brands/{brand_id}/parse")
-def parse_brand(brand_id: int, request: Request, session: Session = Depends(get_session)):
-    """AI 解析品牌定义 → 存 brand_digest，HTMX 返回结果片段。"""
+@router.post("/brands/{brand_id}/analyze")
+def analyze_brand(brand_id: int, request: Request, session: Session = Depends(get_session)):
+    """AI 解析资料文档（后台）：单篇解读 + 深度读图 → 文档解读综合/视觉风格 → 反推调性/要求。"""
     auth.require_level(request, 2)
     brand = session.get(Brand, brand_id)
     if not brand:
         raise HTTPException(404, "品牌不存在")
-    docs = session.exec(select(BrandDoc).where(BrandDoc.brand_id == brand_id)).all()
-    material = "\n\n".join(
-        [brand.brand_prompt] + [f"【{d.filename}】\n{d.extracted_text}"
-                                for d in docs if d.extracted_text]).strip()
-    brand.brand_digest = llm.generate_text(material[:_ANALYZE_CHARS] or brand.name,
-                                           task="brand_digest")
-    session.add(brand)
+    if brand.analysis_status != "running":
+        brand.analysis_status, brand.analysis_error = "running", ""
+        session.add(brand)
+        session.commit()
+        analysis.start_background_analysis(brand_id)
+    return RedirectResponse(f"/brands/{brand_id}", status_code=303)
+
+
+@router.get("/brands/{brand_id}/analysis-status")
+def brand_analysis_status(brand_id: int, request: Request,
+                          session: Session = Depends(get_session)):
+    """HTMX 轮询：running 返回自轮询片段；done/failed 触发整页刷新（看填充的字段/解读）。"""
+    brand = session.get(Brand, brand_id)
+    if not brand:
+        raise HTTPException(404, "品牌不存在")
+    if brand.analysis_status == "running":
+        return templates.TemplateResponse(request, "knowledge/_analysis_poll.html",
+                                          {"brand": brand})
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@router.post("/brands/{brand_id}/docs/{doc_id}/deep-read")
+def toggle_deep_read(brand_id: int, doc_id: int, request: Request,
+                     session: Session = Depends(get_session)):
+    """切换某文档的「深度读图」（需读图的文档用 vision）。"""
+    auth.require_level(request, 2)
+    doc = session.get(BrandDoc, doc_id)
+    if not doc or doc.brand_id != brand_id:
+        raise HTTPException(404, "文档不存在")
+    doc.deep_read = not doc.deep_read
+    session.add(doc)
     session.commit()
-    return templates.TemplateResponse(
-        request, "knowledge/_digest.html",
-        {"digest": brand.brand_digest, "slot_id": "brand-digest"})
+    return RedirectResponse(f"/brands/{brand_id}", status_code=303)
 
 
 # ─────────────────────────────── Campaign ───────────────────────────────
@@ -141,8 +217,68 @@ def campaign_detail(campaign_id: int, request: Request,
     docs = session.exec(
         select(CampaignDoc).where(CampaignDoc.campaign_id == campaign_id)
         .order_by(CampaignDoc.id.desc())).all()
+    # 已引用的数据池条目 + 可引用的（未引用的池子条目，供勾选）
+    ref_ids = [r.pool_topic_id for r in session.exec(
+        select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id)).all()]
+    all_topics = session.exec(select(PoolTopic).order_by(PoolTopic.id.desc())).all()
+    refs = [t for t in all_topics if t.id in ref_ids]
+    available = [t for t in all_topics if t.id not in ref_ids]
     return templates.TemplateResponse(request, "knowledge/campaign.html",
-                                      {"campaign": campaign, "brand": brand, "docs": docs})
+                                      {"campaign": campaign, "brand": brand, "docs": docs,
+                                       "refs": refs, "available": available})
+
+
+@router.get("/campaigns/{campaign_id}/docs/{doc_id}/download")
+def download_campaign_doc(campaign_id: int, doc_id: int, session: Session = Depends(get_session)):
+    doc = session.get(CampaignDoc, doc_id)
+    if not doc or doc.campaign_id != campaign_id or not Path(doc.file_path).exists():
+        raise HTTPException(404, "文档不存在")
+    return FileResponse(doc.file_path, filename=doc.filename)
+
+
+@router.post("/campaigns/{campaign_id}/docs/{doc_id}/delete")
+def delete_campaign_doc(campaign_id: int, doc_id: int, request: Request,
+                        session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    doc = session.get(CampaignDoc, doc_id)
+    if not doc or doc.campaign_id != campaign_id:
+        raise HTTPException(404, "文档不存在")
+    Path(doc.file_path).unlink(missing_ok=True)
+    session.delete(doc)
+    session.commit()
+    return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
+
+
+@router.post("/campaigns/{campaign_id}/pool-refs")
+def add_pool_ref(campaign_id: int, request: Request,
+                 pool_topic_id: int = Form(...),
+                 session: Session = Depends(get_session)):
+    """引用一个数据池条目到本 campaign（不单独上传，只引用）。"""
+    auth.require_level(request, 2)
+    if not session.get(Campaign, campaign_id):
+        raise HTTPException(404, "活动不存在")
+    if not session.get(PoolTopic, pool_topic_id):
+        raise HTTPException(404, "数据池条目不存在")
+    exists = session.exec(
+        select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id,
+                                      CampaignPoolRef.pool_topic_id == pool_topic_id)).first()
+    if not exists:
+        session.add(CampaignPoolRef(campaign_id=campaign_id, pool_topic_id=pool_topic_id))
+        session.commit()
+    return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
+
+
+@router.post("/campaigns/{campaign_id}/pool-refs/{topic_id}/delete")
+def remove_pool_ref(campaign_id: int, topic_id: int, request: Request,
+                    session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    ref = session.exec(
+        select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id,
+                                      CampaignPoolRef.pool_topic_id == topic_id)).first()
+    if ref:
+        session.delete(ref)
+        session.commit()
+    return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
 
 
 @router.post("/campaigns/{campaign_id}/docs")
@@ -171,8 +307,16 @@ def parse_campaign(campaign_id: int, request: Request,
         raise HTTPException(404, "活动不存在")
     docs = session.exec(
         select(CampaignDoc).where(CampaignDoc.campaign_id == campaign_id)).all()
-    material = f"活动：{campaign.name}\n\n" + "\n\n".join(
-        f"【{d.filename}｜{d.note}】\n{d.extracted_text}" for d in docs)
+    brand = session.get(Brand, campaign.brand_id)
+    ref_ids = [r.pool_topic_id for r in session.exec(
+        select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id)).all()]
+    refs = session.exec(select(PoolTopic).where(PoolTopic.id.in_(ref_ids))).all() if ref_ids else []
+    parts = [f"活动：{campaign.name}"]
+    if brand and brand.brand_prompt:
+        parts.append(f"【品牌定义】\n{brand.brand_prompt}")
+    parts += [f"【资料｜{d.filename}｜{d.note}】\n{d.extracted_text}" for d in docs]
+    parts += [f"【引用数据池｜{t.title}】\n{t.content}" for t in refs]
+    material = "\n\n".join(parts)
     campaign.campaign_digest = llm.generate_text(material[:_ANALYZE_CHARS],
                                                  task="campaign_digest")
     session.add(campaign)

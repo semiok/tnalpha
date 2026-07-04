@@ -1,23 +1,30 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, text_input, file_input, notice %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, text_input, file_input, select_input %}
 {% block content %}
   {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
   {{ page_header("①知识库", campaign.name, crumbs=[
       ("首页","/"), (brand.name, "/brands/" ~ brand.id), (campaign.name, "")]) }}
-  {% if not request.state.knowledge_writable %}{{ notice("🚧 知识库功能开发中，当前为只读预览。") }}{% endif %}
 
   <div class="mb-4 flex items-center gap-2">
     {% if campaign.is_default %}{{ chip("品牌日常·常驻", "slate") }}
     {% elif campaign.start_date %}{{ chip(campaign.start_date.strftime('%Y.%m.%d') ~ "–" ~ (campaign.end_date.strftime('%m.%d') if campaign.end_date else "?"), "amber") }}{% endif %}
   </div>
 
-  {# ── 活动资料 + AI 解析 ── #}
+  {# ── 活动资料（上传/下载/删除）── #}
   {{ card_open("活动资料（强时效·AI 读）") }}
     <div class="space-y-2 mb-3">
       {% for d in docs %}
       <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 text-sm">
         <span>📄 {{ d.filename }}{% if d.note %} <span class="text-slate-400">· {{ d.note }}</span>{% endif %}</span>
-        <span class="text-xs text-slate-400">{{ d.created_at.strftime('%Y-%m-%d') }}</span>
+        <span class="flex items-center gap-3 text-xs">
+          <a href="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/download" class="text-brand-600 hover:text-brand-700">下载</a>
+          {% if can_edit %}
+          <form method="post" action="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/delete" class="inline"
+                onsubmit="return confirm('删除该资料？')">
+            <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+          </form>
+          {% endif %}
+        </span>
       </div>
       {% else %}
       {{ empty_state("还没有活动资料。") }}
@@ -33,9 +40,40 @@
     {% endif %}
   {{ card_close() }}
 
-  {{ card_open("AI 解析结果") }}
+  {# ── 引用数据池（只引用不上传；上传在「数据池管理」）── #}
+  {{ card_open("引用数据池（弱相关参考）") }}
+    <div class="flex flex-wrap gap-2 mb-3">
+      {% for t in refs %}
+      <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs">
+        ✅ {{ t.title }}
+        {% if can_edit %}
+        <form method="post" action="/campaigns/{{ campaign.id }}/pool-refs/{{ t.id }}/delete" class="inline">
+          <button type="submit" class="text-emerald-700/70 hover:text-rose-600" title="取消引用">✕</button>
+        </form>
+        {% endif %}
+      </span>
+      {% else %}
+      <span class="text-slate-400 text-sm">尚未引用数据池条目。</span>
+      {% endfor %}
+    </div>
     {% if can_edit %}
-    <div class="mb-2">{{ button("AI 解析活动资料", variant="secondary",
+      {% if available %}
+      <form method="post" action="/campaigns/{{ campaign.id }}/pool-refs" class="flex items-center gap-2">
+        <select name="pool_topic_id" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+          {% for t in available %}<option value="{{ t.id }}">{{ t.kind }}｜{{ t.title }}</option>{% endfor %}
+        </select>
+        {{ button("＋ 引用", variant="secondary", type="submit") }}
+      </form>
+      {% else %}
+      <div class="text-xs text-slate-400">数据池没有可引用条目，去<a href="/pool" class="text-brand-600">数据池管理</a>添加。</div>
+      {% endif %}
+    {% endif %}
+  {{ card_close() }}
+
+  {# ── AI 解析：读品牌定义+活动资料+引用数据池 → 生成提示词（供②选题库读）── #}
+  {{ card_open("🧠 AI 解析结果（提示词 · 供选题库读）") }}
+    {% if can_edit %}
+    <div class="mb-2">{{ button("🧠 AI 解析（品牌定义 + 资料 + 引用数据池 → 提示词）", variant="secondary",
         hx_post="/campaigns/" ~ campaign.id ~ "/parse", hx_target="#campaign-digest", hx_swap="innerHTML") }}</div>
     {% endif %}
     <div id="campaign-digest">

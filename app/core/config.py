@@ -21,7 +21,7 @@ KNOWLEDGE_WRITABLE = os.environ.get("TNALPHA_KNOWLEDGE_WRITABLE", "false").strip
 # ── LLM provider（DB 设置为主，下面是建默认行时的初值 / env 兜底）──
 # 文本 provider：stub | openai(兼容API) | minimax-m3 | claude-cli(订阅授权)
 # 图像 provider：stub | codex(订阅授权) | minimax-m3
-TEXT_PROVIDER = os.environ.get("TNALPHA_TEXT_PROVIDER", "stub")
+TEXT_PROVIDER = os.environ.get("TNALPHA_TEXT_PROVIDER", "claude-cli")  # 默认本机 Claude；无/失败回退 stub
 IMAGE_PROVIDER = os.environ.get("TNALPHA_IMAGE_PROVIDER", "stub")
 # openai 兼容（OpenAI/DeepSeek/Moonshot/MiniMax/Ollama…）
 OPENAI_BASE_URL = os.environ.get("TNALPHA_OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -33,6 +33,8 @@ IMAGE_API_KEY = os.environ.get("TNALPHA_IMAGE_API_KEY", "")
 IMAGE_PROVIDER_MODEL = os.environ.get("TNALPHA_IMAGE_PROVIDER_MODEL", "image-01")
 # claude-cli（本机 claude CLI 订阅授权）
 CLAUDE_MODEL = os.environ.get("TNALPHA_CLAUDE_MODEL", "sonnet")
+# claude 二进制路径：默认按 PATH 找 "claude"；不在 PATH（如 launchd 受限环境）就设全路径
+CLAUDE_BIN = os.environ.get("TNALPHA_CLAUDE_BIN", "claude")
 LLM_TIMEOUT = int(os.environ.get("TNALPHA_LLM_TIMEOUT", "180"))
 # codex（本机 ~/.codex/auth.json OAuth 出图）
 CODEX_AUTH_PATH = os.environ.get("TNALPHA_CODEX_AUTH", "~/.codex/auth.json")

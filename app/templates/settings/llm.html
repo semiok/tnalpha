@@ -1,7 +1,9 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, button, chip, text_input, select_input %}
+{% from "components/ui.html" import page_header, card_open, card_close, button, chip, text_input, select_input, notice %}
 {% block content %}
   {{ page_header("设置", "模型配置", crumbs=[("首页","/"), ("模型配置","")]) }}
+
+  {{ notice("这是「默认模型配置」，当前适用于知识库及所有模块。各模块开发时可单独覆盖用别的模型（接口已预留，未单配的模块自动继承此默认）。你的环境填 Claude、协作者本地填 minimax，互不影响。", "brand") }}
 
   <form method="post" action="/settings/llm" class="space-y-4">
     {{ card_open("文本模型") }}
