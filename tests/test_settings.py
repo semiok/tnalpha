@@ -395,3 +395,102 @@ def test_generate_text_routes_by_module(fresh_db, monkeypatch):
     monkeypatch.setattr(llm.openai_compat, "generate_text", lambda *a, **k: "TOPIC")
     assert llm.generate_text("hi", module="topic") == "TOPIC"        # 路由到 topic 的 openai
     assert "[stub" in llm.generate_text("hi", module="knowledge")    # 知识库未单配 → default=stub
+
+
+# ── Codex 授权文本 provider（Responses API，gpt-5.5 思考 high）──
+
+class _FakeCodexResp:
+    """假流式响应：可迭代出 SSE 字节行 + 支持 with。"""
+    def __init__(self, lines): self._lines = lines
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def __iter__(self): return iter(self._lines)
+
+
+def _fake_auth(tmp_path, monkeypatch):
+    from app.core import config
+    auth = tmp_path / "auth.json"
+    auth.write_text('{"tokens":{"access_token":"t","account_id":"a"}}')
+    monkeypatch.setattr(config, "CODEX_AUTH_PATH", str(auth))
+
+
+def test_codex_text_accumulates_delta_and_sends_reasoning(monkeypatch, tmp_path):
+    import json
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+    lines = [
+        b'data: {"type":"response.output_text.delta","delta":"\\u6566\\u714c"}\n',
+        b'data: {"type":"response.output_text.delta","delta":"\\u83ab\\u9ad8\\u7a9f"}\n',
+        b'data: {"type":"response.output_text.done","text":"IGNORED"}\n',
+        b'data: [DONE]\n',
+    ]
+    captured = {}
+
+    def fake_urlopen(req, *a, **k):
+        captured["body"] = json.loads(req.data)
+        return _FakeCodexResp(lines)
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", fake_urlopen)
+    out = codex_text.generate_text("介绍", model="gpt-5.5", reasoning="high")
+    assert out == "敦煌莫高窟"                                  # 累积 delta（优先于 done.text）
+    assert captured["body"]["model"] == "gpt-5.5"
+    assert captured["body"]["reasoning"]["effort"] == "high"    # 思考 high 进 body
+
+
+def test_codex_text_http_error_raises(monkeypatch, tmp_path):
+    import io
+    import urllib.error
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, io.BytesIO(b"nope"))
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", boom)
+    with pytest.raises(RuntimeError):
+        codex_text.generate_text("hi")
+
+
+def test_router_dispatches_to_codex(monkeypatch):
+    _CODEX = {**_OPENAI, "text_provider": "codex", "codex_model": "gpt-5.5"}
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _CODEX)
+    seen = {}
+
+    def fake(prompt, model=None, timeout=180, pdf_path=None):
+        seen["model"] = model
+        return "CODEX结果"
+
+    monkeypatch.setattr(llm.codex_text, "generate_text", fake)
+    assert llm.generate_text("hi", module="knowledge") == "CODEX结果"
+    assert seen["model"] == "gpt-5.5"                           # 用 DB 里配的 codex_model
+
+
+def test_resolve_includes_codex_model(fresh_db):
+    from sqlmodel import Session
+    from app.core.settings import get_llm_settings, resolve_llm_settings
+    with Session(fresh_db) as s:
+        d = get_llm_settings(s); d.codex_model = "gpt-5.5"; s.add(d); s.commit()
+        assert resolve_llm_settings(s, "default")["codex_model"] == "gpt-5.5"
+        assert resolve_llm_settings(s, "topic")["codex_model"] == "gpt-5.5"   # 继承 default
+
+
+def test_codex_text_attaches_pdf_as_input_file(monkeypatch, tmp_path):
+    """深度读图：pdf_path 非空 → 把 PDF 作 input_file(base64 data URI) 塞进 input。"""
+    import json
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    lines = [b'data: {"type":"response.output_text.delta","delta":"ok"}\n', b'data: [DONE]\n']
+    captured = {}
+
+    def fake_urlopen(req, *a, **k):
+        captured["body"] = json.loads(req.data)
+        return _FakeCodexResp(lines)
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", fake_urlopen)
+    assert codex_text.generate_text("看图", model="gpt-5.5", pdf_path=str(pdf)) == "ok"
+    content = captured["body"]["input"][0]["content"]
+    f = next(c for c in content if c["type"] == "input_file")
+    assert f["filename"] == "doc.pdf"
+    assert f["file_data"].startswith("data:application/pdf;base64,")
