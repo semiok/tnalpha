@@ -16,18 +16,20 @@ from app.modules.knowledge.models import (
 )
 
 _ANALYZE_CHARS = 12000
+_VISUAL_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "pdf"}   # 可交给 vision 读的附件类型
 
-# 活动资料深度读图提示（读 PDF 图片页；只 claude-cli/codex 真读图，其余 provider 忽略 pdf 按文本）
-_CAMPAIGN_DOC_READ = (
-    "请阅读这份活动资料（PDF，含图片页），提取对内容创作有用的信息："
-    "活动主题、关键信息点、时间/地点节点、视觉风格与画面元素。用简体中文，分点。")
+
+def _is_visual(path: str) -> bool:
+    from pathlib import Path
+    return Path(path).suffix.lower().lstrip(".") in _VISUAL_EXTS
 
 
 def _campaign_digest_prompt(material: str) -> str:
     return (
-        "你是资深内容策划。基于以下某活动的品牌定义、活动资料、引用数据池，提炼一份"
-        "「活动内容提示词」，供选题库据此推荐选题：包含①活动核心主题与卖点、②可用内容方向、"
-        "③调性与表达要点、④关键素材/信息点。用简体中文，结构清晰、可直接引用。\n\n" + material)
+        "你是资深内容策划。基于以下某活动的品牌定义、活动资料、引用数据池（含随本条消息附上的"
+        "PDF/图片附件，请一并仔细阅读并纳入），提炼一份「活动内容提示词」，供选题库据此推荐选题："
+        "包含①活动核心主题与卖点、②可用内容方向、③调性与表达要点、④关键素材/信息点（含图片里看到的"
+        "视觉元素）。用简体中文，结构清晰、可直接引用。\n\n" + material)
 
 
 def run_analysis(brand_id: int, session: Session) -> None:
@@ -133,23 +135,27 @@ def run_campaign_analysis(campaign_id: int, session: Session) -> None:
         select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id)).all()]
     refs = session.exec(select(PoolTopic).where(PoolTopic.id.in_(ref_ids))).all() if ref_ids else []
 
-    # ── Phase 1：LLM 调用（深度读图文档读 PDF）──
+    # ── Phase 1：拼文本素材 + 收集 vision 附件，一次性调用（codex/claude 读 PDF+图片）──
+    # 深度读图的活动资料、以及引用的「图片/PDF 型数据池」→ 作附件交给 vision；其余走抽取文字/content。
     parts = [f"活动：{campaign.name}"]
     if brand and brand.brand_prompt:
         parts.append(f"【品牌定义】\n{brand.brand_prompt}")
+    attachments: list[str] = []
     for d in docs:
-        if d.deep_read:
-            try:
-                desc = llm.generate_text(f"{_CAMPAIGN_DOC_READ}\n\n文件名：{d.filename}",
-                                         task="campaign_doc", pdf_path=d.file_path)
-            except Exception as e:                       # 读图失败不拖垮整体，退回抽取文字
-                desc = f"[读图失败: {str(e)[:80]}]\n{d.extracted_text}"
-            parts.append(f"【资料·读图｜{d.filename}｜{d.note}】\n{desc}")
+        if d.deep_read and d.file_path and _is_visual(d.file_path):
+            attachments.append(d.file_path)
+            parts.append(f"【资料·见附件｜{d.filename}｜{d.note}】")
         else:
             parts.append(f"【资料｜{d.filename}｜{d.note}】\n{d.extracted_text}")
-    parts += [f"【引用数据池｜{t.title}】\n{t.content}" for t in refs]
+    for t in refs:
+        if t.file_path and _is_visual(t.file_path) and not (t.content or "").strip():
+            attachments.append(t.file_path)          # 图片型数据池（无正文）→ 附件读图
+            parts.append(f"【引用数据池·见附件｜{t.title}】")
+        else:
+            parts.append(f"【引用数据池｜{t.title}】\n{t.content}")
     material = "\n\n".join(parts)[:_ANALYZE_CHARS]
-    digest = llm.generate_text(_campaign_digest_prompt(material), task="campaign_digest")
+    digest = llm.generate_text(_campaign_digest_prompt(material),
+                               task="campaign_digest", attachments=attachments)
 
     # ── Phase 2：一次性写库 ──
     campaign.campaign_digest = digest

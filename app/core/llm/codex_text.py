@@ -18,6 +18,7 @@ from app.core import config
 
 _MAX_ATTEMPTS = 3          # 首次 + 2 次重试
 _BACKOFF_BASE = 1.5        # 递增退避基数（秒）
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}   # 走 input_image；其余（pdf）走 input_file
 
 
 class _CodexAuthError(RuntimeError):
@@ -29,15 +30,31 @@ def _access(auth_path: str) -> tuple[str, str]:
     return tok["access_token"], tok["account_id"]
 
 
-def _attempt(prompt: str, model: str | None, timeout: int,
-             reasoning: str | None, pdf_path: str | None) -> str:
+def _file_part(fp: str) -> dict | None:
+    """把一个文件转成 Responses API content 块：图片→input_image，PDF/其余→input_file。不存在则跳过。"""
+    p = Path(fp)
+    if not p.exists():
+        return None
+    ext = p.suffix.lower().lstrip(".")
+    b64 = base64.b64encode(p.read_bytes()).decode()
+    if ext in _IMAGE_EXTS:
+        mime = "jpeg" if ext == "jpg" else ext
+        return {"type": "input_image", "image_url": f"data:image/{mime};base64,{b64}"}
+    return {"type": "input_file", "filename": p.name,
+            "file_data": f"data:application/pdf;base64,{b64}"}
+
+
+def _attempt(prompt: str, model: str | None, timeout: int, reasoning: str | None,
+             pdf_path: str | None, attachments: list[str] | None) -> str:
     access_token, account_id = _access(config.CODEX_AUTH_PATH)
     content: list[dict] = [{"type": "input_text", "text": prompt}]
-    if pdf_path:  # 深度读图：把 PDF（含图片页）作为 input_file 塞进去，gpt-5.5 直接读
-        p = Path(pdf_path)
-        b64 = base64.b64encode(p.read_bytes()).decode()
-        content.append({"type": "input_file", "filename": p.name,
-                        "file_data": f"data:application/pdf;base64,{b64}"})
+    files = list(attachments or [])
+    if pdf_path:                               # 兼容旧签名：单 PDF 也当附件
+        files.append(pdf_path)
+    for fp in files:                           # 深度读图：PDF/图片直接交给 gpt-5.5 读
+        part = _file_part(fp)
+        if part:
+            content.append(part)
     body = {
         "model": model or config.CODEX_TEXT_MODEL, "store": False, "stream": True,
         "instructions": "You are a helpful assistant. 用简体中文回答。",
@@ -90,11 +107,12 @@ def _attempt(prompt: str, model: str | None, timeout: int,
 
 
 def generate_text(prompt: str, model: str | None = None, timeout: int = 180,
-                  reasoning: str | None = None, pdf_path: str | None = None) -> str:
+                  reasoning: str | None = None, pdf_path: str | None = None,
+                  attachments: list[str] | None = None) -> str:
     last: Exception | None = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            return _attempt(prompt, model, timeout, reasoning, pdf_path)
+            return _attempt(prompt, model, timeout, reasoning, pdf_path, attachments)
         except _CodexAuthError:           # 授权错误：不重试
             raise
         except RuntimeError as e:         # 瞬时错误（HTTP 5xx/limit、response.failed、空响应）：重试

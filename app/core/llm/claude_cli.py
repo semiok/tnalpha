@@ -9,9 +9,13 @@ from app.core import config
 
 
 def generate_text(prompt: str, model: str = "sonnet", timeout: int = 180,
-                  pdf_path: str | None = None) -> str:
-    if pdf_path:  # 深度读图：让 claude 读该 PDF（含图片页），用 Read 工具（照 tngen）
-        args = [config.CLAUDE_BIN, "-p", f"{prompt}\n\n请阅读该 PDF 文件（含图片页）：{pdf_path}",
+                  pdf_path: str | None = None, attachments: list[str] | None = None) -> str:
+    files = list(attachments or [])
+    if pdf_path:                    # 兼容旧签名：单 PDF 也当附件
+        files.append(pdf_path)
+    if files:  # 深度读图：让 claude 读这些文件（PDF 含图片页 / 图片），用 Read 工具（照 tngen）
+        flist = "、".join(files)
+        args = [config.CLAUDE_BIN, "-p", f"{prompt}\n\n请阅读这些文件（含图片页）：{flist}",
                 "--model", model, "--allowedTools", "Read"]
     else:
         args = [config.CLAUDE_BIN, "-p", prompt, "--model", model]

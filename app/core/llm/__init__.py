@@ -33,9 +33,9 @@ def _settings(scope: str = "default") -> dict:
 
 
 def generate_text(prompt: str, task: str = "default", pdf_path: str | None = None,
-                  module: str = "default") -> str:
+                  module: str = "default", attachments: list[str] | None = None) -> str:
     """module=模块名，按模块选模型（未配→继承 default=知识库锚点）。task 仅供 stub 标注。
-    pdf_path 非空=深度读图（只 claude-cli 支持读 PDF 图片页；其余 provider 忽略 pdf、仅按文本生成）。"""
+    pdf_path/attachments 非空=深度读图（PDF 图片页 / 图片；只 claude-cli / codex 真读，其余 provider 忽略、仅按文本）。"""
     st = _settings(module)
     p = st["text_provider"]
     try:
@@ -44,11 +44,11 @@ def generate_text(prompt: str, task: str = "default", pdf_path: str | None = Non
                 prompt, st["openai_base_url"], st["openai_api_key"],
                 st["openai_model"], timeout=config.LLM_TIMEOUT)
         if p == "claude-cli":
-            return claude_cli.generate_text(prompt, st["claude_model"],
-                                            timeout=config.LLM_TIMEOUT, pdf_path=pdf_path)
-        if p == "codex":       # Codex 授权文本（gpt-5.5 思考 high）；支持深度读图（PDF 作 input_file）
-            return codex_text.generate_text(prompt, st["codex_model"],
-                                            timeout=config.LLM_TIMEOUT, pdf_path=pdf_path)
+            return claude_cli.generate_text(prompt, st["claude_model"], timeout=config.LLM_TIMEOUT,
+                                            pdf_path=pdf_path, attachments=attachments)
+        if p == "codex":       # Codex 授权文本（gpt-5.5）；深度读图：PDF→input_file、图片→input_image
+            return codex_text.generate_text(prompt, st["codex_model"], timeout=config.LLM_TIMEOUT,
+                                            pdf_path=pdf_path, attachments=attachments)
     except Exception as e:
         print(f"[llm] 文本 provider '{p}' 失败，回退 stub：{e}")
     return stub.generate_text(prompt, task=task)

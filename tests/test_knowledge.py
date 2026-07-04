@@ -452,3 +452,27 @@ def test_editor_cannot_define_or_ref(owner_client, editor_client, fresh_db):
                               data={"brand_prompt": "x"}).status_code == 403
     assert editor_client.post(f"/campaigns/{cid}/pool-refs",
                               data={"pool_topic_id": "1"}).status_code == 403
+
+
+def test_campaign_analysis_attaches_pool_image(owner_client, fresh_db, monkeypatch):
+    """引用的图片型数据池（有文件、无正文）→ 作 vision 附件传给 LLM（修复"图片未附上"）。"""
+    from sqlmodel import Session, select
+    from app.modules.knowledge import analysis
+    from app.modules.knowledge.models import PoolTopic
+    brand_id = _create_brand(owner_client)
+    cid = _create_campaign(owner_client, brand_id)
+    owner_client.post("/pool", data={"title": "竹简图", "kind": "资料包"},
+                      files={"file": ("z.png", b"\x89PNG", "image/png")})
+    with Session(fresh_db) as s:
+        pid = s.exec(select(PoolTopic).where(PoolTopic.title == "竹简图")).first().id
+    owner_client.post(f"/campaigns/{cid}/pool-refs", data={"pool_topic_id": pid})
+    captured = {}
+
+    def fake_gen(prompt, task="default", attachments=None, **k):
+        captured["attachments"] = attachments or []
+        return "digest"
+
+    monkeypatch.setattr(analysis.llm, "generate_text", fake_gen)
+    with Session(fresh_db) as s:
+        analysis.run_campaign_analysis(cid, s)
+    assert any(a.endswith(".png") for a in captured["attachments"])   # 图片作附件了
