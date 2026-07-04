@@ -3,6 +3,13 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.1] - 2026-07-04
+
+### 修复
+- **活动 AI 解析现在真读图片/PDF**：修复「引用的图片型数据池」与「深度读图 PDF」未被 vision 读取——此前活动解析只把数据池 `content` 文本拼进去，图片无正文 → 完全丢失（用户反馈"图片未附上"）；深度读图 PDF 也只喂了抽取文字（网页转 PDF 常抽到链接/导航垃圾）。现 `core/llm` 加 `attachments` 参数（图片→`input_image`、PDF→`input_file`，支持多附件，codex/claude 通用），`run_campaign_analysis` 把 deep_read 文档 + 图片型数据池收集为附件、一次性交给 vision 读。实测 codex 准确读出 PDF 正文（展期/文物尺寸/作品名）+ 竹简图片内容。
+
+[0.6.1]: https://github.com/semiok/tnalpha/releases/tag/v0.6.1
+
 ## [0.6.0] - 2026-07-04
 
 ### 新增

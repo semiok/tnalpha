@@ -145,7 +145,7 @@ def test_router_dispatches_to_claude_cli_with_model(monkeypatch):
     monkeypatch.setattr(llm, "_settings", lambda *a, **k: _CLAUDE)
     seen = {}
 
-    def fake(prompt, model="sonnet", timeout=180, pdf_path=None):
+    def fake(prompt, model="sonnet", timeout=180, pdf_path=None, attachments=None):
         seen["model"] = model
         return "CLAUDE结果"
 
@@ -456,7 +456,7 @@ def test_router_dispatches_to_codex(monkeypatch):
     monkeypatch.setattr(llm, "_settings", lambda *a, **k: _CODEX)
     seen = {}
 
-    def fake(prompt, model=None, timeout=180, pdf_path=None):
+    def fake(prompt, model=None, timeout=180, pdf_path=None, attachments=None):
         seen["model"] = model
         return "CODEX结果"
 
@@ -532,3 +532,23 @@ def test_codex_text_auth_error_no_retry(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError):
         codex_text.generate_text("hi")
     assert calls["n"] == 1                                           # 401 不重试
+
+
+def test_codex_text_attaches_image_as_input_image(monkeypatch, tmp_path):
+    """图片附件 → input_image(base64 data URI)。"""
+    import json
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+    img = tmp_path / "pic.png"
+    img.write_bytes(b"\x89PNG fake")
+    lines = [b'data: {"type":"response.output_text.delta","delta":"ok"}\n', b'data: [DONE]\n']
+    captured = {}
+
+    def fake_urlopen(req, *a, **k):
+        captured["body"] = json.loads(req.data)
+        return _FakeCodexResp(lines)
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", fake_urlopen)
+    assert codex_text.generate_text("看图", model="gpt-5.5", attachments=[str(img)]) == "ok"
+    part = next(c for c in captured["body"]["input"][0]["content"] if c["type"] == "input_image")
+    assert part["image_url"].startswith("data:image/png;base64,")
