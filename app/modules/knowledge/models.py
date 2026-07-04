@@ -87,4 +87,5 @@ class PoolTopic(SQLModel, table=True):
     brand_tag: str | None = None     # 来源品牌 tag（可空 = 通用）
     content: str = ""                # 解析结果 / 经验摘要（上传文件时=抽出的正文）
     file_path: str = ""              # 上传原文件路径（可空；追加列，②⑤ 只读 content 不受影响）
+    deep_read: bool = False          # 深度读图（只对 PDF 有意义；图片自动读图、文字走正文，无需开关）
     created_at: datetime = Field(default_factory=_now)

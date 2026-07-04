@@ -391,6 +391,20 @@ def download_pool_file(topic_id: int, session: Session = Depends(get_session)):
     return FileResponse(topic.file_path, filename=Path(topic.file_path).name)
 
 
+@router.post("/pool/{topic_id}/deep-read")
+def toggle_pool_deep_read(topic_id: int, request: Request,
+                          session: Session = Depends(get_session)):
+    """切换数据池条目的「深度读图」（只对 PDF 有意义；图片自动读图、文字走正文）。"""
+    auth.require_level(request, 2)
+    topic = session.get(PoolTopic, topic_id)
+    if not topic:
+        raise HTTPException(404, "条目不存在")
+    topic.deep_read = not topic.deep_read
+    session.add(topic)
+    session.commit()
+    return RedirectResponse("/pool", status_code=303)
+
+
 @router.get("/styleguide")
 def styleguide(request: Request):
     """组件样例页——开发参考，展示设计系统所有组件。"""
