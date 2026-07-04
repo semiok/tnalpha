@@ -16,20 +16,38 @@ from app.modules.knowledge.models import (
 )
 
 _ANALYZE_CHARS = 12000
-_VISUAL_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "pdf"}   # 可交给 vision 读的附件类型
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}   # 图片：天生只能 vision，永远读图
 
 
-def _is_visual(path: str) -> bool:
+def _ext(path: str) -> str:
     from pathlib import Path
-    return Path(path).suffix.lower().lstrip(".") in _VISUAL_EXTS
+    return Path(path).suffix.lower().lstrip(".") if path else ""
+
+
+def _as_attachment(file_path: str, deep_read: bool) -> bool:
+    """该文件是否作 vision 附件读：图片永远是；PDF 看 deep_read 开关；其余（docx/pptx/txt…）走文字。
+    vision 只吃 PDF+图片——PPT/Word 要读图需先导出 PDF。"""
+    e = _ext(file_path)
+    if e in _IMAGE_EXTS:
+        return True
+    return e == "pdf" and bool(deep_read)
 
 
 def _campaign_digest_prompt(material: str) -> str:
     return (
-        "你是资深内容策划。基于以下某活动的品牌定义、活动资料、引用数据池（含随本条消息附上的"
-        "PDF/图片附件，请一并仔细阅读并纳入），提炼一份「活动内容提示词」，供选题库据此推荐选题："
-        "包含①活动核心主题与卖点、②可用内容方向、③调性与表达要点、④关键素材/信息点（含图片里看到的"
-        "视觉元素）。用简体中文，结构清晰、可直接引用。\n\n" + material)
+        "你是资深内容策划。品牌的调性/文风/写作规范/视觉风格已由下方「品牌定义」固定，本文不要重复。\n"
+        "只针对这个**活动**，提炼一份有时效性的「活动选题简报」，供选题库产出高时效活动选题。\n"
+        "⚠️ 活动类型不定（展览/节日促销/新品/快闪/联名…）——先判断是什么活动，再按它实际有的内容填；"
+        "有则填、无则略、绝不编造。\n\n"
+        "① 活动速览：一切精确可引用的关键事实（名称/时间/地点/参与方/规模/主张/产品/价格/优惠…有什么写什么）\n"
+        "② 时效节点：活动的时间结构（预热/进行中/收尾各适合什么选题 + 可结合的时令/节日/热点）\n"
+        "③ 可用选题方向：本活动具体角度，每条标注【受众·内容类型·时效强弱】\n"
+        "④ 关键素材清单：可直接用于内容的具体素材（产品/展品/物件/人物/数据/卖点，带规格/价格/来源等，有则带）\n"
+        "⑤ 配图素材：本活动可用图片（附件里的图/PDF）及适用场景\n"
+        "⑥ 参考与经验（来自引用的数据池，属弱相关参考、不喧宾夺主）：\n"
+        "   -「资料包」类：作为补充背景/佐证素材，指出能支撑上面哪些选题方向\n"
+        "   -「经验包」类（过往复盘沉淀）：据此给打法建议——本次选题优先做什么（已验证有效）、规避什么（曾失效）\n\n"
+        "用简体中文，结构清晰、选题库拿了直接能用。附件里的 PDF/图片请仔细读。\n\n" + material)
 
 
 def run_analysis(brand_id: int, session: Session) -> None:
@@ -142,17 +160,18 @@ def run_campaign_analysis(campaign_id: int, session: Session) -> None:
         parts.append(f"【品牌定义】\n{brand.brand_prompt}")
     attachments: list[str] = []
     for d in docs:
-        if d.deep_read and d.file_path and _is_visual(d.file_path):
+        if _as_attachment(d.file_path, d.deep_read):     # 图片自动 / PDF 勾深度读图 → vision
             attachments.append(d.file_path)
             parts.append(f"【资料·见附件｜{d.filename}｜{d.note}】")
         else:
             parts.append(f"【资料｜{d.filename}｜{d.note}】\n{d.extracted_text}")
-    for t in refs:
-        if t.file_path and _is_visual(t.file_path) and not (t.content or "").strip():
-            attachments.append(t.file_path)          # 图片型数据池（无正文）→ 附件读图
-            parts.append(f"【引用数据池·见附件｜{t.title}】")
+    for t in refs:                                       # 数据池：带 kind(资料包/经验包)+触网，让 AI 分清用法
+        tag = f"{t.kind}·{'触网' if t.web_access else '不触网'}"
+        if _as_attachment(t.file_path, t.deep_read):     # 图片自动 / PDF 勾深度读图 → vision
+            attachments.append(t.file_path)
+            parts.append(f"【引用数据池·{tag}·见附件｜{t.title}】")
         else:
-            parts.append(f"【引用数据池｜{t.title}】\n{t.content}")
+            parts.append(f"【引用数据池·{tag}｜{t.title}】\n{t.content}")
     material = "\n\n".join(parts)[:_ANALYZE_CHARS]
     digest = llm.generate_text(_campaign_digest_prompt(material),
                                task="campaign_digest", attachments=attachments)

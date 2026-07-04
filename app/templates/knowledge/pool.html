@@ -13,7 +13,7 @@
     {{ table_open(["标题", "类型", "触网", "来源", "品牌", "时间"]) }}
       {% for t in topics %}
       <tr class="border-b border-slate-50">
-        <td class="py-2">{{ t.title }}{% if t.file_path %} <a href="/pool/{{ t.id }}/download" class="text-brand-600 hover:text-brand-700 text-xs ml-1">📎 下载</a>{% endif %}</td>
+        <td class="py-2">{{ t.title }}{% if t.file_path %} <a href="/pool/{{ t.id }}/download" class="text-brand-600 hover:text-brand-700 text-xs ml-1">📎 下载</a>{% set ext = t.file_path.lower().rsplit('.', 1)[-1] if '.' in t.file_path else '' %}{% if ext == 'pdf' and can_edit %} <form method="post" action="/pool/{{ t.id }}/deep-read" class="inline ml-2"><label class="text-xs {{ 'text-brand-600' if t.deep_read else 'text-slate-400' }} cursor-pointer"><input type="checkbox" onchange="this.form.submit()" {{ 'checked' if t.deep_read else '' }}> 深度读图</label></form>{% elif ext in ['png','jpg','jpeg','webp','gif'] %} <span class="text-emerald-600 text-xs ml-2">🖼 自动读图</span>{% endif %}{% endif %}</td>
         <td>{{ chip(t.kind, "brand" if t.kind == "经验包" else "slate") }}</td>
         <td>{{ chip("触网", "emerald") if t.web_access else chip("不触网", "amber") }}</td>
         <td class="text-slate-500">{{ t.source }}</td>

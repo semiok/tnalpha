@@ -17,13 +17,14 @@
       <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 text-sm">
         <span>📄 {{ d.filename }}{% if d.note %} <span class="text-slate-400">· {{ d.note }}</span>{% endif %}</span>
         <span class="flex items-center gap-3 text-xs">
-          {% if can_edit %}
+          {% set ext = d.filename.lower().rsplit('.', 1)[-1] if '.' in d.filename else '' %}
+          {% if ext == 'pdf' and can_edit %}
           <form method="post" action="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/deep-read" class="inline flex items-center gap-1">
             <label class="flex items-center gap-1 {{ 'text-brand-600' if d.deep_read else 'text-slate-400' }} cursor-pointer">
               <input type="checkbox" onchange="this.form.submit()" {{ 'checked' if d.deep_read else '' }}> 深度读图
             </label>
           </form>
-          {% endif %}
+          {% elif ext in ['png','jpg','jpeg','webp','gif'] %}<span class="text-emerald-600">🖼 自动读图</span>{% endif %}
           <a href="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/download" class="text-brand-600 hover:text-brand-700">下载</a>
           {% if can_edit %}
           <form method="post" action="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/delete" class="inline"

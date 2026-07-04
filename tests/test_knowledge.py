@@ -476,3 +476,48 @@ def test_campaign_analysis_attaches_pool_image(owner_client, fresh_db, monkeypat
     with Session(fresh_db) as s:
         analysis.run_campaign_analysis(cid, s)
     assert any(a.endswith(".png") for a in captured["attachments"])   # 图片作附件了
+
+
+def test_pool_deep_read_toggle(owner_client, fresh_db):
+    from sqlmodel import Session, select
+    from app.modules.knowledge.models import PoolTopic
+    owner_client.post("/pool", data={"title": "T", "kind": "资料包"},
+                      files={"file": ("x.pdf", b"%PDF", "application/pdf")})
+    with Session(fresh_db) as s:
+        t = s.exec(select(PoolTopic).where(PoolTopic.title == "T")).first()
+        assert t.deep_read is False
+    owner_client.post(f"/pool/{t.id}/deep-read", follow_redirects=False)
+    with Session(fresh_db) as s:
+        assert s.get(PoolTopic, t.id).deep_read is True
+
+
+def test_campaign_analysis_pool_kind_label_and_pdf_deepread(owner_client, fresh_db, monkeypatch):
+    """数据池引用带 kind 标签；PDF 默认走文字、开深度读图才作 vision 附件。"""
+    from sqlmodel import Session, select
+    from app.modules.knowledge import analysis
+    from app.modules.knowledge.models import PoolTopic
+    brand_id = _create_brand(owner_client)
+    cid = _create_campaign(owner_client, brand_id)
+    owner_client.post("/pool", data={"title": "复盘A", "kind": "经验包", "content": "开箱视频转化高"})
+    owner_client.post("/pool", data={"title": "手册B", "kind": "资料包"},
+                      files={"file": ("m.pdf", b"%PDF", "application/pdf")})
+    with Session(fresh_db) as s:
+        exp = s.exec(select(PoolTopic).where(PoolTopic.title == "复盘A")).first()
+        pdf = s.exec(select(PoolTopic).where(PoolTopic.title == "手册B")).first()
+    owner_client.post(f"/campaigns/{cid}/pool-refs", data={"pool_topic_id": exp.id})
+    owner_client.post(f"/campaigns/{cid}/pool-refs", data={"pool_topic_id": pdf.id})
+    cap = {}
+
+    def fake_gen(prompt, task="default", attachments=None, **k):
+        cap["prompt"], cap["attachments"] = prompt, attachments or []
+        return "d"
+
+    monkeypatch.setattr(analysis.llm, "generate_text", fake_gen)
+    with Session(fresh_db) as s:
+        analysis.run_campaign_analysis(cid, s)
+    assert "经验包" in cap["prompt"] and "资料包" in cap["prompt"]        # 带 kind 标签
+    assert not any(a.endswith(".pdf") for a in cap["attachments"])        # PDF 未开深度读图 → 不附件
+    owner_client.post(f"/pool/{pdf.id}/deep-read")                        # 开 PDF 深度读图
+    with Session(fresh_db) as s:
+        analysis.run_campaign_analysis(cid, s)
+    assert any(a.endswith(".pdf") for a in cap["attachments"])           # 开了 → 作附件
