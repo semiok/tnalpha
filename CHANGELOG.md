@@ -3,6 +3,13 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.1] - 2026-07-04
+
+### 变更
+- **Codex 文本默认思考档位 high → medium**（速度/质量平衡；`TNALPHA_CODEX_REASONING` 可覆盖 high/low）。徽章文案同步为「gpt-5.5·思考medium」。注：全流程主要耗时在深度读图（PDF）调用，思考档位对文本调用影响有限。
+
+[0.5.1]: https://github.com/semiok/tnalpha/releases/tag/v0.5.1
+
 ## [0.5.0] - 2026-07-04
 
 ### 新增

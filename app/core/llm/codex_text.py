@@ -32,7 +32,7 @@ def generate_text(prompt: str, model: str | None = None, timeout: int = 180,
         "model": model or config.CODEX_TEXT_MODEL, "store": False, "stream": True,
         "instructions": "You are a helpful assistant. 用简体中文回答。",
         "input": [{"role": "user", "content": content}],
-        # 思考模式：gpt-5.5 支持 reasoning effort，默认 high（深度解析质量优先）
+        # 思考模式：gpt-5.5 支持 reasoning effort，默认 medium（速度/质量平衡；env 可调 high/low）
         "reasoning": {"effort": reasoning or config.CODEX_REASONING_EFFORT},
     }
     headers = {

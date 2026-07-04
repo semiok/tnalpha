@@ -41,7 +41,7 @@
         </div>
         <div data-text-status class="text-xs text-slate-400">
           <span data-status-claude>{% if claude_ready %}{{ chip("已检测到 claude CLI", "emerald") }}{% else %}{{ chip("未检测到 claude CLI", "rose") }}{% endif %}</span>
-          <span data-status-codex>{% if codex_ready %}{{ chip("已检测到 Codex 授权（gpt-5.5·思考high）", "emerald") }}{% else %}{{ chip("未检测到 Codex 授权（~/.codex/auth.json）", "rose") }}{% endif %}</span>
+          <span data-status-codex>{% if codex_ready %}{{ chip("已检测到 Codex 授权（gpt-5.5·思考medium）", "emerald") }}{% else %}{{ chip("未检测到 Codex 授权（~/.codex/auth.json）", "rose") }}{% endif %}</span>
         </div>
       </div>
     {{ card_close() }}
