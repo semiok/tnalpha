@@ -3,6 +3,19 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.0] - 2026-07-04
+
+### 新增
+- **活动（campaign）资料支持深度读图**（与品牌管理一致）：每份活动资料可勾「深度读图」，AI 解析改**异步**（后台线程 + 状态轮询，同 brand）——读 PDF 图片页 + 品牌定义 + 引用数据池 → 生成活动提示词（供②选题库读）。
+- **数据池支持资料上传**：新增资料包可上传文件，自动抽正文入 `content`（手填正文优先），存原文件供下载（`pooltopic.file_path`，追加列，②⑤ 只读 content 不受影响）。
+- **Codex 文本 provider 自动重试**：偶发 OpenAI 瞬时错误（`response.failed` / 5xx / 空响应）自动重试（首次 + 2 次，递增退避）；授权错误（401/403）不重试直接抛。
+
+### 变更
+- **去除默认 campaign「品牌日常」**：品牌库已承载品牌相关内容，不再自动建常驻 campaign（`_default_brand` / `create_brand` 不再建，删除守卫）。
+- **首页 campaign 列表行加高**（两行布局：名称 + 时效/已解析状态）。
+
+[0.6.0]: https://github.com/semiok/tnalpha/releases/tag/v0.6.0
+
 ## [0.5.1] - 2026-07-04
 
 ### 变更

@@ -11,9 +11,23 @@ from sqlmodel import Session, select
 
 from app.core import db, llm
 from app.core.llm import prompts
-from app.modules.knowledge.models import Brand, BrandDoc
+from app.modules.knowledge.models import (
+    Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, PoolTopic,
+)
 
 _ANALYZE_CHARS = 12000
+
+# 活动资料深度读图提示（读 PDF 图片页；只 claude-cli/codex 真读图，其余 provider 忽略 pdf 按文本）
+_CAMPAIGN_DOC_READ = (
+    "请阅读这份活动资料（PDF，含图片页），提取对内容创作有用的信息："
+    "活动主题、关键信息点、时间/地点节点、视觉风格与画面元素。用简体中文，分点。")
+
+
+def _campaign_digest_prompt(material: str) -> str:
+    return (
+        "你是资深内容策划。基于以下某活动的品牌定义、活动资料、引用数据池，提炼一份"
+        "「活动内容提示词」，供选题库据此推荐选题：包含①活动核心主题与卖点、②可用内容方向、"
+        "③调性与表达要点、④关键素材/信息点。用简体中文，结构清晰、可直接引用。\n\n" + material)
 
 
 def run_analysis(brand_id: int, session: Session) -> None:
@@ -96,6 +110,69 @@ def start_background_analysis(brand_id: int) -> None:
                 if brand:
                     brand.analysis_status, brand.analysis_error = "failed", str(e)[:200]
                     s.add(brand)
+                    s.commit()
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+# ─────────────────────────── 活动（campaign）资料解析 ───────────────────────────
+
+def run_campaign_analysis(campaign_id: int, session: Session) -> None:
+    """AI 解析活动资料 → campaign_digest（供②选题库读）。两段式（LLM 调用 → 一次性写库）。
+
+    深度读图（deep_read）的文档：读 PDF 图片页（同品牌资料）；其余用抽取正文。
+    """
+    campaign = session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise ValueError("活动不存在")
+    docs = session.exec(
+        select(CampaignDoc).where(CampaignDoc.campaign_id == campaign_id)
+        .order_by(CampaignDoc.id)).all()
+    brand = session.get(Brand, campaign.brand_id)
+    ref_ids = [r.pool_topic_id for r in session.exec(
+        select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id)).all()]
+    refs = session.exec(select(PoolTopic).where(PoolTopic.id.in_(ref_ids))).all() if ref_ids else []
+
+    # ── Phase 1：LLM 调用（深度读图文档读 PDF）──
+    parts = [f"活动：{campaign.name}"]
+    if brand and brand.brand_prompt:
+        parts.append(f"【品牌定义】\n{brand.brand_prompt}")
+    for d in docs:
+        if d.deep_read:
+            try:
+                desc = llm.generate_text(f"{_CAMPAIGN_DOC_READ}\n\n文件名：{d.filename}",
+                                         task="campaign_doc", pdf_path=d.file_path)
+            except Exception as e:                       # 读图失败不拖垮整体，退回抽取文字
+                desc = f"[读图失败: {str(e)[:80]}]\n{d.extracted_text}"
+            parts.append(f"【资料·读图｜{d.filename}｜{d.note}】\n{desc}")
+        else:
+            parts.append(f"【资料｜{d.filename}｜{d.note}】\n{d.extracted_text}")
+    parts += [f"【引用数据池｜{t.title}】\n{t.content}" for t in refs]
+    material = "\n\n".join(parts)[:_ANALYZE_CHARS]
+    digest = llm.generate_text(_campaign_digest_prompt(material), task="campaign_digest")
+
+    # ── Phase 2：一次性写库 ──
+    campaign.campaign_digest = digest
+    session.add(campaign)
+    session.commit()
+
+
+def start_campaign_analysis(campaign_id: int) -> None:
+    """置 running + 后台线程跑 run_campaign_analysis；成功 done、异常 failed。"""
+    def _worker() -> None:
+        with Session(db.engine) as s:
+            try:
+                run_campaign_analysis(campaign_id, s)
+                c = s.get(Campaign, campaign_id)
+                c.analysis_status, c.analysis_error = "done", ""
+                s.add(c)
+                s.commit()
+            except Exception as e:
+                s.rollback()
+                c = s.get(Campaign, campaign_id)
+                if c:
+                    c.analysis_status, c.analysis_error = "failed", str(e)[:200]
+                    s.add(c)
                     s.commit()
 
     threading.Thread(target=_worker, daemon=True).start()

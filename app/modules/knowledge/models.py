@@ -48,6 +48,8 @@ class Campaign(SQLModel, table=True):
     end_date: date | None = None
     is_default: bool = False      # 品牌日常常驻 campaign
     campaign_digest: str = ""     # 活动资料的 AI 解析结果（core/llm 生成）
+    analysis_status: str = "idle" # idle | running | done | failed（后台解析状态，同 brand）
+    analysis_error: str = ""
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -59,6 +61,7 @@ class CampaignDoc(SQLModel, table=True):
     file_path: str
     note: str = ""                # 备注标识，如"开幕/中期/闭幕"
     extracted_text: str = ""      # 上传时抽出的正文（core/docparse），AI 解析读它
+    deep_read: bool = False       # 深度读图开关（同品牌资料：需读图的文档勾选，用 vision 读 PDF）
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -82,5 +85,6 @@ class PoolTopic(SQLModel, table=True):
     web_access: bool = True          # 触网 / 不触网
     source: str = "upload"           # 'upload' | 'feedback'(来自⑤) | 'shared'
     brand_tag: str | None = None     # 来源品牌 tag（可空 = 通用）
-    content: str = ""                # 解析结果 / 经验摘要
+    content: str = ""                # 解析结果 / 经验摘要（上传文件时=抽出的正文）
+    file_path: str = ""              # 上传原文件路径（可空；追加列，②⑤ 只读 content 不受影响）
     created_at: datetime = Field(default_factory=_now)

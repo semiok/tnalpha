@@ -34,15 +34,13 @@ def _parse_date(value: str) -> date | None:
 
 
 def _default_brand(session: Session) -> Brand:
-    """取默认品牌；无则建"敦煌当代美术馆" + 其"品牌日常"常驻 campaign（仿 get_llm_settings）。"""
+    """取默认品牌；无则建「敦煌当代美术馆」。campaign 由用户自建（品牌日常已去除，品牌库已承载品牌内容）。"""
     brand = session.exec(select(Brand).order_by(Brand.id)).first()
     if brand is None:
         brand = Brand(name=_DEFAULT_BRAND_NAME)
         session.add(brand)
         session.commit()
         session.refresh(brand)
-        session.add(Campaign(brand_id=brand.id, name="品牌日常", is_default=True))
-        session.commit()
     return brand
 
 
@@ -71,9 +69,6 @@ def create_brand(request: Request, name: str = Form(...),
     session.add(brand)
     session.commit()
     session.refresh(brand)
-    # 每个品牌默认建一个"品牌日常"常驻 campaign（装日常选题）
-    session.add(Campaign(brand_id=brand.id, name="品牌日常", is_default=True))
-    session.commit()
     return RedirectResponse(f"/brands/{brand.id}", status_code=303)
 
 
@@ -300,30 +295,44 @@ def upload_campaign_doc(campaign_id: int, request: Request,
 @router.post("/campaigns/{campaign_id}/parse")
 def parse_campaign(campaign_id: int, request: Request,
                    session: Session = Depends(get_session)):
-    """AI 解析活动资料 → 存 campaign_digest，HTMX 返回结果片段。"""
+    """AI 解析活动资料（后台，同 brand）：品牌定义 + 资料[含深度读图] + 引用数据池 → campaign_digest。"""
     auth.require_level(request, 2)
     campaign = session.get(Campaign, campaign_id)
     if not campaign:
         raise HTTPException(404, "活动不存在")
-    docs = session.exec(
-        select(CampaignDoc).where(CampaignDoc.campaign_id == campaign_id)).all()
-    brand = session.get(Brand, campaign.brand_id)
-    ref_ids = [r.pool_topic_id for r in session.exec(
-        select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id)).all()]
-    refs = session.exec(select(PoolTopic).where(PoolTopic.id.in_(ref_ids))).all() if ref_ids else []
-    parts = [f"活动：{campaign.name}"]
-    if brand and brand.brand_prompt:
-        parts.append(f"【品牌定义】\n{brand.brand_prompt}")
-    parts += [f"【资料｜{d.filename}｜{d.note}】\n{d.extracted_text}" for d in docs]
-    parts += [f"【引用数据池｜{t.title}】\n{t.content}" for t in refs]
-    material = "\n\n".join(parts)
-    campaign.campaign_digest = llm.generate_text(material[:_ANALYZE_CHARS],
-                                                 task="campaign_digest")
-    session.add(campaign)
+    if campaign.analysis_status != "running":
+        campaign.analysis_status, campaign.analysis_error = "running", ""
+        session.add(campaign)
+        session.commit()
+        analysis.start_campaign_analysis(campaign_id)
+    return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
+
+
+@router.get("/campaigns/{campaign_id}/analysis-status")
+def campaign_analysis_status(campaign_id: int, request: Request,
+                             session: Session = Depends(get_session)):
+    """HTMX 轮询：running 返回自轮询片段；done/failed 触发整页刷新看结果（同 brand）。"""
+    campaign = session.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(404, "活动不存在")
+    if campaign.analysis_status == "running":
+        return templates.TemplateResponse(request, "knowledge/_campaign_poll.html",
+                                          {"campaign": campaign})
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@router.post("/campaigns/{campaign_id}/docs/{doc_id}/deep-read")
+def toggle_campaign_deep_read(campaign_id: int, doc_id: int, request: Request,
+                              session: Session = Depends(get_session)):
+    """切换某活动资料的「深度读图」（同品牌资料，需读图的文档用 vision 读 PDF）。"""
+    auth.require_level(request, 2)
+    doc = session.get(CampaignDoc, doc_id)
+    if not doc or doc.campaign_id != campaign_id:
+        raise HTTPException(404, "文档不存在")
+    doc.deep_read = not doc.deep_read
+    session.add(doc)
     session.commit()
-    return templates.TemplateResponse(
-        request, "knowledge/_digest.html",
-        {"digest": campaign.campaign_digest, "slot_id": "campaign-digest"})
+    return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
 
 
 @router.post("/campaigns/{campaign_id}/delete")
@@ -333,8 +342,6 @@ def delete_campaign(campaign_id: int, request: Request,
     campaign = session.get(Campaign, campaign_id)
     if not campaign:
         raise HTTPException(404, "活动不存在")
-    if campaign.is_default:
-        raise HTTPException(400, "品牌日常不可删除")
     brand_id = campaign.brand_id
     for doc in session.exec(
             select(CampaignDoc).where(CampaignDoc.campaign_id == campaign_id)).all():
@@ -361,14 +368,27 @@ def pool_list(request: Request, session: Session = Depends(get_session)):
 def create_pool_topic(request: Request,
                       title: str = Form(...), kind: str = Form("资料包"),
                       web_access: bool = Form(False), brand_tag: str = Form(""),
-                      content: str = Form(""),
+                      content: str = Form(""), file: UploadFile | None = File(None),
                       session: Session = Depends(get_session)):
+    """新增数据池条目。可上传资料文件：抽取正文入 content（有手填正文则以手填为准），存原文件供下载。"""
     auth.require_level(request, 2)
-    topic = PoolTopic(title=title, kind=kind, web_access=web_access,
-                      source="upload", brand_tag=brand_tag or None, content=content)
+    file_path = ""
+    if file is not None and file.filename:
+        file_path = storage.save_upload(file, subdir="pool")
+        content = content or docparse.extract_text(file_path)   # 有手填正文用手填，否则用抽取文字
+    topic = PoolTopic(title=title, kind=kind, web_access=web_access, source="upload",
+                      brand_tag=brand_tag or None, content=content, file_path=file_path)
     session.add(topic)
     session.commit()
     return RedirectResponse("/pool", status_code=303)
+
+
+@router.get("/pool/{topic_id}/download")
+def download_pool_file(topic_id: int, session: Session = Depends(get_session)):
+    topic = session.get(PoolTopic, topic_id)
+    if not topic or not topic.file_path or not Path(topic.file_path).exists():
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(topic.file_path, filename=Path(topic.file_path).name)
 
 
 @router.get("/styleguide")

@@ -16,10 +16,10 @@ def _create_campaign(client, brand_id, name="美术展") -> int:
 
 # ── 品牌 + 默认 campaign ──
 
-def test_create_brand_auto_creates_default_campaign(owner_client):
+def test_create_brand_no_default_campaign(owner_client):
     _create_brand(owner_client)
-    # 常驻 campaign「品牌日常」显示在首页（campaign 已挪到首页，不在品牌定义页）
-    assert "品牌日常" in owner_client.get("/").text
+    # 品牌日常已去除：不再自动建默认 campaign（品牌库已承载品牌内容）
+    assert "品牌日常" not in owner_client.get("/").text
 
 
 def test_home_shows_default_brand_and_entries(owner_client):
@@ -38,16 +38,6 @@ def test_create_campaign(owner_client):
     page = owner_client.get(f"/campaigns/{cid}")
     assert page.status_code == 200
     assert "美术展" in page.text
-
-
-def test_delete_default_campaign_forbidden(owner_client, fresh_db):
-    from sqlmodel import Session, select
-    from app.modules.knowledge.models import Campaign
-    brand_id = _create_brand(owner_client)
-    with Session(fresh_db) as s:
-        default = s.exec(select(Campaign).where(Campaign.brand_id == brand_id)).first()
-    resp = owner_client.post(f"/campaigns/{default.id}/delete")
-    assert resp.status_code == 400          # 品牌日常不可删
 
 
 def test_delete_campaign(owner_client):
@@ -95,16 +85,86 @@ def test_analyze_route_sets_running(owner_client, fresh_db, monkeypatch):
         assert s.get(Brand, brand_id).analysis_status == "running"
 
 
-def test_parse_campaign_stores_digest(owner_client, fresh_db):
+def test_parse_campaign_sets_running(owner_client, fresh_db, monkeypatch):
+    """活动 AI 解析改异步（同 brand）：路由置 running + 起后台，303 回活动页。"""
     from sqlmodel import Session
+    from app.modules.knowledge import analysis
+    from app.modules.knowledge.models import Campaign
+    monkeypatch.setattr(analysis, "start_campaign_analysis", lambda cid: None)  # 不起线程
+    brand_id = _create_brand(owner_client)
+    cid = _create_campaign(owner_client, brand_id)
+    r = owner_client.post(f"/campaigns/{cid}/parse", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/campaigns/{cid}"
+    with Session(fresh_db) as s:
+        assert s.get(Campaign, cid).analysis_status == "running"
+
+
+def test_run_campaign_analysis_stores_digest(owner_client, fresh_db):
+    """直接同步跑 run_campaign_analysis（避开后台线程）：资料 → campaign_digest 入库。"""
+    from sqlmodel import Session
+    from app.modules.knowledge import analysis
     from app.modules.knowledge.models import Campaign
     brand_id = _create_brand(owner_client)
     cid = _create_campaign(owner_client, brand_id)
-    resp = owner_client.post(f"/campaigns/{cid}/parse")
-    assert resp.status_code == 200
-    assert "stub:campaign_digest" in resp.text
+    owner_client.post(f"/campaigns/{cid}/docs", data={"note": "开幕"},
+                      files={"file": ("plan.txt", "展会主题：丝路".encode(), "text/plain")})
     with Session(fresh_db) as s:
+        analysis.run_campaign_analysis(cid, s)
         assert "stub:campaign_digest" in s.get(Campaign, cid).campaign_digest
+
+
+def test_campaign_doc_deep_read_toggle(owner_client, fresh_db):
+    from sqlmodel import Session, select
+    from app.modules.knowledge.models import CampaignDoc
+    brand_id = _create_brand(owner_client)
+    cid = _create_campaign(owner_client, brand_id)
+    owner_client.post(f"/campaigns/{cid}/docs", data={"note": ""},
+                      files={"file": ("p.txt", b"x", "text/plain")})
+    with Session(fresh_db) as s:
+        doc = s.exec(select(CampaignDoc).where(CampaignDoc.campaign_id == cid)).first()
+        assert doc.deep_read is False
+    owner_client.post(f"/campaigns/{cid}/docs/{doc.id}/deep-read", follow_redirects=False)
+    with Session(fresh_db) as s:
+        assert s.get(CampaignDoc, doc.id).deep_read is True
+
+
+def test_pool_file_upload_stores_file(owner_client, fresh_db):
+    """数据池上传文件：存 file_path；手填正文优先保留（真实 pdf/docx 抽取由 docparse 负责）。"""
+    from sqlmodel import Session, select
+    from app.modules.knowledge.models import PoolTopic
+    resp = owner_client.post("/pool", data={"title": "展会资料", "kind": "资料包", "content": "手填摘要"},
+                             files={"file": ("brief.txt", b"x", "text/plain")},
+                             follow_redirects=False)
+    assert resp.status_code == 303
+    with Session(fresh_db) as s:
+        t = s.exec(select(PoolTopic).where(PoolTopic.title == "展会资料")).first()
+        assert t.file_path and t.content == "手填摘要"              # 存了文件 + 手填正文保留
+
+
+def test_pool_upload_extracts_supported_format(owner_client, fresh_db, monkeypatch):
+    """支持格式（如 pdf）上传：无手填正文时，抽取的正文入 content。"""
+    from sqlmodel import Session, select
+    from app.modules.knowledge import routes as kroutes
+    from app.modules.knowledge.models import PoolTopic
+    monkeypatch.setattr(kroutes.docparse, "extract_text", lambda p: "抽出的展会正文")
+    resp = owner_client.post("/pool", data={"title": "PDF资料", "kind": "资料包"},
+                             files={"file": ("brief.pdf", b"%PDF", "application/pdf")},
+                             follow_redirects=False)
+    assert resp.status_code == 303
+    with Session(fresh_db) as s:
+        t = s.exec(select(PoolTopic).where(PoolTopic.title == "PDF资料")).first()
+        assert t.content == "抽出的展会正文"                        # 无手填 → 用抽取正文
+
+
+def test_pool_file_download(owner_client, fresh_db):
+    from sqlmodel import Session, select
+    from app.modules.knowledge.models import PoolTopic
+    owner_client.post("/pool", data={"title": "下载测试", "kind": "资料包"},
+                      files={"file": ("d.txt", b"hello-pool", "text/plain")})
+    with Session(fresh_db) as s:
+        t = s.exec(select(PoolTopic).where(PoolTopic.title == "下载测试")).first()
+    r = owner_client.get(f"/pool/{t.id}/download")
+    assert r.status_code == 200 and b"hello-pool" in r.content
 
 
 # ── 数据池 增查 ──
@@ -303,7 +363,8 @@ def test_default_brand_created_on_first_home(owner_client, fresh_db):
     with Session(fresh_db) as s:
         brands = s.exec(select(Brand)).all()
         assert len(brands) == 1 and brands[0].name == "敦煌当代美术馆"
-        assert s.exec(select(Campaign).where(Campaign.is_default == True)).first() is not None  # noqa: E712
+        # 品牌日常已去除：首访只建品牌，不建默认 campaign
+        assert s.exec(select(Campaign)).first() is None
 
 
 def test_save_brand_define_persists(owner_client):
