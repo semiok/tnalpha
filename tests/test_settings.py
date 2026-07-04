@@ -494,3 +494,41 @@ def test_codex_text_attaches_pdf_as_input_file(monkeypatch, tmp_path):
     f = next(c for c in content if c["type"] == "input_file")
     assert f["filename"] == "doc.pdf"
     assert f["file_data"].startswith("data:application/pdf;base64,")
+
+
+def test_codex_text_retries_transient_then_succeeds(monkeypatch, tmp_path):
+    """瞬时错误（response.failed）→ 自动重试，第二次成功。"""
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+    monkeypatch.setattr(codex_text.time, "sleep", lambda *a: None)   # 别真 sleep
+    calls = {"n": 0}
+    ok = [b'data: {"type":"response.output_text.delta","delta":"ok"}\n', b'data: [DONE]\n']
+
+    def flaky(req, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _FakeCodexResp([b'data: {"type":"response.failed","error":{"message":"transient"}}\n'])
+        return _FakeCodexResp(ok)
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", flaky)
+    assert codex_text.generate_text("hi") == "ok"
+    assert calls["n"] == 2                                            # 重试了一次
+
+
+def test_codex_text_auth_error_no_retry(monkeypatch, tmp_path):
+    """401 授权错误 → 不重试，直接抛。"""
+    import io
+    import urllib.error
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+    monkeypatch.setattr(codex_text.time, "sleep", lambda *a: None)
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, io.BytesIO(b"nope"))
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", boom)
+    with pytest.raises(RuntimeError):
+        codex_text.generate_text("hi")
+    assert calls["n"] == 1                                           # 401 不重试

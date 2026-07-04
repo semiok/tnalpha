@@ -10,13 +10,20 @@
     {% elif campaign.start_date %}{{ chip(campaign.start_date.strftime('%Y.%m.%d') ~ "–" ~ (campaign.end_date.strftime('%m.%d') if campaign.end_date else "?"), "amber") }}{% endif %}
   </div>
 
-  {# ── 活动资料（上传/下载/删除）── #}
+  {# ── 活动资料（上传/深度读图/下载/删除）── #}
   {{ card_open("活动资料（强时效·AI 读）") }}
     <div class="space-y-2 mb-3">
       {% for d in docs %}
       <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 text-sm">
         <span>📄 {{ d.filename }}{% if d.note %} <span class="text-slate-400">· {{ d.note }}</span>{% endif %}</span>
         <span class="flex items-center gap-3 text-xs">
+          {% if can_edit %}
+          <form method="post" action="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/deep-read" class="inline flex items-center gap-1">
+            <label class="flex items-center gap-1 {{ 'text-brand-600' if d.deep_read else 'text-slate-400' }} cursor-pointer">
+              <input type="checkbox" onchange="this.form.submit()" {{ 'checked' if d.deep_read else '' }}> 深度读图
+            </label>
+          </form>
+          {% endif %}
           <a href="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/download" class="text-brand-600 hover:text-brand-700">下载</a>
           {% if can_edit %}
           <form method="post" action="/campaigns/{{ campaign.id }}/docs/{{ d.id }}/delete" class="inline"
@@ -70,11 +77,17 @@
     {% endif %}
   {{ card_close() }}
 
-  {# ── AI 解析：读品牌定义+活动资料+引用数据池 → 生成提示词（供②选题库读）── #}
+  {# ── AI 解析：读品牌定义+活动资料[含深度读图]+引用数据池 → 生成提示词（供②选题库读）── #}
   {{ card_open("🧠 AI 解析结果（提示词 · 供选题库读）") }}
     {% if can_edit %}
-    <div class="mb-2">{{ button("🧠 AI 解析（品牌定义 + 资料 + 引用数据池 → 提示词）", variant="secondary",
-        hx_post="/campaigns/" ~ campaign.id ~ "/parse", hx_target="#campaign-digest", hx_swap="innerHTML") }}</div>
+      {% if campaign.analysis_status == "running" %}
+        {% include "knowledge/_campaign_poll.html" %}
+      {% else %}
+        <form method="post" action="/campaigns/{{ campaign.id }}/parse" class="mb-2">
+          {{ button("🧠 AI 解析（品牌定义 + 资料[含深度读图] + 引用数据池 → 提示词）", variant="secondary", type="submit", extra="w-full") }}
+        </form>
+        {% if campaign.analysis_status == "failed" %}<div class="text-xs text-rose-600 mb-1">解析失败：{{ campaign.analysis_error }}</div>{% endif %}
+      {% endif %}
     {% endif %}
     <div id="campaign-digest">
       {% set digest = campaign.campaign_digest %}{% include "knowledge/_digest.html" with context %}

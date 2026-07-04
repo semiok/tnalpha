@@ -2,16 +2,26 @@
 
 与 codex_image 同一套鉴权（读本机 ~/.codex/auth.json 的 access_token，走流式 Responses API），
 但不带 image_generation 工具、只累积文本增量（response.output_text.delta）。
+pdf_path 非空=深度读图：把 PDF（含图片页）作 input_file(base64) 随请求发，gpt-5.5 直接读。
 
-任何失败（HTTP/鉴权/空响应）都 raise，交由上层 router 回退 stub，保证端到端不崩。
+单次请求抽成 _attempt；外层自动重试瞬时错误（OpenAI 偶发 "An error occurred..."），
+授权类错误（401/403）不重试直接抛。全部重试用尽仍失败 → 抛，交由上层 router 回退 stub。
 """
 import base64
 import json
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from app.core import config
+
+_MAX_ATTEMPTS = 3          # 首次 + 2 次重试
+_BACKOFF_BASE = 1.5        # 递增退避基数（秒）
+
+
+class _CodexAuthError(RuntimeError):
+    """授权/认证类错误——重试无用，直接抛。"""
 
 
 def _access(auth_path: str) -> tuple[str, str]:
@@ -19,8 +29,8 @@ def _access(auth_path: str) -> tuple[str, str]:
     return tok["access_token"], tok["account_id"]
 
 
-def generate_text(prompt: str, model: str | None = None, timeout: int = 180,
-                  reasoning: str | None = None, pdf_path: str | None = None) -> str:
+def _attempt(prompt: str, model: str | None, timeout: int,
+             reasoning: str | None, pdf_path: str | None) -> str:
     access_token, account_id = _access(config.CODEX_AUTH_PATH)
     content: list[dict] = [{"type": "input_text", "text": prompt}]
     if pdf_path:  # 深度读图：把 PDF（含图片页）作为 input_file 塞进去，gpt-5.5 直接读
@@ -46,8 +56,10 @@ def generate_text(prompt: str, model: str | None = None, timeout: int = 180,
     try:
         resp = urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Codex 文本 HTTP {e.code}: "
-                           f"{e.read()[:200].decode('utf-8', 'replace')}") from e
+        detail = e.read()[:200].decode("utf-8", "replace")
+        if e.code in (401, 403):      # 授权失败：重试无用
+            raise _CodexAuthError(f"Codex 授权失败 HTTP {e.code}: {detail}") from e
+        raise RuntimeError(f"Codex 文本 HTTP {e.code}: {detail}") from e
 
     parts: list[str] = []
     done_text = ""
@@ -75,3 +87,18 @@ def generate_text(prompt: str, model: str | None = None, timeout: int = 180,
     if not out:
         raise RuntimeError("Codex 响应未含文本")
     return out
+
+
+def generate_text(prompt: str, model: str | None = None, timeout: int = 180,
+                  reasoning: str | None = None, pdf_path: str | None = None) -> str:
+    last: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            return _attempt(prompt, model, timeout, reasoning, pdf_path)
+        except _CodexAuthError:           # 授权错误：不重试
+            raise
+        except RuntimeError as e:         # 瞬时错误（HTTP 5xx/limit、response.failed、空响应）：重试
+            last = e
+            if attempt < _MAX_ATTEMPTS - 1:
+                time.sleep(_BACKOFF_BASE * (attempt + 1))
+    raise last
