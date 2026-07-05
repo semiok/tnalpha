@@ -61,6 +61,7 @@ class KnowledgeContext:
 class TopicCandidate:
     """选题候选（②产出、落 Topic 表前的中间形状）。字段对齐活动简报③选题方向的维度。"""
     title: str                    # 选题标题
+    outline: str = ""             # 纲要（100-200字：写什么/切入点/可用素材）
     angle: str = ""               # 切入角度 / 一句话描述
     audience: str = ""            # 受众（城市青年/亲子/艺术爱好者…）
     content_type: str = ""        # 内容类型（种草/深度/攻略/知识…）

@@ -3,6 +3,18 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.8.0] - 2026-07-04
+
+### 新增
+- **②选题库（MET-7）落地**：照抄 tngen 选题库结构（生成→按纯文本分隔符 parse→落库），改一处关键——**选题生成读①知识库共享契约 `KnowledgeContext`**（品牌层约束 + 活动选题简报 + 数据池资料包/经验包三层），不再直接读品牌表。
+  - `app/modules/topic/models.py`：`Topic` 表（§5 契约：`brand_id`/`campaign_id`/`title`/`outline`/`audience`/`timeliness`/`materials`/`image_hint`/`publish_window`/`status`/`source`），迁移 `a1b9d7c3e2f5`。
+  - `app/modules/topic/generate.py`：`generate_topics(session, brand_id, campaign_id=None, count=5)` — 读 `KnowledgeContext` 组三层 prompt → `core/llm`(module="topic") → `parse_candidates` 按「标题：/纲要：…」切块 → 落 `Topic`。**两模式**：有 `campaign_id`=活动高时效选题（优先采纳活动简报③选题方向）；无=品牌常青选题（只读品牌层）。
+  - `app/modules/topic/routes.py` + `app/templates/topic/home.html`：生成候选（选活动范围+数量）/ 列表 / 采纳（候选→采纳）/ 删除。生成·采纳·删除守 `require_level(1)`（选题者+），浏览所有登录角色。
+  - `TopicCandidate` 增 `outline` 字段（纲要 100-200 字）。
+  - 测试 `tests/test_topic.py`（parse / 两模式 generate / 路由生成·采纳·删除 / 权限），全套 109 passed 0 warnings；dev 端到端真调 Claude 生成通过。
+
+[0.8.0]: https://github.com/semiok/tnalpha/releases/tag/v0.8.0
+
 ## [0.7.1] - 2026-07-04
 
 ### 新增

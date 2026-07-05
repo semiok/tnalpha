@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, button, chip, empty_state %}
+{% block content %}
+  {% set can_edit = request.state.level >= 1 %}
+  {{ page_header("②选题库", brand.name if brand else "选题库") }}
+
+  {% if not brand %}
+    {{ empty_state("还没有品牌，先去①知识库建/解析品牌。") }}
+  {% else %}
+  <p class="text-sm text-slate-500 -mt-3 mb-5">读①知识库（品牌定义 + 活动选题简报 + 数据池）生成候选选题。</p>
+
+  {% if can_edit %}
+  {{ card_open("生成候选选题") }}
+    <form method="post" action="/topics/generate" class="flex flex-wrap items-end gap-2">
+      <label class="block">
+        <span class="block text-xs text-slate-500 mb-1">范围</span>
+        <select name="campaign_id" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+          <option value="">品牌常青（不限活动）</option>
+          {% for c in campaigns %}<option value="{{ c.id }}">活动：{{ c.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="block">
+        <span class="block text-xs text-slate-500 mb-1">数量</span>
+        <input type="number" name="count" value="5" min="1" max="10"
+               class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm">
+      </label>
+      {{ button("🧠 生成候选", variant="primary", type="submit") }}
+    </form>
+    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效）；品牌常青=只读品牌层。走当前模型配置。</p>
+  {{ card_close() }}
+  {% endif %}
+
+  {{ card_open("选题库（" ~ topics|length ~ "）") }}
+    <div class="space-y-2">
+      {% for t in topics %}
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              {{ t.title }}
+              {{ chip(t.status, "slate" if t.status == "候选" else "emerald") }}
+              {% if t.campaign_id %}{{ chip("活动·" ~ (cmap.get(t.campaign_id) or t.campaign_id), "amber") }}
+              {% else %}{{ chip("品牌常青", "slate") }}{% endif %}
+              {% if t.timeliness %}{{ chip("时效" ~ t.timeliness, "brand") }}{% endif %}
+            </div>
+            {% if t.outline %}<div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{{ t.outline }}</div>{% endif %}
+            {% if t.audience or t.materials or t.publish_window %}
+            <div class="text-xs text-slate-400 mt-1">
+              {% if t.audience %}受众：{{ t.audience }}　{% endif %}
+              {% if t.materials %}· 素材：{{ t.materials[:50] }}　{% endif %}
+              {% if t.publish_window %}· 时机：{{ t.publish_window }}{% endif %}
+            </div>
+            {% endif %}
+          </div>
+          {% if can_edit %}
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            {% if t.status == "候选" %}
+            <form method="post" action="/topics/{{ t.id }}/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/topics/{{ t.id }}/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% else %}
+      {{ empty_state("还没有选题，点「生成候选」开始。") }}
+      {% endfor %}
+    </div>
+  {{ card_close() }}
+  {% endif %}
+{% endblock %}
