@@ -8,6 +8,8 @@
     sources.gather(["google","mp"], "敦煌") # 跑多个源、合并命中，跳过未接入/报错的源
     sources.search("stub", "国潮")          # 单源；未接入且 fallback=True 时回退 stub
 """
+import logging
+
 from app.core.sources.base import SourceAdapter
 from app.core.sources.gemini import GoogleAdapter
 from app.core.sources.sogou import SogouAdapter
@@ -15,6 +17,7 @@ from app.core.sources.sonar import SonarAdapter
 from app.core.sources.stub import StubAdapter
 
 _stub = StubAdapter()
+_log = logging.getLogger("uvicorn.error")   # 借 uvicorn logger，INFO 直接进服务日志
 
 
 class _NotReady(SourceAdapter):
@@ -89,12 +92,17 @@ def gather(names: list[str], query: str, per_source: int = 3) -> list[dict]:
         try:
             adapter = get(n)
         except ValueError:
+            _log.warning("[sources] 跳过未知源 '%s'", n)
             continue
         if not adapter.is_available():
+            _log.info("[sources] 跳过 '%s'：未启用（无 key/依赖）", n)
             continue
         try:
             res = adapter.search(query) or []
-        except Exception:
-            continue   # 单源失败（网络/反爬/解析）→ 跳过，不拖垮整体
+        except Exception as e:   # 单源失败（网络/反爬/限流/解析）→ 跳过，不拖垮整体
+            _log.warning("[sources] '%s' 失败，跳过：%s", n, e)
+            continue
+        _log.info("[sources] '%s' 命中 %d 条（取前 %d）", n, len(res), per_source)
         hits.extend(res[:per_source])
+    _log.info("[sources] gather 源=%s 关键词=%r → 合计 %d 条注入", names, query, len(hits))
     return hits

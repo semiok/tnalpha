@@ -11,7 +11,8 @@
 
   {% if can_edit %}
   {{ card_open("生成候选选题") }}
-    <form method="post" action="/topics/generate" class="space-y-3">
+    <form method="post" action="/topics/generate" class="space-y-3"
+          x-data="{loading:false}" @submit="loading=true">
       <div class="flex flex-wrap items-end gap-2">
         <label class="block">
           <span class="block text-xs text-slate-500 mb-1">范围</span>
@@ -25,7 +26,13 @@
           <input type="number" name="count" value="5" min="1" max="10"
                  class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm">
         </label>
-        {{ button("🧠 生成候选", variant="primary", type="submit") }}
+        {# 同步生成约 30–60s：提交即禁用+转文案，防重复点击（Alpine，配色同 primary 宏）#}
+        <button type="submit" :disabled="loading"
+                class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700"
+                :class="loading ? 'opacity-60 pointer-events-none' : ''">
+          <span x-show="!loading">🧠 生成候选</span>
+          <span x-show="loading" x-cloak>⏳ 生成中…（联网搜索 + AI 生成，约 30–60s）</span>
+        </button>
       </div>
 
       <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5">
