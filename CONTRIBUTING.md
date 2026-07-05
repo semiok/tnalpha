@@ -14,6 +14,37 @@
 3. 建环境：`python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 4. 让你的 AI 读 `CLAUDE.md`（它会告诉 AI 该读哪些、守哪些规矩）。
 
+## 模型配置：接入你的 AI（本地开发）
+
+开发时**默认走 `stub`**（假数据、零配置，端到端能跑），不用接真实模型也能开发。要看真实 AI 解析/生成，去顶栏 **「模型配置」`/settings/llm`** 选 provider。**改完即时生效、失败自动回退 stub。**
+
+文本 provider 5 选 1，**本机有哪个用哪个**：
+
+| Provider | 怎么接 | 要不要 API Key |
+|---|---|---|
+| `stub` | 默认，什么都不用做 | 否 |
+| `openai` | 填 Base URL / Model / 你的 Key（兼容 OpenAI 的都行：DeepSeek/Moonshot…） | **要** |
+| `minimax-m3` | 选它自动填 MiniMax 预设，填你的 MiniMax Key | **要** |
+| `claude-cli` | **授权模式**：本机装 Claude CLI 并登录过 | **不要** |
+| `codex` | **授权模式**：本机装 codex 并登录过 | **不要** |
+
+### 授权模式（claude-cli / codex）怎么连——零 Key
+
+原理：**app 直接读你本机 CLI 登录后生成的 token 文件**，不用在 app 里填 Key、也没有"授权按钮"。两步：
+
+1. **本机登录一次**（系统操作，弹浏览器授权，不在 app 里做）：
+   - codex：`codex login` → 生成 `~/.codex/auth.json`
+   - claude：本机 `claude` 登录（Max/Pro 订阅）
+2. **模型配置页**：Provider 选 `codex`（或 `claude-cli`）→ 徽章会显示「已检测到 Codex / claude 授权」→ 保存即连上。
+
+> ⚠️ **前提坑**：app 读的是**「运行 app 那台机器」**的 token 文件。你**本地跑 dev**（`uvicorn ... --port 8820` 在你自己机器）→ 读你本机的登录 → 没问题。别指望在别人的服务器上用你的授权。
+>
+> 未检测到？说明本机没登录——先 `codex login` / `claude` 登录，再刷新配置页。
+
+### 按模块配置（预留接口）
+
+模型可按模块配（`scope`）：默认锚点 `default`（=知识库那套），**未单配的模块自动继承 default**。你的模块要用别的模型：调用处传 `module="你的模块名"` + 存一行 `LLMSetting(scope=...)`（详见 `app/core/settings.py` 顶部注释 / `ARCHITECTURE.md §3`）。没配就继承默认，不影响开发。
+
 ## 标准协作流程（谁做什么，务必分清）
 
 **你（贡献者/模块负责人）做 1–5；维护者做 6–8。你把 PR 开好（第 5 步）活就完了，剩下等 review。**
