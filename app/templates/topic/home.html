@@ -39,8 +39,8 @@
         <div class="text-xs text-slate-500 mb-2">🔎 联网蹭热点（可选，不勾=只用知识库）</div>
         <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
           <label class="block">
-            <input type="text" name="hot_query" placeholder="热点关键词（空则用品牌名/活动名）"
-                   class="w-64 border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
+            <input type="text" name="hot_query" placeholder="时事/热点角度，如「敦煌 出圈」（空=品牌/活动名）"
+                   class="w-72 border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
           </label>
           {% for s in catalog %}
           <label class="inline-flex items-center gap-1.5 text-sm {{ 'text-slate-400' if not s.enabled else 'text-slate-600' }}"

@@ -45,16 +45,23 @@ def parse_candidates(text: str) -> list[TopicCandidate]:
     return out
 
 
+_HIT_SUMMARY_MAX = 240   # 每条热点摘要上限：google/sonar 会返回数百字综合长答案，截断防撑爆 prompt
+
+
 def _format_hits(hits: list[dict]) -> str:
-    """把搜索命中压成紧凑条目喂 prompt（标题+摘要，附来源/链接）。"""
+    """把搜索命中压成紧凑条目喂 prompt。**丢掉纯来源链接（无摘要）条目**（对生成无用只是噪音），
+    每条摘要截断到 `_HIT_SUMMARY_MAX`（综合长答案取要点即可，避免稀释品牌/活动层）。"""
     lines = []
     for h in hits:
+        summary = " ".join((h.get("summary") or "").split())   # 压平多余空白/换行
+        if not summary:            # 纯来源链接、无正文 → 跳过
+            continue
+        if len(summary) > _HIT_SUMMARY_MAX:
+            summary = summary[:_HIT_SUMMARY_MAX].rstrip() + "…"
         title = (h.get("title") or "").strip()
-        summary = (h.get("summary") or "").strip()
         src = (h.get("source") or "").strip()
         tag = f"（{src}）" if src else ""
-        body = f"{title}{tag}：{summary}" if summary else f"{title}{tag}"
-        lines.append("- " + body.strip("：").strip())
+        lines.append(f"- {title}{tag}：{summary}")
     return "\n".join(lines)
 
 
