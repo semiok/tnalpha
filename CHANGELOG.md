@@ -3,6 +3,20 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.0] - 2026-07-05
+
+### 新增
+- **②选题库·联网蹭热点 + 分类 tab（MET-7 续）**。
+  - **skill 式搜索源架构（`core/sources/`）**：`SourceAdapter` 自描述（`label`/`emoji`/`paid`/`default_on`/`is_available()`）+ `catalog()` 驱动 UI 勾选框（加源=加 adapter 文件，模板零改）。全部**自包含在 tnalpha 内**（urllib/bs4，key 走 `config` env），**不依赖 OpenClaw**——contributor（如 lindong）clone 后配自己的 key 即可。
+    - `google`（Gemini grounding，免费，默认勾）｜`mp`（搜狗公众号，免费，抓取内联、只吃摘要）｜`sonar`（Perplexity，🔥深度热点，付费默认不勾）｜`xhs`（小红书，占位灰掉）。
+    - `sources.gather(names, query)`：批量跑、合并命中，单源失败（网络/反爬/限流/未配 key）静默跳过，绝不拖垮生成。
+  - **选题生成注入热点**：勾选源 + 热点关键词（空则用品牌名/活动名兜底）→ 搜索命中作「实时热点参考」层注入 prompt（须贴合品牌调性，不硬蹭）。不勾=只用知识库、不联网。
+  - **分类 tab**：全部 / 候选 / 已采纳 / 已创作 / 已发布（各带计数）。已创作=写作中·图文完成，已发布=已发布（③写作引擎产出后有数据）。
+  - 新增依赖 `beautifulsoup4`（搜狗解析）；config 加 `TNALPHA_GEMINI_API_KEY` / `TNALPHA_PERPLEXITY_API_KEY`。
+  - 测试 `tests/test_sources.py` + `tests/test_topic.py`（catalog/各源 parse/enabled 门控/gather 容错/搜索注入/tab 过滤/路由），全套 126 passed 0 warnings；dev 端到端（mp 搜索→注入→Claude 生成）跑通。
+
+[0.9.0]: https://github.com/semiok/tnalpha/releases/tag/v0.9.0
+
 ## [0.8.0] - 2026-07-04
 
 ### 新增

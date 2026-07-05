@@ -106,7 +106,7 @@ def test_generate_topics_count_and_source(fresh_db, monkeypatch):
 
 def _stub_generate(monkeypatch):
     """把路由用到的 generate_topics 换成直接落一条，绕开 LLM。"""
-    def fake_gen(session, brand_id, campaign_id=None, count=5):
+    def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query=""):
         t = Topic(brand_id=brand_id, campaign_id=campaign_id, title="测试选题", outline="纲要")
         session.add(t); session.commit(); session.refresh(t)
         return [t]
@@ -149,3 +149,91 @@ def test_generate_requires_editor_level(publisher_client, fresh_db):
     r = publisher_client.post("/topics/generate", data={"campaign_id": "", "count": "3"},
                               follow_redirects=False)
     assert r.status_code == 403        # publisher(level 0) < 选题者(level 1)
+
+
+# ---------- 联网搜索注入 ----------
+
+def test_generate_injects_hot_hits_into_prompt(fresh_db, monkeypatch):
+    seen = {}
+
+    def fake_llm(prompt, **k):
+        seen["prompt"] = prompt
+        return _SAMPLE
+
+    monkeypatch.setattr(gen.llm, "generate_text", fake_llm)
+    monkeypatch.setattr(gen.sources, "gather", lambda names, q, **k: [
+        {"title": "敦煌大展开幕", "summary": "九座洞窟1:1复刻", "url": "", "source": "google"}])
+    with Session(fresh_db) as s:
+        bid, _ = _seed_brand(s)
+        gen.generate_topics(s, bid, None, count=2, sources_used=["google"], hot_query="敦煌")
+    assert "实时热点参考" in seen["prompt"] and "敦煌大展开幕" in seen["prompt"]
+
+
+def test_generate_no_sources_skips_network(fresh_db, monkeypatch):
+    called = {"n": 0}
+    monkeypatch.setattr(gen.llm, "generate_text", lambda p, **k: _SAMPLE)
+
+    def spy(*a, **k):
+        called["n"] += 1
+        return []
+
+    monkeypatch.setattr(gen.sources, "gather", spy)
+    with Session(fresh_db) as s:
+        bid, _ = _seed_brand(s)
+        gen.generate_topics(s, bid, None, count=2)          # 没勾源
+    assert called["n"] == 0                                  # → 不联网
+
+
+def test_generate_default_query_uses_brand_name(fresh_db, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(gen.llm, "generate_text", lambda p, **k: _SAMPLE)
+
+    def spy(names, q, **k):
+        seen["q"] = q
+        return []
+
+    monkeypatch.setattr(gen.sources, "gather", spy)
+    with Session(fresh_db) as s:
+        bid, _ = _seed_brand(s)
+        gen.generate_topics(s, bid, None, count=2, sources_used=["google"], hot_query="")
+    assert seen["q"] == "敦煌"                               # 空关键词→品牌名兜底
+
+
+def test_generate_route_passes_and_filters_sources(owner_client, fresh_db, monkeypatch):
+    with Session(fresh_db) as s:
+        _seed_brand(s)
+    captured = {}
+
+    def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query=""):
+        captured.update(sources_used=sources_used, hot_query=hot_query)
+        return []
+
+    monkeypatch.setattr(troutes, "generate_topics", fake_gen)
+    owner_client.post("/topics/generate", follow_redirects=False, data={
+        "campaign_id": "", "count": "3", "source": ["google", "bogus"], "hot_query": "敦煌"})
+    assert captured["sources_used"] == ["google"]           # 非法源 bogus 被过滤
+    assert captured["hot_query"] == "敦煌"
+
+
+# ---------- 分类 tab ----------
+
+def test_topics_tab_filter(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        bid, _ = _seed_brand(s)
+        s.add(Topic(brand_id=bid, title="候选选题X", status="候选"))
+        s.add(Topic(brand_id=bid, title="采纳选题Y", status="采纳"))
+        s.add(Topic(brand_id=bid, title="发布选题Z", status="已发布"))
+        s.commit()
+    assert "候选选题X" in owner_client.get("/topics").text           # 全部含候选
+    adopted = owner_client.get("/topics?status=采纳").text
+    assert "采纳选题Y" in adopted and "候选选题X" not in adopted      # 已采纳 tab 只留采纳
+    published = owner_client.get("/topics?status=已发布").text
+    assert "发布选题Z" in published and "采纳选题Y" not in published
+
+
+def test_topics_catalog_checkboxes_render(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        _seed_brand(s)
+    html = owner_client.get("/topics").text
+    assert "Google 搜索" in html and "搜狗公众号" in html
+    assert "🔥 深度热点" in html and "小红书" in html                # 付费源+占位源也显示

@@ -45,6 +45,17 @@
 
 模型可按模块配（`scope`）：默认锚点 `default`（=知识库那套），**未单配的模块自动继承 default**。你的模块要用别的模型：调用处传 `module="你的模块名"` + 存一行 `LLMSetting(scope=...)`（详见 `app/core/settings.py` 顶部注释 / `ARCHITECTURE.md §3`）。没配就继承默认，不影响开发。
 
+### 热点搜索源（`core/sources/`）的 key——自己配，零外部依赖
+
+②选题库的联网搜索源**全部自包含在 tnalpha 内**（`core/sources/`，urllib/bs4），**不依赖任何本机脚本或 OpenClaw**。要真联网，在你自己的 env 配 key（没配 → 该源 UI 灰掉「未启用」，其他源照跑、不报错）：
+
+| 源 | env | 说明 |
+|----|-----|------|
+| Google（`google`） | `TNALPHA_GEMINI_API_KEY` | Gemini grounding，免费额度低（~200/天，[AI Studio](https://aistudio.google.com/apikey) 申自己的一把，别共用） |
+| 搜狗公众号（`mp`） | 无需 key | 抓取内联，装 `beautifulsoup4`（在 requirements）即可 |
+| 🔥深度热点（`sonar`） | `TNALPHA_PERPLEXITY_API_KEY` | Perplexity，付费 $1/千次 |
+| 小红书（`xhs`） | — | 占位未开发 |
+
 ## 标准协作流程（谁做什么，务必分清）
 
 **你（贡献者/模块负责人）做 1–5；维护者做 6–8。你把 PR 开好（第 5 步）活就完了，剩下等 review。**

@@ -7,30 +7,64 @@
   {% if not brand %}
     {{ empty_state("还没有品牌，先去①知识库建/解析品牌。") }}
   {% else %}
-  <p class="text-sm text-slate-500 -mt-3 mb-5">读①知识库（品牌定义 + 活动选题简报 + 数据池）生成候选选题。</p>
+  <p class="text-sm text-slate-500 -mt-3 mb-5">读①知识库（品牌定义 + 活动选题简报 + 数据池）生成候选选题，可选联网蹭热点。</p>
 
   {% if can_edit %}
   {{ card_open("生成候选选题") }}
-    <form method="post" action="/topics/generate" class="flex flex-wrap items-end gap-2">
-      <label class="block">
-        <span class="block text-xs text-slate-500 mb-1">范围</span>
-        <select name="campaign_id" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
-          <option value="">品牌常青（不限活动）</option>
-          {% for c in campaigns %}<option value="{{ c.id }}">活动：{{ c.name }}</option>{% endfor %}
-        </select>
-      </label>
-      <label class="block">
-        <span class="block text-xs text-slate-500 mb-1">数量</span>
-        <input type="number" name="count" value="5" min="1" max="10"
-               class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm">
-      </label>
-      {{ button("🧠 生成候选", variant="primary", type="submit") }}
+    <form method="post" action="/topics/generate" class="space-y-3">
+      <div class="flex flex-wrap items-end gap-2">
+        <label class="block">
+          <span class="block text-xs text-slate-500 mb-1">范围</span>
+          <select name="campaign_id" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+            <option value="">品牌常青（不限活动）</option>
+            {% for c in campaigns %}<option value="{{ c.id }}">活动：{{ c.name }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="block">
+          <span class="block text-xs text-slate-500 mb-1">数量</span>
+          <input type="number" name="count" value="5" min="1" max="10"
+                 class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm">
+        </label>
+        {{ button("🧠 生成候选", variant="primary", type="submit") }}
+      </div>
+
+      <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5">
+        <div class="text-xs text-slate-500 mb-2">🔎 联网蹭热点（可选，不勾=只用知识库）</div>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <label class="block">
+            <input type="text" name="hot_query" placeholder="热点关键词（空则用品牌名/活动名）"
+                   class="w-64 border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
+          </label>
+          {% for s in catalog %}
+          <label class="inline-flex items-center gap-1.5 text-sm {{ 'text-slate-400' if not s.enabled else 'text-slate-600' }}"
+                 {% if not s.enabled %}title="未配置/未开发，暂不可用"{% endif %}>
+            <input type="checkbox" name="source" value="{{ s.name }}"
+                   {% if s.default_on and s.enabled %}checked{% endif %}
+                   {% if not s.enabled %}disabled{% endif %}
+                   class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+            <span>{{ s.emoji }} {{ s.label }}</span>
+            {% if s.paid %}{{ chip("付费", "amber") }}{% endif %}
+            {% if not s.enabled %}{{ chip("未启用", "slate") }}{% endif %}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
     </form>
-    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效）；品牌常青=只读品牌层。走当前模型配置。</p>
+    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效）；品牌常青=只读品牌层。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
   {{ card_close() }}
   {% endif %}
 
-  {{ card_open("选题库（" ~ topics|length ~ "）") }}
+  {# 分类 tab #}
+  <div class="flex flex-wrap gap-1.5 mb-3">
+    {% for key, label, _sts in tabs %}
+    <a href="/topics?status={{ key }}"
+       class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-brand-600 text-white' if active_tab == key else 'bg-slate-100 text-slate-600 hover:bg-slate-200' }}">
+      {{ label }} <span class="opacity-70">{{ tab_counts.get(key, 0) }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  {{ card_open("选题（" ~ topics|length ~ "）") }}
     <div class="space-y-2">
       {% for t in topics %}
       <div class="rounded-lg bg-slate-50 px-3 py-2.5">
@@ -67,7 +101,7 @@
         </div>
       </div>
       {% else %}
-      {{ empty_state("还没有选题，点「生成候选」开始。") }}
+      {{ empty_state("这个分类下还没有选题。") }}
       {% endfor %}
     </div>
   {{ card_close() }}

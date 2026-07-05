@@ -7,7 +7,8 @@ import re
 
 from sqlmodel import Session, select
 
-from app.core import llm
+from app.core import llm, sources
+from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext, TopicCandidate
 from app.modules.topic.models import Topic
 
@@ -41,13 +42,32 @@ def parse_candidates(text: str) -> list[TopicCandidate]:
     return out
 
 
-def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int) -> str:
+def _format_hits(hits: list[dict]) -> str:
+    """把搜索命中压成紧凑条目喂 prompt（标题+摘要，附来源/链接）。"""
+    lines = []
+    for h in hits:
+        title = (h.get("title") or "").strip()
+        summary = (h.get("summary") or "").strip()
+        src = (h.get("source") or "").strip()
+        tag = f"（{src}）" if src else ""
+        body = f"{title}{tag}：{summary}" if summary else f"{title}{tag}"
+        lines.append("- " + body.strip("：").strip())
+    return "\n".join(lines)
+
+
+def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int,
+                   hot_hits: list[dict] | None = None) -> str:
     parts = [
         f"你是内容选题策划。基于以下知识库信息，生成 {count} 个**全新**的内容选题。\n",
         f"【品牌调性·约束】\n{kc.brand_prompt or '（未填）'}\n",
         f"【内容要求·约束】\n{kc.content_notes or '（未填）'}\n",
         f"【品牌内容定义（已蒸馏，直接据此）】\n{kc.doc_digest or '（暂无）'}\n",
     ]
+    if hot_hits:   # 实时热点参考（联网搜索命中）：借势蹭点，但须与品牌调性/内容定义相关，别硬蹭
+        parts.append(
+            "【实时热点参考（联网搜索）】\n" + _format_hits(hot_hits)
+            + "\n→ 可借这些热点/时事切入选题以增强时效与传播，但**必须贴合上面的品牌调性与内容定义**，"
+            "不相关的热点不要硬蹭。\n")
     if kc.has_campaign:   # 活动选题：优先从简报③选题方向出发
         parts.append(
             f"【本次活动·选题简报】\n{kc.campaign_digest}\n"
@@ -76,15 +96,36 @@ def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int)
     return "\n".join(parts)
 
 
+def _default_query(session: Session, brand_id: int, campaign_id: int | None) -> str:
+    """搜索关键词兜底：用户没填时用 品牌名(+活动名) 作 query。"""
+    brand = session.get(Brand, brand_id)
+    parts = [brand.name] if brand else []
+    if campaign_id:
+        camp = session.get(Campaign, campaign_id)
+        if camp:
+            parts.append(camp.name)
+    return " ".join(parts).strip()
+
+
 def generate_topics(session: Session, brand_id: int, campaign_id: int | None = None,
-                    count: int = 5) -> list[Topic]:
-    """读知识库(KnowledgeContext) → 生成 → parse → 落 Topic。campaign_id 空=品牌常青选题。"""
+                    count: int = 5, sources_used: list[str] | None = None,
+                    hot_query: str = "") -> list[Topic]:
+    """读知识库(KnowledgeContext) → [可选]联网搜热点 → 生成 → parse → 落 Topic。
+
+    sources_used: 勾选的搜索源 name 列表（core/sources）；空=不联网。
+    hot_query: 热点搜索关键词；空则用 品牌名(+活动名) 兜底。
+    """
     kc = KnowledgeContext.load(session, brand_id, campaign_id)
+    hot_hits: list[dict] = []
+    if sources_used:
+        query = (hot_query or "").strip() or _default_query(session, brand_id, campaign_id)
+        hot_hits = sources.gather(sources_used, query)
     existing = session.exec(
         select(Topic).where(Topic.brand_id == brand_id, Topic.campaign_id == campaign_id)
         .order_by(Topic.created_at)).all()
     existing_titles = [t.title for t in existing]
-    raw = llm.generate_text(_topics_prompt(kc, existing_titles, count), task="topic_gen", module="topic")
+    raw = llm.generate_text(_topics_prompt(kc, existing_titles, count, hot_hits),
+                            task="topic_gen", module="topic")
     cands = parse_candidates(raw)[:count]
     source = "added" if existing else "generated"
     created: list[Topic] = []
