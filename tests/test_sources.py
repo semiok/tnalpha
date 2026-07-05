@@ -10,7 +10,7 @@ from app.core.sources import gemini, sogou, sonar
 
 # ---------- catalog（UI 自描述）----------
 
-def test_catalog_hides_stub_and_lists_sources():
+def test_catalog_hides_stub_and_lists_sources(fresh_db):
     cat = sources.catalog()
     names = [c["name"] for c in cat]
     assert "stub" not in names                      # stub 不进 UI
@@ -19,7 +19,7 @@ def test_catalog_hides_stub_and_lists_sources():
         assert set(c) >= {"name", "label", "emoji", "paid", "default_on", "enabled"}
 
 
-def test_catalog_metadata_flags():
+def test_catalog_metadata_flags(fresh_db):
     cat = {c["name"]: c for c in sources.catalog()}
     assert cat["google"]["default_on"] is True and cat["google"]["paid"] is False
     assert cat["sonar"]["paid"] is True and cat["sonar"]["default_on"] is False
@@ -28,14 +28,14 @@ def test_catalog_metadata_flags():
 
 # ---------- google（gemini grounding）----------
 
-def test_google_enabled_follows_key(monkeypatch):
+def test_google_enabled_follows_key(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "GEMINI_API_KEY", "")
     assert gemini.GoogleAdapter().is_available() is False
     monkeypatch.setattr(config, "GEMINI_API_KEY", "k")
     assert gemini.GoogleAdapter().is_available() is True
 
 
-def test_google_search_parses_answer_and_citations(monkeypatch):
+def test_google_search_parses_answer_and_citations(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "GEMINI_API_KEY", "k")
     fake = {"candidates": [{
         "content": {"parts": [{"text": "敦煌近期有大展"}]},
@@ -49,7 +49,7 @@ def test_google_search_parses_answer_and_citations(monkeypatch):
     assert hits[1]["title"] == "新华网"               # 引用来源附在后
 
 
-def test_google_search_without_key_raises(monkeypatch):
+def test_google_search_without_key_raises(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "GEMINI_API_KEY", "")
     with pytest.raises(NotImplementedError):
         gemini.GoogleAdapter().search("x")
@@ -57,7 +57,7 @@ def test_google_search_without_key_raises(monkeypatch):
 
 # ---------- sonar（perplexity）----------
 
-def test_sonar_paid_and_parse(monkeypatch):
+def test_sonar_paid_and_parse(fresh_db, monkeypatch):
     a = sonar.SonarAdapter()
     assert a.paid is True
     monkeypatch.setattr(config, "PERPLEXITY_API_KEY", "k")
@@ -69,7 +69,7 @@ def test_sonar_paid_and_parse(monkeypatch):
     assert hits[0]["url"] == "https://a"
 
 
-def test_sonar_disabled_without_key(monkeypatch):
+def test_sonar_disabled_without_key(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "PERPLEXITY_API_KEY", "")
     assert sonar.SonarAdapter().is_available() is False
 
@@ -105,7 +105,7 @@ def test_sogou_available_no_key():
 
 # ---------- gather（批量、容错）----------
 
-def test_gather_merges_and_skips_failures(monkeypatch):
+def test_gather_merges_and_skips_failures(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "GEMINI_API_KEY", "k")
     monkeypatch.setattr(config, "PERPLEXITY_API_KEY", "")   # sonar 不可用 → 跳过
     monkeypatch.setattr(gemini._http, "post_json", lambda *a, **k: {
@@ -120,3 +120,18 @@ def test_gather_merges_and_skips_failures(monkeypatch):
 def test_gather_empty_query_returns_empty():
     assert sources.gather(["google"], "  ") == []
     assert sources.gather([], "敦煌") == []
+
+
+# ---------- key 解析：DB(模型配置页) 优先，env 回退 ----------
+
+def test_search_api_key_db_over_env(fresh_db, monkeypatch):
+    from sqlmodel import Session
+
+    from app.core import settings
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "env-key")
+    with Session(fresh_db) as s:
+        assert settings.search_api_key(s, "gemini") == "env-key"        # DB 空 → 回退 env
+        st = settings.get_llm_settings(s)
+        st.gemini_api_key = "db-key"
+        s.add(st); s.commit()
+        assert settings.search_api_key(s, "gemini") == "db-key"          # DB 有值 → 覆盖 env

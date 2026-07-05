@@ -47,6 +47,20 @@ class LLMSetting(SQLModel, table=True):
     image_model: str = "image-01"
     claude_model: str = "sonnet"      # claude-cli 用（sonnet/opus）
     codex_model: str = "gpt-5.5"      # codex 授权文本用（gpt-5.5，思考 high）
+    # ②选题库 搜索源 key（存本机 DB，gitignored 不进公开仓；各部署自填）。挂 default 行=全局。
+    gemini_api_key: str = ""          # Google 搜索（gemini grounding，AI Studio 申）
+    perplexity_api_key: str = ""      # 深度热点（sonar，perplexity.ai）
+
+
+def search_api_key(session: Session, provider: str) -> str:
+    """② 搜索源 API key：DB(default 行)优先，空则回退 config/env。provider: 'gemini' | 'perplexity'。
+
+    core/sources 的 adapter 调它取 key——改「模型配置」页即时生效，无需重启（同 LLM 那套）。
+    """
+    col = {"gemini": "gemini_api_key", "perplexity": "perplexity_api_key"}[provider]
+    env = {"gemini": config.GEMINI_API_KEY, "perplexity": config.PERPLEXITY_API_KEY}[provider]
+    st = get_llm_settings(session, DEFAULT_LLM_SCOPE)
+    return (getattr(st, col, "") if st else "") or env
 
 
 def get_llm_settings(session: Session, scope: str = DEFAULT_LLM_SCOPE) -> LLMSetting | None:
@@ -59,7 +73,8 @@ def get_llm_settings(session: Session, scope: str = DEFAULT_LLM_SCOPE) -> LLMSet
             openai_base_url=config.OPENAI_BASE_URL, openai_api_key=config.OPENAI_API_KEY,
             openai_model=config.OPENAI_MODEL, image_base_url=config.IMAGE_BASE_URL,
             image_api_key=config.IMAGE_API_KEY, image_model=config.IMAGE_PROVIDER_MODEL,
-            claude_model=config.CLAUDE_MODEL, codex_model=config.CODEX_TEXT_MODEL)
+            claude_model=config.CLAUDE_MODEL, codex_model=config.CODEX_TEXT_MODEL,
+            gemini_api_key=config.GEMINI_API_KEY, perplexity_api_key=config.PERPLEXITY_API_KEY)
         session.add(s)
         try:
             session.commit()

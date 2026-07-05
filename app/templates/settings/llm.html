@@ -69,6 +69,22 @@
       </div>
     {{ card_close() }}
 
+    {{ card_open("选题库 · 搜索源 API") }}
+      <p class="text-xs text-slate-500 mb-3">②选题库「联网蹭热点」用。key 存本机 DB、<b>不进 GitHub</b>；每个部署（dev/prod/协作者）各自填自己的。留空该源自动灰掉不可用。</p>
+      <div class="grid gap-3 md:grid-cols-2">
+        <label class="block">
+          <span class="block text-sm text-slate-600 mb-1">🌐 Google 搜索 API（Gemini，AI Studio 申）</span>
+          {{ text_input("gemini_api_key", placeholder=masked_gemini_key or "AQ.... / AIza...", extra="w-full") }}
+          <span class="block text-xs text-slate-400 mt-1">{% if masked_gemini_key %}已配置 {{ masked_gemini_key }}，留空不改{% else %}未配置（Google 源不可用）{% endif %}</span>
+        </label>
+        <label class="block">
+          <span class="block text-sm text-slate-600 mb-1">🔥 深度热点 API（sonar，perplexity.ai）</span>
+          {{ text_input("perplexity_api_key", placeholder=masked_perplexity_key or "pplx-...", extra="w-full") }}
+          <span class="block text-xs text-slate-400 mt-1">{% if masked_perplexity_key %}已配置 {{ masked_perplexity_key }}，留空不改{% else %}未配置（付费源 sonar 不可用）{% endif %}</span>
+        </label>
+      </div>
+    {{ card_close() }}
+
     <input type="hidden" name="claude_model" value="{{ st.claude_model }}">
     <input type="hidden" name="codex_model" value="{{ st.codex_model }}">
     <input type="hidden" name="image_model" value="{{ st.image_model or minimax_image_model }}">

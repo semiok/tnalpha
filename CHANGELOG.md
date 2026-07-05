@@ -15,6 +15,8 @@
   - **生成加载态 + 防重复提交**：点「生成候选」即禁用按钮、转「⏳ 生成中…」（Alpine，同步生成约 30–60s，避免像 AI 解析那样干等/误双击）。
   - **搜索链路日志**：每次生成记一行「勾选搜索源 + 关键词」（`[topic]`），`sources.gather` 再记每源命中数 / 跳过原因（未启用·限流·失败）（`[sources]`），进服务日志便于排查「勾了的源到底生效没」。
   - **取消采纳**：采纳 → 候选 回退（`/topics/{id}/unadopt`，选题者+）。
+  - **搜索源 key 进「模型配置」页**：`/settings/llm` 加「选题库 · 搜索源 API」段，可视化填 Google(Gemini)/sonar(Perplexity) key，存本机 DB（`gitignored`，各部署 dev/prod/协作者自填，**不进公开仓**），打码回填、留空不改。adapter 从 DB 读、空则回退 env（`settings.search_api_key`）。
+  - **Google 源换 `gemini-2.5-flash` + 关思考**（`thinkingBudget=0`）：新建 Google Cloud 项目对老 `gemini-2.0-flash` 免费额度为 0，2.5-flash 才有；关思考提速（~6s）。
   - **②↔③ 交接契约（设计准备·未建）**：ARCHITECTURE §5.2——②只写 `候选↔采纳`；`写作中/图文完成/已排期/已发布` 归③写作库（lindong）按 `topic_id` 持有，②「已创作/已发布」tab 从③读回（③未接入前为空）。取消采纳/删除对③已接手选题的守卫待③落地再加。
   - 新增依赖 `beautifulsoup4`（搜狗解析）；config 加 `TNALPHA_GEMINI_API_KEY` / `TNALPHA_PERPLEXITY_API_KEY`。
   - 测试 `tests/test_sources.py` + `tests/test_topic.py`（catalog/各源 parse/enabled 门控/gather 容错/搜索注入/tab 过滤/路由），全套 126 passed 0 warnings；dev 端到端（mp 搜索→注入→Claude 生成）跑通。

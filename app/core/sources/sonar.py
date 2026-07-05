@@ -9,6 +9,14 @@ from app.core.sources.base import SourceAdapter
 _URL = "https://api.perplexity.ai/chat/completions"
 
 
+def _key() -> str:
+    """DB(模型配置页)优先，空则回退 config/env。"""
+    from sqlmodel import Session
+    from app.core import db, settings
+    with Session(db.engine) as s:
+        return settings.search_api_key(s, "perplexity")
+
+
 def _parse(query: str, data: dict) -> list[dict]:
     choices = data.get("choices", [])
     if not choices:
@@ -32,13 +40,14 @@ class SonarAdapter(SourceAdapter):
     default_on = False
 
     def is_available(self) -> bool:
-        return bool(config.PERPLEXITY_API_KEY)
+        return bool(_key())
 
     def search(self, query: str) -> list[dict]:
-        if not self.is_available():
-            raise NotImplementedError("未配置 PERPLEXITY_API_KEY")
+        key = _key()
+        if not key:
+            raise NotImplementedError("未配置 Perplexity API key（模型配置页填）")
         payload = {"model": "sonar", "messages": [{"role": "user", "content": query}],
                    "max_tokens": 1000, "return_citations": True}
-        headers = {"Authorization": f"Bearer {config.PERPLEXITY_API_KEY}"}
+        headers = {"Authorization": f"Bearer {key}"}
         data = _http.post_json(_URL, payload, headers, timeout=max(config.SOURCE_TIMEOUT, 60))
         return _parse(query, data)
