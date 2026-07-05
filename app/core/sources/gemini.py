@@ -44,7 +44,7 @@ class GoogleAdapter(SourceAdapter):
     label = "Google 搜索"
     emoji = "🌐"
     paid = False
-    default_on = True
+    default_on = True   # 品牌常青模式默认勾选（活动模式由前端按范围取消，见 topic/home.html topicGen）
 
     def is_available(self) -> bool:
         return bool(_key())
