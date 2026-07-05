@@ -12,11 +12,11 @@
   {% if can_edit %}
   {{ card_open("生成候选选题") }}
     <form method="post" action="/topics/generate" class="space-y-3"
-          x-data="{loading:false}" @submit="loading=true">
+          x-data="topicGen()" @submit="loading=true">
       <div class="flex flex-wrap items-end gap-2">
         <label class="block">
           <span class="block text-xs text-slate-500 mb-1">范围</span>
-          <select name="campaign_id" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+          <select name="campaign_id" x-model="campaign" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
             <option value="">品牌常青（不限活动）</option>
             {% for c in campaigns %}<option value="{{ c.id }}">活动：{{ c.name }}</option>{% endfor %}
           </select>
@@ -46,7 +46,7 @@
           <label class="inline-flex items-center gap-1.5 text-sm {{ 'text-slate-400' if not s.enabled else 'text-slate-600' }}"
                  {% if not s.enabled %}title="未配置/未开发，暂不可用"{% endif %}>
             <input type="checkbox" name="source" value="{{ s.name }}"
-                   {% if s.default_on and s.enabled %}checked{% endif %}
+                   data-default-on="{{ '1' if s.default_on else '0' }}"
                    {% if not s.enabled %}disabled{% endif %}
                    class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
             <span>{{ s.emoji }} {{ s.label }}</span>
@@ -57,8 +57,27 @@
         </div>
       </div>
     </form>
-    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效）；品牌常青=只读品牌层。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
+    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效，简报已够全 → <b>默认不联网</b>）；品牌常青=只读品牌层（<b>默认勾 Google</b> 找外部灵感）。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
   {{ card_close() }}
+  <script>
+    // 生成表单：范围联动搜索源默认勾选（活动模式=简报已全→全不勾；品牌常青=勾 default_on 源）
+    function topicGen() {
+      return {
+        loading: false,
+        campaign: '',
+        init() {
+          this._applyDefaults();
+          this.$watch('campaign', () => this._applyDefaults());
+        },
+        _applyDefaults() {
+          const brandMode = this.campaign === '';
+          this.$el.querySelectorAll('input[name=source]:not([disabled])').forEach(cb => {
+            cb.checked = brandMode && cb.dataset.defaultOn === '1';
+          });
+        },
+      };
+    }
+  </script>
   {% endif %}
 
   {# 分类 tab #}
@@ -81,12 +100,14 @@
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
             <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#{{ t.id }}</span>
               {{ t.title }}
               {{ chip(t.status, "slate" if t.status == "候选" else "emerald") }}
               {% if t.campaign_id %}{{ chip("活动·" ~ (cmap.get(t.campaign_id) or t.campaign_id), "amber") }}
               {% else %}{{ chip("品牌常青", "slate") }}{% endif %}
               {% if t.timeliness %}{{ chip("时效" ~ t.timeliness, "brand") }}{% endif %}
             </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 {{ t.created_at.strftime("%Y-%m-%d %H:00") }}</div>
             {% if t.outline %}<div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{{ t.outline }}</div>{% endif %}
             {% if t.audience or t.materials or t.publish_window %}
             <div class="text-xs text-slate-400 mt-1">

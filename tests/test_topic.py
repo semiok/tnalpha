@@ -247,6 +247,17 @@ def test_topics_tab_filter(owner_client, fresh_db):
     assert "发布选题Z" in published and "采纳选题Y" not in published
 
 
+def test_topics_show_id_and_gen_time(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        bid, _ = _seed_brand(s)
+        t = Topic(brand_id=bid, title="带编号的选题")
+        s.add(t); s.commit(); s.refresh(t)
+        tid = t.id
+    html = owner_client.get("/topics").text
+    assert f"#{tid}" in html          # 编号
+    assert "生成于" in html            # 生成时间（到小时）
+
+
 def test_topics_catalog_checkboxes_render(owner_client, fresh_db):
     with Session(fresh_db) as s:
         _seed_brand(s)

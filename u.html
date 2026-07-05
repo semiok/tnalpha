@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tnalpha</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // ── 设计 Token（全站唯一来源，改这里全局生效，见 DESIGN.md）──
+    tailwind.config = { theme: { extend: { colors: {
+      brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',
+               400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca' }
+    }}}}
+  </script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}[x-cloak]{display:none;}</style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+  <header class="bg-white border-b border-slate-200 px-5 py-3 flex items-center gap-3 sticky top-0 z-20">
+    <a href="/" class="w-8 h-8 rounded-lg bg-brand-600 text-white grid place-items-center font-bold">t</a>
+    <div class="font-bold">tnalpha <span class="text-slate-400 font-normal text-sm">· 内容生产协作平台</span></div>
+    <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 font-mono">v0.9.0</span>
+    <div class="ml-auto flex items-center gap-3 text-xs">
+      
+      <form method="post" action="/settings/knowledge-writable" class="inline">
+        <button type="submit" title="切换 开发/演示 模式（全站，点击即切、持久保存到本环境）"
+          class="px-2 py-1 rounded font-medium bg-emerald-100 text-emerald-700 hover:opacity-80">
+          🔓 开发模式 · 点击切换
+        </button>
+      </form>
+      <a href="/settings/llm" class="text-slate-500 hover:text-brand-600">模型配置</a>
+      
+      <span class="text-slate-400">定义者</span>
+      <a href="/logout" class="text-slate-400 hover:text-slate-600">退出登录</a>
+    </div>
+  </header>
+
+  
+  
+  
+  
+  <nav class="bg-white border-b border-slate-200 sticky top-[57px] z-10">
+    <div class="max-w-5xl mx-auto px-3 flex gap-1 text-sm overflow-x-auto">
+      
+      <a href="/" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">①知识库</a>
+      
+      <a href="/topics" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 border-brand-600 text-brand-700">②选题库</a>
+      
+      <a href="/writing" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">③写作引擎</a>
+      
+      <a href="/schedule" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">④排期版</a>
+      
+      <a href="/feedback" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">⑤数据反馈</a>
+      
+      <a href="/permissions" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">⑥权限</a>
+      
+    </div>
+  </nav>
+  
+
+  <main class="max-w-5xl mx-auto p-6">
+  
+  
+<div class="mb-5">
+  
+  <div class="flex items-baseline gap-3">
+    <h1 class="text-xl font-bold">敦煌当代美术馆</h1>
+    <span class="text-xs text-slate-400">②选题库</span>
+  </div>
+</div>
+
+
+  
+  <p class="text-sm text-slate-500 -mt-3 mb-5">读①知识库（品牌定义 + 活动选题简报 + 数据池）生成候选选题，可选联网蹭热点。</p>
+
+  
+  
+<div class="bg-white rounded-xl border border-slate-200 p-5 mb-4">
+  <div class="flex items-center justify-between mb-3">
+    <div class="text-sm font-semibold text-slate-600">生成候选选题</div>
+    <div></div>
+  </div>
+
+    <form method="post" action="/topics/generate" class="space-y-3"
+          x-data="topicGen()" @submit="loading=true">
+      <div class="flex flex-wrap items-end gap-2">
+        <label class="block">
+          <span class="block text-xs text-slate-500 mb-1">范围</span>
+          <select name="campaign_id" x-model="campaign" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+            <option value="">品牌常青（不限活动）</option>
+            <option value="2">活动：丝路有多长</option>
+          </select>
+        </label>
+        <label class="block">
+          <span class="block text-xs text-slate-500 mb-1">数量</span>
+          <input type="number" name="count" value="5" min="1" max="10"
+                 class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm">
+        </label>
+        
+        <button type="submit" :disabled="loading"
+                class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700"
+                :class="loading ? 'opacity-60 pointer-events-none' : ''">
+          <span x-show="!loading">🧠 生成候选</span>
+          <span x-show="loading" x-cloak>⏳ 生成中…（联网搜索 + AI 生成，约 30–60s）</span>
+        </button>
+      </div>
+
+      <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5">
+        <div class="text-xs text-slate-500 mb-2">🔎 联网蹭热点（可选，不勾=只用知识库）</div>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <label class="block">
+            <input type="text" name="hot_query" placeholder="时事/热点角度，如「敦煌 出圈」（空=品牌/活动名）"
+                   class="w-72 border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
+          </label>
+          
+          <label class="inline-flex items-center gap-1.5 text-sm text-slate-600"
+                 >
+            <input type="checkbox" name="source" value="google"
+                   data-default-on="1"
+                   
+                   class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+            <span>🌐 Google 搜索</span>
+            
+            
+          </label>
+          
+          <label class="inline-flex items-center gap-1.5 text-sm text-slate-600"
+                 >
+            <input type="checkbox" name="source" value="mp"
+                   data-default-on="0"
+                   
+                   class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+            <span>📰 搜狗公众号</span>
+            
+            
+          </label>
+          
+          <label class="inline-flex items-center gap-1.5 text-sm text-slate-600"
+                 >
+            <input type="checkbox" name="source" value="sonar"
+                   data-default-on="0"
+                   
+                   class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+            <span>🔥 🔥 深度热点</span>
+            
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">付费</span>
+
+            
+          </label>
+          
+          <label class="inline-flex items-center gap-1.5 text-sm text-slate-400"
+                 title="未配置/未开发，暂不可用">
+            <input type="checkbox" name="source" value="xhs"
+                   data-default-on="0"
+                   disabled
+                   class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+            <span>📕 小红书</span>
+            
+            
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">未启用</span>
+
+          </label>
+          
+        </div>
+      </div>
+    </form>
+    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效，简报已够全 → <b>默认不联网</b>）；品牌常青=只读品牌层（<b>默认勾 Google</b> 找外部灵感）。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
+  </div>
+  <script>
+    // 生成表单：范围联动搜索源默认勾选（活动模式=简报已全→全不勾；品牌常青=勾 default_on 源）
+    function topicGen() {
+      return {
+        loading: false,
+        campaign: '',
+        init() {
+          this._applyDefaults();
+          this.$watch('campaign', () => this._applyDefaults());
+        },
+        _applyDefaults() {
+          const brandMode = this.campaign === '';
+          this.$el.querySelectorAll('input[name=source]:not([disabled])').forEach(cb => {
+            cb.checked = brandMode && cb.dataset.defaultOn === '1';
+          });
+        },
+      };
+    }
+  </script>
+  
+
+  
+  <div class="flex flex-wrap gap-1.5 mb-3">
+    
+    <a href="/topics?status=all"
+       class="px-3 py-1.5 rounded-lg text-sm bg-brand-600 text-white">
+      全部 <span class="opacity-70">17</span>
+    </a>
+    
+    <a href="/topics?status=候选"
+       class="px-3 py-1.5 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">
+      候选 <span class="opacity-70">16</span>
+    </a>
+    
+    <a href="/topics?status=采纳"
+       class="px-3 py-1.5 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">
+      已采纳 <span class="opacity-70">1</span>
+    </a>
+    
+    <a href="/topics?status=已创作"
+       class="px-3 py-1.5 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">
+      已创作 <span class="opacity-70">0</span>
+    </a>
+    
+    <a href="/topics?status=已发布"
+       class="px-3 py-1.5 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">
+      已发布 <span class="opacity-70">0</span>
+    </a>
+    
+  </div>
+  
+
+  
+<div class="bg-white rounded-xl border border-slate-200 p-5 mb-4">
+  <div class="flex items-center justify-between mb-3">
+    <div class="text-sm font-semibold text-slate-600">选题（17）</div>
+    <div></div>
+  </div>
+
+    <div class="space-y-2">
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#17</span>
+              一个汉代驿站消失了两千年，现在它变成了一块会发烫的石头
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">活动·丝路有多长</span>
+
+              
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 03:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">悬泉置，甘肃敦煌附近的汉代官方驿传机构，出土了数量最多的汉代简牍之一——包括&#34;悬泉置亭次行&#34;封检、传文书、借马简、苜蓿账目，几乎构成一部驿站运营手册。这个地方曾经存在，后来消失在沙层里，再后来变成考古编号。艺术家姜苏轩在展厅里造了一件装置，命名《悬泉》：570×630×330cm的石头与冷轧钢板，内置电阻加热，蒸汽从石缝里冒出来。文章从这个装置入场——为什么一个驿站会变成一块热石头？——回溯悬泉置作为汉代&#34;信息中继节点&#34;的运营逻辑：文书在这里签收、转发、盖封检；马在这里换；行旅人在这里过夜；苜蓿在这里被买来喂马。驿站不是终点，它是整条路维持流动的接缝处。蒸汽是看不见的水变成可见的，就像驿站是看不见的帝国神经系统短暂显形的地方。结尾回扣：你站在一块热石头前，脚下就是两千年前那个接缝。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年 / 艺术与历史爱好者　
+              · 素材：姜苏轩《悬泉》，570×630×330cm，石头+冷轧钢板+电阻加热；&#34;悬泉置亭次行&#34;封检（甘肃简牍　
+              · 时机：8月中旬，暑期尾段，知识型读者回流，适合偏深度的历史-艺术联读内容
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/17/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/17/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#16</span>
+              两千年前寄一封加急文件，要盖几个章、换几匹马？
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">活动·丝路有多长</span>
+
+              
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">从一枚&#34;悬泉置亭次行&#34;封检切入——这块木片就是汉代公文的快递面单，&#34;亭次行&#34;意味着它要逐站传递，每过一个亭障换人接力，&#34;以邮行&#34;则意味着进入官方邮驿系统，有编制、有时限、有签收记录。邮书刺相当于古代的&#34;物流追踪&#34;，记录公文在哪一站、何时交接。整篇以&#34;寄一封从长安出发的加急公文&#34;为叙事线索，还原它经过多少驿站、消耗多少马力、如何被封装核验、最终送达敦煌边塞的完整过程。核心落点：丝路上流动的不只是货物，还有命令、情报和帝国运转的行政秩序——这套系统和今天的快递逻辑高度同构，却早了两千年。结尾引导观众在展厅里找到这几枚木简，问自己：如果你是接力链上的某一站，你会怎么签收这封信？</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年 / 历史爱好者 / 学生　
+              · 素材：&#34;悬泉置亭次行&#34;封检（甘肃简牍博物馆藏）；&#34;居延甲渠候官以邮行&#34;平面检（22.7×2.2×0.2cm　
+              · 时机：9月开学季（知识感契合&#34;历史课外课&#34;场景）或暑期末期8月下旬，作为知识深度向压轴内容
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/16/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/16/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#15</span>
+              一双麻鞋走了多少路？——当鞋底成为丝路的刻度
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">从展厅里那双汉代麻鞋出发：它不是展柜里的静物，而是一次远行留下的身体证据。鞋底的磨损比里程简更诚实——前者告诉你两地相距多少里，后者告诉你脚承受了什么。文章以麻鞋切入，连接居延里程简与悬泉里程简（具体里程与驿站记录），再引出汉代行旅制度：谁有资格拿传文书上路，谁只能靠一双草鞋自行跋涉。丝路的&#34;长度&#34;在这里第一次从地图尺度落到身体尺度——不是公里数，而是鞋底磨穿的次数。结尾回到沈少民《敦煌有多近》的抓娃娃机：当代观众伸手抓一只神兽，和两千年前那个穿麻鞋赶路的人，究竟谁距离敦煌更近？</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、历史爱好者、首次观展人群　
+              · 素材：汉代麻鞋（展品）、居延里程简、悬泉里程简、传文书（通行凭证）、沈少民《敦煌有多近》装置　
+              · 时机：暑期高峰期（7–8月），适合&#34;为什么值得专程来&#34;种草节奏
+
+---
+展览&#34;丝路有多长？&#34;｜敦煌当代美术馆｜2026.05.24–10.31｜上海市杨浦区长阳路1687号长阳创谷南3号楼
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/15/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/15/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#14</span>
+              一座铜炉，让你在汉代房间里闻到了西域的味道
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">从展厅里一件铜熏炉或博山炉出发：它不只是摆件，而是一条香料贸易路线抵达的终点。乳香、苏合香经丝路进入中原，进入祭祀、贵族起居和礼仪空间，最终以青铜的形状被固定下来——烟从镂空的山峦形孔隙升起，异域的气味就这样住进了一个从未踏上丝路的人的房间。文章追问：丝路运输的不只有丝绸和命令，还有味道，一种可以复制、可以携带、可以进入日常的远方。结尾连接当代艺术家Ouazzani Carrier的生态装置（以枣疯病、沙尘花粉为素材），提示气味与植物的旅行从汉唐从未停歇，只是路线和形式变了。适合公众号或媒体稿，感官切入，知识密度中等。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：艺术与历史爱好者、生活方式向读者　
+              · 素材：铜熏炉；博山炉；Ouazzani Carrier《巫帚》《控燃》生态装置作品　
+              · 时机：常规内容池；9–10月闭展前深度内容冲量
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/14/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/14/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#13</span>
+              伸手进一台抓娃娃机，距离就有了重量——你和敦煌，还差多少？
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效强</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">展厅里有一台巨型抓娃娃机，里面装的是敦煌壁画神兽玩偶。操纵杆拉下去，抓到了，敦煌就近了；没抓到，它还是停在某个说不清楚的远处——这是艺术家沈少民《敦煌有多近》想问的一个问题：距离，是公里数，还是&#34;抓没抓到&#34;的那一瞬间？文章从这个互动装置切入，引出展厅内两枚汉代里程简（居延里程简、悬泉里程简）：古人用木简把长安到敦煌的驿站、里程一一刻下，丈量方式是计数；今人用一台机器问同一个问题，丈量方式是身体参与。两种计量共同指向展览核心命题——距离从来不只是数字，而是你愿不愿意伸手去够。适合小红书互动内容或短视频脚本，配现场出片攻略。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、首次观展人群　
+              · 素材：沈少民《敦煌有多近》抓娃娃机装置；居延里程简；悬泉里程简　
+              · 时机：暑期高峰（7–8月）及国庆前社媒冲量
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/13/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/13/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#12</span>
+              300尊佛，翻模300次，五官模糊300遍——时间长什么样子？
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">活动·丝路有多长</span>
+
+              
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效弱</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">从一个可量化的数字切入：舒达《Buddha 300》，28×16厘米一尊，陶瓷材质，墙上整排排开。每翻模一次，细节就再消失一点——这不是破坏，是时间的工作方式。用&#34;翻模&#34;连接敦煌壁画的传播逻辑：古人也在不断复制图像，画像砖的模印、铜镜的纹样流传，复制不是副本，是图像的旅行方式。引出反差：原作在洞窟里被沙尘、潮湿、人气慢慢侵蚀；翻模作品在展厅里把这个过程压缩成可观看的渐变序列。回扣展览命题：丝路上图像走得越远，原型越模糊——这是损耗，也是传播的代价。给首次观展人群和亲子一个具体的现场任务：找到第一尊和最后一尊，说说你看到了什么不同。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：首次观展人群、亲子家庭、艺术爱好者　
+              · 素材：舒达《Buddha 300》，28×16cm/件，陶瓷+玻璃+念珠；魏晋画像砖组（模印图像）；铜镜组　
+              · 时机：暑期（7—8月）亲子高峰期优先；开学季（9月）可作&#34;图像与时间&#34;知识向内容复用
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/12/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/12/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#11</span>
+              一枚20×12cm的绿色丝绸，从河西走廊飘到了上海
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">活动·丝路有多长</span>
+
+              
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效弱</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">开头用一个反差钩子：丝绸之路最著名的商品，今天只剩这么一块碎片，20×12厘米，薄如蝉翼，绿色。从这块残片引入——它不是展品里最&#34;壮观&#34;的，却是最诚实的：路走得越远，磨损越大，留下的越少。连接丝路物质贸易逻辑：丝绸不只是商品，它是货币、是礼物、是外交信物；一块残片背后是纺织、运输、交易、保存的整条链条。回扣展览命题：丝路的长度，也藏在一块织物的消耗里。结尾引出现场：展厅里有它，也有当代艺术家用矿物颜料和岩彩延续的&#34;材料旅行&#34;——郭鸿蔚的颜色从哪里来？和这块绿色有没有关系？给观众留一个到展才能回答的问题。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、艺术与历史爱好者　
+              · 素材：汉代绿色丝绸片，20×12×0.1cm，甘肃简牍博物馆藏；郭鸿蔚岩彩系列作品（矿物颜料）　
+              · 时机：无强时效限制，适合长尾传播；可在开学季（9月）作为&#34;物质叙事&#34;类内容复推
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/11/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/11/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#10</span>
+              他们替玄奘点亮了那座烽燧——一个关于&#34;要不要走这条路&#34;的古老问题
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中（玄奘话题常青，烽燧影像具传播力）</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">玄奘西行的故事人人耳熟能详，但周裕隆《王的抉择》切入的是夜晚重新点亮烽燧的时刻——烽燧不只是军事信号，也是无数普通戍卒日夜轮值的岗位。切入点：从悬泉置相关简牍入手，戍卒的日常不是史诗，而是值班、记录、传信、生病；玄奘选择出关，守关士兵选择放行——一个关于抉择的故事里，最容易被忽略的始终是那些执行者。借2026年7月敦煌研究院国际合作新闻，引出&#34;为什么今天还有人在研究这条路上的每一个站点&#34;，再回到展览：历史的长度不只属于英雄，也藏在普通人的每一个是与否里。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、人文历史爱好者、有叙事感偏好的读者　
+              · 素材：周裕隆《王的抉择》、悬泉置相关简牍、传文书类简牍　
+              · 时机：暑期档（7—8月），亦适合国庆前&#34;值得专程去&#34;的种草节点
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/10/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/10/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#9</span>
+              从数字敦煌到上海现场：一张壁画颜色，走了多远才到你眼前？
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中（借数字敦煌合作热点，展期内持续有效）</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">2026年敦煌研究院与美国基金会签署国际合作备忘录，数字敦煌全球共享成为热点——但屏幕上的壁画和展厅里的岩彩，是两种完全不同的距离。切入点：郭鸿蔚以矿物颜料、岩彩重建壁画色系，颜料来源于矿石和山体；对照汉代织物中的植物染料（如汉绢与茜草科植物的潜在关联），说明丝路上颜色本身就在流动——从矿山到壁画、从西域到中原、从历史到今天艺术家的调色盘。结尾设问：这些颜色如何在数字屏幕和现场颜料之间保留了不同的&#34;长度&#34;？引导观众去现场感受岩彩的重量和粗粝感，而非仅看高清图片。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、艺术爱好者、对文物保护话题有关注的读者　
+              · 素材：郭鸿蔚岩彩系列作品、汉绢（含植物染料相关简牍）、矿物颜料实物　
+              · 时机：7月中旬至8月，配合暑期观展高峰及数字敦煌相关报道热度
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/9/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/9/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#8</span>
+              两千年前寄一封加急公文，要经过几站？——汉代驿传系统比你想的更忙
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">以&#34;古代快递&#34;作为低门槛类比开场，引出展厅中的封检与平面检实物：一件写有&#34;悬泉置亭次行&#34;的封检，记录的是公文逐亭传递的路径规则；&#34;以邮行&#34;则意味着文书进入更高级别的官方邮驿系统，两者相当于今天的&#34;普快&#34;与&#34;顺丰加急&#34;。再展开邮书刺——类似流转签收记录，公文到哪一站、由谁经手，清晰可查。核心论点：丝路上跑得最快的不是商队，而是帝国的命令和情报。结尾连接展览：这些木简不只是历史碎片，它们是一张曾经高速运转的信息网络留下的节点，丝路的长度，也是公文从长安传到敦煌所需的每一次交接的长度。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、知识科普爱好者、亲子（可改写为少年向版本）　
+              · 素材：&#34;悬泉置亭次行&#34;封检、&#34;居延甲渠候官以邮行&#34;平面检、邮书刺、南书简、传车具简（甘肃简牍博物馆藏）　
+              · 时机：开幕前后或国庆前（知识型内容适合流量平台收藏传播，国庆前发布可带动到访转化）
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/8/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/8/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#7</span>
+              戍卒也要请病假——汉简里那些生病的人，让丝路从传奇回到了身体
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 02:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">以&#34;一张病假条&#34;作为开场钩子，引出居延病书简的真实功能：戍边士兵因病无法上岗，需上报长官、备案存档，程序近似今天的病假申请。再接入居延医药简——边塞不只有战事，还有药材管理账目和编制内&#34;员医&#34;。从戍卒视角重新打量丝路：繁忙的传递系统背后，是无数普通人在风沙、严寒、长途跋涉中消耗的身体。结尾回扣展览命题：丝路的长度，也是人的疼痛和疲惫的长度，是那些没有留下名字、只留下一张病书的人共同拉开的距离。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、文史爱好者、对&#34;普通人历史&#34;有共情的内容消费者　
+              · 素材：居延病书简（甘肃简牍博物馆藏）、居延医药简、&#34;各财置员医更之&#34;相关简牍；汉代麻鞋作为身体疲惫的实物对　
+              · 时机：展览中期（8–9月），配合&#34;暑期尾声、秋凉将至&#34;的情绪，人文向传播节点
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/7/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/7/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#6</span>
+              上海有一台抓娃娃机，娃娃是壁画里的神兽
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">活动·丝路有多长</span>
+
+              
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效强（暑期打卡高峰，7—8月优先）</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 00:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">沈少民《敦煌有多近》，500×700×400cm，电机+不锈钢+纺织品，展厅现场可操作的巨型抓娃娃机，里面全是以敦煌壁画神兽为原型制作的玩偶。切入点：从最日常的消费娱乐场景进入——大家都抓过娃娃机，但没有人在娃娃机里见过九色鹿和飞天神兽。作品让&#34;距离&#34;变成了手感：抓得到，敦煌就近；抓不到，它还是那个两千公里外的远方。展开讨论作品背后的策展逻辑：博物馆里的文物是&#34;看不能碰&#34;的，这台机器把壁画图像变成可以握在手里的东西，正是在追问&#34;拥有&#34;与&#34;接近&#34;的边界。结合展览主题：丝路上的物品也曾经历相同的流转——被带走、被复制、被遗失，最终以另一种形态出现在另一个地方。给出互动问题：你抓到了吗？带走的那只神兽，算不算丝路这趟旅程的终点？</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、首次观展人群　
+              · 素材：沈少民《敦煌有多近》，500×700×400cm，电机+不锈钢+纺织品　
+              · 时机：7月—8月暑期优先发布，国庆前可二次推送加&#34;最后一波能抓到神兽&#34;时效钩
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/6/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/6/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#5</span>
+              秋风至树木凉——一枚6厘米汉简写下了两千年前的天气
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">活动·丝路有多长</span>
+
+              
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效弱（长尾，适合持续发布）</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 00:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">居水金关汉简，6.6×1.1×0.2cm，甘肃简牍博物馆藏，上面只写了六个字：&#34;秋风至树木凉&#34;。这不是诗，是边塞驿站的日常记录。切入点：用这句话和今天的天气App做对比——同样是记录气候，一个为了调度物资、预判行军，一个为了今天穿什么出门。然后展开：汉代边塞的信息传递依赖人工观察，气候变化直接影响驿站的备马、备粮和传文书节奏。这枚简牍说明丝路不是一条浪漫的远途，而是一套需要实时感知环境的运行系统。回扣展览命题：丝路的长度，也是一个又一个普通人在漫长季节里积累的感知。尾部给到访理由：现场可在两枚里程简旁看到这枚气候简，三者并置，是古代边塞信息系统的微型截面。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、历史爱好者　
+              · 素材：居水金关汉简，6.6×1.1×0.2cm，甘肃简牍博物馆藏；悬泉里程简，19×2×0.2cm，甘肃简　
+              · 时机：7月—9月通用，开学季（9月）尤其适合以&#34;历史课外课&#34;角度推送
+
+---
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/5/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/5/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#4</span>
+              一粒沙离开敦煌之后，去了哪里？
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 00:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">以冯瀚玉《沙的去向》为入口——观众可以亲手参与沙的迁徙，带走一部分敦煌——引出&#34;沙&#34;作为物质本身的旅行史：敦煌的沙是地质时间的产物，也是丝路气候与生态的证人。结合郭鸿蔚的岩彩作品，讲矿物颜料如何从山体进入壁画再进入今天的展厅；再接Ouazzani Carrier的生态异化作品，把敦煌从历史遗产扩展到气候、植物和未来遗迹。文章核心问题：一粒沙穿越了什么？它见证的&#34;距离&#34;，比任何里程简都要古老。适合公众号深度稿或诗性展评，语感偏慢、偏材料感。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：艺术爱好者、对当代艺术与生态议题感兴趣的城市青年、深度观展人群　
+              · 素材：冯瀚玉《沙的去向》、郭鸿蔚岩彩系列、Ouazzani Carrier《巫帚》、沈烈毅《寂》　
+              · 时机：秋季（9–10月）闭展前冲刺期，或配合气候/生态相关社会话题节点发布
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/4/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/4/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#3</span>
+              一斗五升粟，一匹借来的马——汉代出差到底有多贵？
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-05 00:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">从&#34;敦煌借马简&#34;和&#34;买苜蓿简&#34;切入，还原一次汉代公务出行的真实成本清单：借马需要凭证，马要吃苜蓿，人要领粟，路上要住传舍、持传文书才能通行。用&#34;古代出差报销单&#34;的现代类比，拆解丝路后勤系统如何把帝国意志落实成一笔笔账目。最后回扣展览命题：丝路的宏大叙事，其实是无数次&#34;借马→喂马→赶路→交接&#34;的接力——路不是被英雄走出来的，而是被账簿和粮草撑起来的。适合公众号或小红书图文，穿插借马简、粟出入簿、传车具简的文物细节照片。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、历史爱好者、对&#34;古代打工人&#34;话题有共鸣的大众读者　
+              · 素材：敦煌借马简、买苜蓿简、粟出入簿、传车具简、传文书　
+              · 时机：暑期亲子/青年出游高峰（7–8月），或配合&#34;打工人&#34;社媒热点节点发布
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/3/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/3/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#2</span>
+              关掉眼睛，用耳朵走一遍丝路
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">采纳</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-04 23:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">切入点是一个反常规的动作：闭上眼睛。大多数人进展厅第一件事是看，但&#34;拾音&#34;单元提供了另一条路——风声、铃声、水滴、蒸汽，这些声音把看不见的时间留在展厅。文章从&#34;我们为什么习惯用眼睛理解历史&#34;开篇，引出声音作为丝路证据的另一种形态：驿站门口的风、商队骆驼颈铃、敦煌洞窟的回响。再连接至Ouazzani Carrier作品中枣疯病与花粉扩散的非视觉维度——生态的变异不被眼睛看见，却真实发生。最后给出一条&#34;听展路线&#34;，建议读者在每个声音节点停留，问自己：这声音属于哪一段路？沙从哪里来，又往哪里去？引导读者把听觉变成丈量丝路的新单位。</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、首次观展人群、慢逛体验型观众　
+              · 素材：拾音单元（风声、铃声、水滴、蒸汽）、Ouazzani Carrier《巫帚》《控燃》《秦家湾村路》、　
+              · 时机：工作日慢逛内容，适合展期中后段（9–10月）&#34;闭展前必去&#34;氛围叠加发布
+
+---
+展览&#34;丝路有多长？&#34;｜敦煌当代美术馆｜2026.05.24–10.31｜上海市杨浦区长阳路1687号长阳创谷南3号楼
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/2/unadopt" class="inline">
+              <button type="submit" class="text-slate-500 hover:text-slate-700">取消采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/2/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+      <div class="rounded-lg bg-slate-50 px-3 py-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm flex flex-wrap items-center gap-1.5">
+              <span class="text-slate-400 font-mono text-xs">#1</span>
+              古人照镜子，照出了一只飞天——铜镜里的丝路图像是怎么旅行的？
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">候选</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">品牌常青</span>
+
+              
+
+<span class="inline-block px-2 py-0.5 rounded-full text-xs bg-brand-100 text-brand-700">时效中</span>
+
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 2026-07-04 23:00</div>
+            <div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">切入点是一个日常动作：照镜子。展厅里的飞天铜镜、晋位至三公铜镜等铜镜，背面铸有飞天、神兽、乳钉纹等图像——这些图案并非纯粹装饰，而是沿丝路流动、被反复复制的视觉系统。文章从&#34;铜镜正面照人、背面照史&#34;的反差切入，解释模印技术如何让同一张图像出现在不同地域、不同材质上，再连接到魏晋画像砖里的鹦鹉、六足神兽、人首鸟身等图像的传播逻辑，最后回到任瀚《在空中》的&#34;破坏性素描&#34;——当代艺术继续在摹写，只是方式变了。结尾以问题收束：你在展厅找到了几种飞翔的姿势？</div>
+            
+            <div class="text-xs text-slate-400 mt-1">
+              受众：城市青年、艺术与历史爱好者　
+              · 素材：飞天铜镜、晋位至三公铜镜、乳钉纹镜、魏晋鹦鹉画像砖、六足神兽画像砖、人首鸟身画像砖、任瀚《在空中》　
+              · 时机：暑期档（7–8月）图像传播高峰期，适合配短视频&#34;文物找不同&#34;互动
+            </div>
+            
+          </div>
+          
+          <div class="flex items-center gap-3 text-xs shrink-0">
+            
+            <form method="post" action="/topics/1/adopt" class="inline">
+              <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            
+            <form method="post" action="/topics/1/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+          </div>
+          
+        </div>
+      </div>
+      
+    </div>
+  </div>
+  
+</main>
+
+  <!-- 弹框挂载点（HTMX 注入，见 DESIGN.md 第3节） -->
+  <div id="modal-slot"></div>
+
+  <!-- 全局 toast：后端响应头 HX-Trigger: saved 触发 -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 hidden px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm shadow-lg"></div>
+  <script>
+    function tnToast(msg){const t=document.getElementById('toast');t.textContent=msg||'保存成功';t.classList.remove('hidden');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.add('hidden'),2000);}
+    document.body.addEventListener('saved', e=>tnToast((e.detail&&e.detail.value)||'保存成功'));
+    function tnCloseModal(){document.getElementById('modal-slot').innerHTML='';}
+  </script>
+</body>
+</html>
