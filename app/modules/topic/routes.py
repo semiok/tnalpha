@@ -85,6 +85,20 @@ def adopt(topic_id: int, request: Request, session: Session = Depends(get_sessio
     return RedirectResponse("/topics", status_code=303)
 
 
+@router.post("/topics/{topic_id}/unadopt")
+def unadopt(topic_id: int, request: Request, session: Session = Depends(get_session)):
+    """取消采纳：采纳 → 候选。仅②内部状态回退；③写作引擎已接手的选题不应回退（待③接入后加守卫）。"""
+    auth.require_level(request, 1)
+    t = session.get(Topic, topic_id)
+    if not t:
+        raise HTTPException(404, "选题不存在")
+    if t.status == "采纳":
+        t.status = "候选"
+        session.add(t)
+        session.commit()
+    return RedirectResponse("/topics", status_code=303)
+
+
 @router.post("/topics/{topic_id}/delete")
 def delete(topic_id: int, request: Request, session: Session = Depends(get_session)):
     auth.require_level(request, 1)

@@ -143,6 +143,22 @@ def test_adopt_and_delete(owner_client, fresh_db):
         assert s.get(Topic, tid) is None
 
 
+def test_unadopt_reverts_to_candidate(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        bid, _ = _seed_brand(s)
+        t = Topic(brand_id=bid, title="采纳后又反悔", status="采纳")
+        s.add(t); s.commit(); s.refresh(t)
+        tid = t.id
+    r = owner_client.post(f"/topics/{tid}/unadopt", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        assert s.get(Topic, tid).status == "候选"
+    # 非采纳态不受影响
+    owner_client.post(f"/topics/{tid}/unadopt", follow_redirects=False)
+    with Session(fresh_db) as s:
+        assert s.get(Topic, tid).status == "候选"
+
+
 def test_generate_requires_editor_level(publisher_client, fresh_db):
     with Session(fresh_db) as s:
         _seed_brand(s)

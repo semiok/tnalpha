@@ -3,6 +3,7 @@
 
 parse 用纯文本分隔符（标题：/纲要：…）而非 JSON——长中文自由文本 JSON 易碎、分隔符更鲁棒（tngen 经验）。
 """
+import logging
 import re
 
 from sqlmodel import Session, select
@@ -11,6 +12,8 @@ from app.core import llm, sources
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext, TopicCandidate
 from app.modules.topic.models import Topic
+
+_log = logging.getLogger("uvicorn.error")   # 进服务日志，记录每次生成的搜索选择
 
 _LABELS = ("标题", "纲要", "受众", "时效", "素材", "配图", "时机")
 # 抓某标签的值（到下一个标签或结尾）——纲要等多行也能抓全
@@ -116,6 +119,8 @@ def generate_topics(session: Session, brand_id: int, campaign_id: int | None = N
     hot_query: 热点搜索关键词；空则用 品牌名(+活动名) 兜底。
     """
     kc = KnowledgeContext.load(session, brand_id, campaign_id)
+    _log.info("[topic] 生成候选 brand=%s campaign=%s count=%s 勾选搜索源=%s 关键词=%r",
+              brand_id, campaign_id, count, sources_used or [], hot_query or "")
     hot_hits: list[dict] = []
     if sources_used:
         query = (hot_query or "").strip() or _default_query(session, brand_id, campaign_id)

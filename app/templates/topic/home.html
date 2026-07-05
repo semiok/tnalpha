@@ -70,6 +70,9 @@
     </a>
     {% endfor %}
   </div>
+  {% if active_tab in ("已创作", "已发布") %}
+  <p class="text-xs text-slate-400 -mt-2 mb-3">「已创作/已发布」状态来自③写作库（lindong），③接入后在此显示；当前未接入为空。</p>
+  {% endif %}
 
   {{ card_open("选题（" ~ topics|length ~ "）") }}
     <div class="space-y-2">
@@ -98,6 +101,10 @@
             {% if t.status == "候选" %}
             <form method="post" action="/topics/{{ t.id }}/adopt" class="inline">
               <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
+            </form>
+            {% elif t.status == "采纳" %}
+            <form method="post" action="/topics/{{ t.id }}/unadopt" class="inline">
+              <button type="submit" class="text-slate-500 hover:text-slate-700">取消采纳</button>
             </form>
             {% endif %}
             <form method="post" action="/topics/{{ t.id }}/delete" class="inline" onsubmit="return confirm('删除该选题？')">
