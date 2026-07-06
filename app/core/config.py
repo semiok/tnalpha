@@ -51,6 +51,12 @@ IMAGE_QUALITY = os.environ.get("TNALPHA_IMAGE_QUALITY", "low")
 IMAGE_FORMAT = os.environ.get("TNALPHA_IMAGE_FORMAT", "png")
 IMAGE_TIMEOUT = int(os.environ.get("TNALPHA_IMAGE_TIMEOUT", "400"))
 
+# ── 热点搜索源（core/sources/，②选题库用）──
+# 全部自包含在 tnalpha 内（不依赖 OpenClaw）；key 走 env，未配则对应源 enabled=False（UI 灰掉）。
+GEMINI_API_KEY = os.environ.get("TNALPHA_GEMINI_API_KEY", "")          # Google 搜索（gemini grounding，免费）
+PERPLEXITY_API_KEY = os.environ.get("TNALPHA_PERPLEXITY_API_KEY", "")  # 🔥深度热点（sonar，付费 $1/千次）
+SOURCE_TIMEOUT = int(os.environ.get("TNALPHA_SOURCE_TIMEOUT", "30"))   # 单次搜索超时(秒)
+
 # 三角色账号（密码默认 admin@123，env 可覆盖）。role: owner/editor/publisher
 USERS = {
     os.environ.get("TNALPHA_OWNER_USER", "admin"):      (os.environ.get("TNALPHA_OWNER_PASS", "admin@123"), "owner"),

@@ -7,3 +7,6 @@ data/
 .DS_Store
 *.log
 redeploy.sh
+
+# 根目录临时 html 快照（测试 curl -o 产物，别进仓）
+/*.html

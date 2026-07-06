@@ -1,42 +1,55 @@
-"""搜索源注册表 + 统一入口。
+"""搜索源注册表 + 统一入口（skill 式：自描述 + 可发现）。
 
-模块调 `sources.search(source, query)`，不直接 curl 外部 API（铁律 §3）。
-stub 先行返回假数据；真实源（热点/小红书/公众号/网络）已占位、接口已定，
-未实现时按 `fallback` 回退 stub，保证端到端可跑。真实 adapter 接好后 `register` 覆盖即可。
+模块调 `sources.search(source, query)` 或 `sources.gather(names, query)`，不直接 curl 外部 API（铁律 §3）。
+所有真实源**自包含在 tnalpha 内**（urllib/bs4，key 走 config env），不依赖 OpenClaw。
 
     from app.core import sources
-    hits = sources.search("stub", "国潮")          # → list[dict]
-    hits = sources.search("hot", "国潮")            # 未接入 → 回退 stub
+    sources.catalog()                      # [{name,label,emoji,paid,default_on,enabled}, ...] → 渲染勾选框
+    sources.gather(["google","mp"], "敦煌") # 跑多个源、合并命中，跳过未接入/报错的源
+    sources.search("stub", "国潮")          # 单源；未接入且 fallback=True 时回退 stub
 """
+import logging
+
 from app.core.sources.base import SourceAdapter
+from app.core.sources.gemini import GoogleAdapter
+from app.core.sources.sogou import SogouAdapter
+from app.core.sources.sonar import SonarAdapter
 from app.core.sources.stub import StubAdapter
 
 _stub = StubAdapter()
+_log = logging.getLogger("uvicorn.error")   # 借 uvicorn logger，INFO 直接进服务日志
 
 
 class _NotReady(SourceAdapter):
-    """真实源占位：接口已定，实现前 `search` 抛 NotImplementedError（上层可回退 stub）。"""
+    """占位源：接口已定、实现前不可用（is_available=False，UI 灰掉）。"""
 
-    def __init__(self, name: str):
-        self.name = name
+    def __init__(self, name: str, label: str, emoji: str):
+        self.name, self.label, self.emoji = name, label, emoji
+
+    def is_available(self) -> bool:
+        return False
 
     def search(self, query: str) -> list[dict]:
         raise NotImplementedError(f"搜索源 '{self.name}' 尚未接入")
 
 
-# 源标识 → adapter 实例。真实源占位待接。
-_REGISTRY: dict[str, SourceAdapter] = {
-    "stub": _stub,
-    "hot": _NotReady("hot"),   # 热点
-    "xhs": _NotReady("xhs"),   # 小红书
-    "mp": _NotReady("mp"),     # 公众号
-    "web": _NotReady("web"),   # 网络
-}
+# 注册顺序 = UI 勾选框顺序：Google(默认勾) → 搜狗公众号 → 深度热点(付费) → 小红书(占位)
+_REGISTRY: dict[str, SourceAdapter] = {}
 
 
 def register(adapter: SourceAdapter) -> None:
-    """注册/覆盖一个源（真实 adapter 接好后调用）。"""
+    """注册/覆盖一个源。"""
     _REGISTRY[adapter.name] = adapter
+
+
+for _a in (
+    _stub,
+    GoogleAdapter(),
+    SogouAdapter(),
+    SonarAdapter(),
+    _NotReady("xhs", "小红书", "📕"),
+):
+    register(_a)
 
 
 def available() -> list[str]:
@@ -49,6 +62,12 @@ def get(source: str) -> SourceAdapter:
     return _REGISTRY[source]
 
 
+def catalog(include_stub: bool = False) -> list[dict]:
+    """给 UI 的源清单（自描述）。默认隐藏 stub（仅测试/回退用）。"""
+    return [a.meta() for name, a in _REGISTRY.items()
+            if include_stub or name != "stub"]
+
+
 def search(source: str, query: str, fallback: bool = True) -> list[dict]:
     """检索指定源。源未接入且 fallback=True 时回退 stub，保证有结果可用。"""
     adapter = get(source)
@@ -58,3 +77,32 @@ def search(source: str, query: str, fallback: bool = True) -> list[dict]:
         if fallback:
             return _stub.search(query)
         raise
+
+
+def gather(names: list[str], query: str, per_source: int = 3) -> list[dict]:
+    """跑多个源、合并命中（每源截 per_source）。跳过未知/未接入/报错的源，绝不抛。
+
+    ②选题库批量搜索用：某个源（如搜狗抓取）挂了不影响其他源与整体生成。
+    """
+    query = (query or "").strip()
+    if not query or not names:
+        return []
+    hits: list[dict] = []
+    for n in names:
+        try:
+            adapter = get(n)
+        except ValueError:
+            _log.warning("[sources] 跳过未知源 '%s'", n)
+            continue
+        if not adapter.is_available():
+            _log.info("[sources] 跳过 '%s'：未启用（无 key/依赖）", n)
+            continue
+        try:
+            res = adapter.search(query) or []
+        except Exception as e:   # 单源失败（网络/反爬/限流/解析）→ 跳过，不拖垮整体
+            _log.warning("[sources] '%s' 失败，跳过：%s", n, e)
+            continue
+        _log.info("[sources] '%s' 命中 %d 条（取前 %d）", n, len(res), per_source)
+        hits.extend(res[:per_source])
+    _log.info("[sources] gather 源=%s 关键词=%r → 合计 %d 条注入", names, query, len(hits))
+    return hits

@@ -41,6 +41,8 @@ def llm_settings_page(request: Request, session: Session = Depends(get_session))
         "st": st,
         "masked_text_key": _masked(st.openai_api_key),
         "masked_image_key": _masked(st.image_api_key),
+        "masked_gemini_key": _masked(st.gemini_api_key),
+        "masked_perplexity_key": _masked(st.perplexity_api_key),
         "claude_ready": shutil.which("claude") is not None,
         "codex_ready": Path(config.CODEX_AUTH_PATH).expanduser().exists(),
         "minimax_m3_base_url": MINIMAX_M3_BASE_URL,
@@ -58,6 +60,7 @@ def save_llm_settings(request: Request,
                       openai_model: str = Form(""), image_base_url: str = Form(""),
                       image_api_key: str = Form(""), image_model: str = Form(""),
                       claude_model: str = Form("sonnet"), codex_model: str = Form("gpt-5.5"),
+                      gemini_api_key: str = Form(""), perplexity_api_key: str = Form(""),
                       session: Session = Depends(get_session)):
     auth.require_level(request, 2)
     st = get_llm_settings(session)
@@ -82,6 +85,10 @@ def save_llm_settings(request: Request,
         st.openai_api_key = openai_api_key
     if image_api_key and not image_api_key.startswith(_MASK):
         st.image_api_key = image_api_key
+    if gemini_api_key and not gemini_api_key.startswith(_MASK):
+        st.gemini_api_key = gemini_api_key
+    if perplexity_api_key and not perplexity_api_key.startswith(_MASK):
+        st.perplexity_api_key = perplexity_api_key
     session.add(st)
     session.commit()
     return RedirectResponse("/settings/llm?saved=1", status_code=303)

@@ -2,7 +2,7 @@
 import pytest
 
 _PLACEHOLDERS = [
-    ("/topics", "选题库"),
+    # ②选题库(/topics) 已实现，不再是占位
     ("/writing", "写作引擎"),
     ("/schedule", "排期版"),
     ("/feedback", "数据反馈"),

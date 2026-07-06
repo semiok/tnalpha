@@ -36,14 +36,14 @@ def test_sources_stub_search_returns_list():
 
 
 def test_sources_unready_falls_back_to_stub():
-    # 真实源未接入 → 默认回退 stub，仍有结果
-    hits = sources.search("hot", "国潮")
+    # 占位源未接入 → 默认回退 stub，仍有结果
+    hits = sources.search("xhs", "国潮")
     assert isinstance(hits, list) and len(hits) > 0
 
 
 def test_sources_unready_raises_without_fallback():
     with pytest.raises(NotImplementedError):
-        sources.search("hot", "国潮", fallback=False)
+        sources.search("xhs", "国潮", fallback=False)
 
 
 def test_sources_unknown_raises():

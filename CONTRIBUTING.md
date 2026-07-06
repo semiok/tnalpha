@@ -14,6 +14,19 @@
 3. 建环境：`python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 4. 让你的 AI 读 `CLAUDE.md`（它会告诉 AI 该读哪些、守哪些规矩）。
 
+### 本地 dev 库升级/重建（拉了新 main 报 `no such column: xxx` 就看这里）
+
+dev 用 SQLite。启动时 `init_db()` 只**建缺失的表**、**不改已存在的表**——所以如果你的本地 `tnalpha.db` 是早期跑出来的旧 schema（缺新列 / 没 `alembic_version` 表），拉了带新迁移的 main 会 500（如 `no such column: brand.doc_digest`）。
+
+**dev 库是测试数据，直接重建最省事**（一条命令，全迁移链 base→head 建出正确 schema 并 stamp）：
+
+```bash
+rm -f tnalpha.db          # 或你的 dev 库路径（TNALPHA_DATABASE_URL 指的那个）
+.venv/bin/alembic upgrade head
+```
+
+之后正常起服务即可。**别** `alembic stamp head` 硬盖旧库（列对不上照样 500）。有非丢不可的本地数据再单独说。
+
 ## 模型配置：接入你的 AI（本地开发）
 
 开发时**默认走 `stub`**（假数据、零配置，端到端能跑），不用接真实模型也能开发。要看真实 AI 解析/生成，去顶栏 **「模型配置」`/settings/llm`** 选 provider。**改完即时生效、失败自动回退 stub。**
@@ -44,6 +57,17 @@
 ### 按模块配置（预留接口）
 
 模型可按模块配（`scope`）：默认锚点 `default`（=知识库那套），**未单配的模块自动继承 default**。你的模块要用别的模型：调用处传 `module="你的模块名"` + 存一行 `LLMSetting(scope=...)`（详见 `app/core/settings.py` 顶部注释 / `ARCHITECTURE.md §3`）。没配就继承默认，不影响开发。
+
+### 热点搜索源（`core/sources/`）的 key——自己配，零外部依赖
+
+②选题库的联网搜索源**全部自包含在 tnalpha 内**（`core/sources/`，urllib/bs4），**不依赖任何本机脚本或 OpenClaw**。要真联网，在你自己的 env 配 key（没配 → 该源 UI 灰掉「未启用」，其他源照跑、不报错）：
+
+| 源 | env | 说明 |
+|----|-----|------|
+| Google（`google`） | `TNALPHA_GEMINI_API_KEY` | Gemini grounding，免费额度低（~200/天，[AI Studio](https://aistudio.google.com/apikey) 申自己的一把，别共用） |
+| 搜狗公众号（`mp`） | 无需 key | 抓取内联，装 `beautifulsoup4`（在 requirements）即可 |
+| 🔥深度热点（`sonar`） | `TNALPHA_PERPLEXITY_API_KEY` | Perplexity，付费 $1/千次 |
+| 小红书（`xhs`） | — | 占位未开发 |
 
 ## 标准协作流程（谁做什么，务必分清）
 

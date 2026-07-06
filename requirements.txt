@@ -6,6 +6,7 @@ python-multipart
 alembic
 psycopg2-binary
 pypdf
+beautifulsoup4  # core/sources 搜狗公众号搜索解析（自包含，不依赖 OpenClaw）
 python-docx
 python-pptx
 openpyxl
