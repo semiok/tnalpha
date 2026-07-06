@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, button, chip, empty_state %}
+{% block content %}
+  {{ page_header("③写作引擎", brand.name if brand else "写作引擎", crumbs=[("首页","/"), ("写作引擎","")]) }}
+
+  {% if not brand %}
+    {{ empty_state("还没有品牌，先去①知识库创建品牌。") }}
+  {% else %}
+    {{ card_open("风格抓取") }}
+      {% if campaigns %}
+        <div class="space-y-4">
+          {% for c in campaigns %}
+            <div class="border-b border-slate-100 last:border-0 pb-4 last:pb-0">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div class="text-sm font-medium text-slate-700">{{ c.name }}</div>
+                  <div class="text-xs text-slate-400">默认风格会注入该活动下的文章生成。</div>
+                </div>
+                <form method="post" action="/writing/styles/campaign/{{ c.id }}/capture" class="flex flex-wrap items-end gap-2">
+                  <label class="block">
+                    <span class="block text-xs text-slate-500 mb-1">关键词</span>
+                    <input type="text" name="query" value="{{ c.name }} 写作风格"
+                      class="w-56 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+                  </label>
+                  <label class="block">
+                    <span class="block text-xs text-slate-500 mb-1">数量</span>
+                    <input type="number" name="count" value="5" min="1" max="5"
+                      class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+                  </label>
+                  <div class="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                    {% for src in catalog %}
+                      <label class="inline-flex items-center gap-1.5 {{ 'text-slate-400' if not src.enabled else '' }}"
+                             {% if not src.enabled %}title="未配置/未启用"{% endif %}>
+                        <input type="checkbox" name="source" value="{{ src.name }}" {{ 'checked' if src.default_on and src.enabled else '' }} {{ 'disabled' if not src.enabled else '' }}>
+                        <span>{{ src.emoji }} {{ src.label }}</span>
+                      </label>
+                    {% endfor %}
+                  </div>
+                  {{ button("抓风格", variant="secondary", type="submit") }}
+                </form>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-2">
+                {% for style in styles.get(c.id, []) %}
+                  <form method="post" action="/writing/styles/{{ style.id }}/default" class="inline">
+                    <button type="submit" class="text-left px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-white">
+                      <span class="text-sm text-slate-700">{{ style.name }}</span>
+                      {% if style.is_default %}{{ chip("默认", "brand") }}{% endif %}
+                      <span class="block text-xs text-slate-400 mt-1 max-w-xl">{{ style.summary }}</span>
+                    </button>
+                  </form>
+                {% else %}
+                  <span class="text-sm text-slate-400">还没有风格，抓取后会自动把第一条设为默认。</span>
+                {% endfor %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        {{ empty_state("还没有活动，先去①知识库创建 campaign。") }}
+      {% endif %}
+    {{ card_close() }}
+
+    <div class="grid gap-4 lg:grid-cols-[320px_1fr]">
+      <section>
+        {{ card_open("待写作选题") }}
+          <div class="space-y-2">
+            {% for t in topics %}
+              {% set article = articles.get(t.id) %}
+              <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div class="text-sm font-medium text-slate-700">{{ t.title }}</div>
+                <div class="text-xs text-slate-400 mt-1">
+                  {{ cmap.get(t.campaign_id, "品牌常青") }} · {{ article.status if article else "待写作" }}
+                </div>
+                <div class="text-xs text-slate-500 mt-2 line-clamp-3">{{ t.outline }}</div>
+                <form method="post" action="/writing/topics/{{ t.id }}/generate" class="mt-3">
+                  {{ button("生成图文", variant="primary", type="submit", extra="w-full") }}
+                </form>
+              </div>
+            {% else %}
+              {{ empty_state("②选题库还没有已采纳选题。") }}
+            {% endfor %}
+          </div>
+        {{ card_close() }}
+      </section>
+
+      <section>
+        {{ card_open("文章") }}
+          <div class="space-y-3">
+            {% for t in topics %}
+              {% set article = articles.get(t.id) %}
+              {% if article %}
+                <article class="rounded-lg border border-slate-200 p-4">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h2 class="text-base font-semibold text-slate-800">{{ article.title }}</h2>
+                    {{ chip(article.status, "emerald") }}
+                  </div>
+                  {% if article.image_url %}
+                    <img src="{{ article.image_url }}" alt="" class="mt-3 max-h-56 rounded-lg border border-slate-100 object-cover">
+                  {% endif %}
+                  <div class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-600">{{ article.body }}</div>
+                </article>
+              {% endif %}
+            {% else %}
+              {{ empty_state("选择已采纳选题后，在左侧生成文章。") }}
+            {% endfor %}
+          </div>
+        {{ card_close() }}
+      </section>
+    </div>
+  {% endif %}
+{% endblock %}

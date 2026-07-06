@@ -1,9 +1,8 @@
-"""②③④⑤⑥ 占位骨架 + 六模块导航测试。"""
+"""模块入口 + 六模块导航测试。"""
 import pytest
 
 _PLACEHOLDERS = [
-    # ②选题库(/topics) 已实现，不再是占位
-    ("/writing", "写作引擎"),
+    # ②选题库(/topics)、③写作引擎(/writing) 已实现，不再是占位
     ("/schedule", "排期版"),
     ("/feedback", "数据反馈"),
     ("/permissions", "权限"),
@@ -20,6 +19,17 @@ def test_placeholder_page_ok(owner_client, path, name):
 @pytest.mark.parametrize("path,_name", _PLACEHOLDERS)
 def test_placeholder_requires_login(anon_client, path, _name):
     r = anon_client.get(path, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("/login")
+
+
+def test_writing_page_ok(owner_client):
+    r = owner_client.get("/writing")
+    assert r.status_code == 200
+    assert "写作引擎" in r.text and "还没有品牌" in r.text
+
+
+def test_writing_requires_login(anon_client):
+    r = anon_client.get("/writing", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("/login")
 
 
