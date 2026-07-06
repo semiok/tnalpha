@@ -200,6 +200,52 @@ def test_router_minimax_image_falls_back_to_stub_on_error(monkeypatch):
     assert out.endswith(".png") and "placeholder" in out
 
 
+def test_router_can_disable_stub_fallback(monkeypatch):
+    monkeypatch.setattr(llm, "_settings", lambda *a, **k: _MINIMAX_IMAGE)
+
+    def boom(*a, **k):
+        raise RuntimeError("MiniMax 图片接口失败")
+
+    monkeypatch.setattr(llm.minimax_image, "generate_image", boom)
+    with pytest.raises(RuntimeError, match="图像 provider"):
+        llm.generate_image("敦煌飞天", fallback=False)
+
+
+def test_openai_compat_retries_transient_http_error(monkeypatch):
+    class _Resp:
+        status_code = 529
+        def raise_for_status(self):
+            raise llm.openai_compat.httpx.HTTPStatusError("busy", request=None, response=self)
+        def iter_lines(self):
+            return iter([])
+
+    class _Ok:
+        def raise_for_status(self):
+            return None
+        def iter_lines(self):
+            return iter(['data: {"choices":[{"delta":{"content":"ok"}}]}', "data: [DONE]"])
+
+    class _Ctx:
+        def __init__(self, resp):
+            self.resp = resp
+        def __enter__(self):
+            return self.resp
+        def __exit__(self, *a):
+            return False
+
+    calls = {"n": 0}
+
+    def fake_stream(*a, **k):
+        calls["n"] += 1
+        return _Ctx(_Resp() if calls["n"] == 1 else _Ok())
+
+    monkeypatch.setattr(llm.openai_compat.httpx, "stream", fake_stream)
+    monkeypatch.setattr(llm.openai_compat.time, "sleep", lambda *a: None)
+    out = llm.openai_compat.generate_text("hi", "https://api.example/v1", "sk", "m")
+    assert out == "ok"
+    assert calls["n"] == 2
+
+
 def test_router_unconfigured_uses_stub(monkeypatch):
     monkeypatch.setattr(llm, "_settings", lambda *a, **k: {**_OPENAI, "text_provider": "stub"})
     assert "[stub:default]" in llm.generate_text("hi")

@@ -115,10 +115,11 @@ def test_generate_article_uses_topic_context_style_and_does_not_change_topic(own
 
     def fake_text(prompt, task="default", module="default", **k):
         seen["text"] = {"prompt": prompt, "task": task, "module": module}
+        seen["text"]["fallback"] = k.get("fallback")
         return "标题：一枚汉简写了什么\n\n正文：这是一篇完整文章。"
 
-    def fake_image(prompt, module="default"):
-        seen["image"] = {"prompt": prompt, "module": module}
+    def fake_image(prompt, module="default", **k):
+        seen["image"] = {"prompt": prompt, "module": module, "fallback": k.get("fallback")}
         return "/static/generated/hanjian.png"
 
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
@@ -133,6 +134,9 @@ def test_generate_article_uses_topic_context_style_and_does_not_change_topic(own
     assert r.status_code == 303
     assert seen["text"]["module"] == "writing"
     assert seen["image"]["module"] == "writing"
+    assert seen["text"]["fallback"] is False
+    assert seen["image"]["fallback"] is False
+    assert len(seen["image"]["prompt"]) <= 1400
     assert "KnowledgeContext" not in seen["text"]["prompt"]
     assert "短句开场" in seen["text"]["prompt"]
     assert "悬泉置里程简" in seen["text"]["prompt"]
@@ -150,6 +154,57 @@ def test_generate_requires_editor_level(publisher_client, fresh_db):
         _brand, _campaign, topic = _seed_topic(s)
         tid = topic.id
     assert publisher_client.post(f"/writing/topics/{tid}/generate").status_code == 403
+
+
+def test_generate_real_provider_failure_does_not_save_stub_article(owner_client, fresh_db, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("文本 provider 'minimax-m3' 调用失败：401")
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", boom)
+    with Session(fresh_db) as s:
+        _brand, _campaign, topic = _seed_topic(s)
+        tid = topic.id
+    r = owner_client.post(f"/writing/topics/{tid}/generate", follow_redirects=False)
+    assert r.status_code == 502
+    with Session(fresh_db) as s:
+        assert s.exec(select(Article).where(Article.topic_id == tid)).first() is None
+
+
+def test_generate_strips_model_thinking_before_save(owner_client, fresh_db, monkeypatch):
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *a, **k: "<think>internal reasoning</think>\n标题：正式标题\n\n正文：正式文章。",
+    )
+    monkeypatch.setattr(wroutes.llm, "generate_image", lambda *a, **k: "https://img.example/a.png")
+    with Session(fresh_db) as s:
+        _brand, _campaign, topic = _seed_topic(s)
+        tid = topic.id
+    r = owner_client.post(f"/writing/topics/{tid}/generate", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        article = s.exec(select(Article).where(Article.topic_id == tid)).one()
+        assert "<think>" not in article.body
+        assert "internal reasoning" not in article.body
+        assert article.title == "正式标题"
+
+
+def test_generate_strips_markdown_fence_before_save(owner_client, fresh_db, monkeypatch):
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *a, **k: "```\n标题：正式标题\n\n正文：正式文章。\n```",
+    )
+    monkeypatch.setattr(wroutes.llm, "generate_image", lambda *a, **k: "https://img.example/a.png")
+    with Session(fresh_db) as s:
+        _brand, _campaign, topic = _seed_topic(s)
+        tid = topic.id
+    r = owner_client.post(f"/writing/topics/{tid}/generate", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        article = s.exec(select(Article).where(Article.topic_id == tid)).one()
+        assert not article.body.startswith("```")
+        assert article.title == "正式标题"
 
 
 def test_generate_rejects_candidate_topic(owner_client, fresh_db):

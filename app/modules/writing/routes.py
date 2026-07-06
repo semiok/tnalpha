@@ -44,6 +44,31 @@ def _article_title(text: str, fallback: str) -> str:
     return fallback
 
 
+def _clean_article_body(text: str) -> str:
+    text = (text or "").strip()
+    while "<think>" in text:
+        before, rest = text.split("<think>", 1)
+        if "</think>" in rest:
+            _thinking, after = rest.split("</think>", 1)
+            text = (before + after).strip()
+            continue
+        markers = ["标题：", "# ", "正文："]
+        starts = [rest.find(marker) for marker in markers if rest.find(marker) >= 0]
+        if starts:
+            text = rest[min(starts):].strip()
+        else:
+            text = before.strip()
+        break
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
 def _style_from_hit(campaign_id: int, hit: dict, is_default: bool) -> Style:
     title = (hit.get("title") or "写作风格").strip()
     summary = (hit.get("summary") or title).strip()
@@ -140,9 +165,18 @@ def generate_article(topic_id: int, request: Request, session: Session = Depends
     ctx = KnowledgeContext.load(session, topic.brand_id, topic.campaign_id)
     style = _default_style(session, topic.campaign_id)
     prompt = _article_prompt(topic, ctx, style)
-    body = llm.generate_text(prompt, task="writing_article", module="writing")
+    try:
+        body = llm.generate_text(prompt, task="writing_article", module="writing", fallback=False)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    body = _clean_article_body(body)
+    if not body:
+        raise HTTPException(502, "文本 provider 返回空文章")
     image_prompt = _image_prompt(topic, ctx, style, body)
-    image_url = llm.generate_image(image_prompt, module="writing")
+    try:
+        image_url = llm.generate_image(image_prompt, module="writing", fallback=False)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
     article = session.exec(select(Article).where(Article.topic_id == topic.id)).first()
     if article is None:
         article = Article(topic_id=topic.id, campaign_id=topic.campaign_id, title=_article_title(body, topic.title))
@@ -193,8 +227,9 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None) ->
 
 def _image_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None, body: str) -> str:
     style_text = style.summary if style else ""
-    return (
+    prompt = (
         f"为文章《{topic.title}》生成配图。配图方向：{topic.image_hint}。"
         f"品牌视觉风格：{ctx.style_digest}。默认写作风格参考：{style_text}。"
-        f"文章摘要：{body[:500]}"
+        f"文章摘要：{body[:360]}"
     )
+    return prompt[:1400]
