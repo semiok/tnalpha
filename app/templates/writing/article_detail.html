@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header %}
+{% block title %}{{ article.title }} · 写作引擎{% endblock %}
+{% block content %}
+  {{ page_header("文章详情", article.title, crumbs=[("首页","/"), ("写作引擎","/writing"), ("文章详情","")]) }}
+  {% include "writing/_article_detail_content.html" with context %}
+{% endblock %}

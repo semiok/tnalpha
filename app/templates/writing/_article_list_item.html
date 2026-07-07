@@ -1,0 +1,46 @@
+{# 文章库简洁列表项：标题（新窗口看详情）+ 状态 + 操作。正在生成的带 HTMX 轮询刷新状态。#}
+{% from "components/ui.html" import chip, button %}
+{% set is_running = article.status in ("辩论中", "写作中", "重写中", "待配图", "待选图") and not article.error_message %}
+<article id="article-row-{{ article.id }}"
+         class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 flex flex-wrap items-center justify-between gap-3{% if is_running %} border-brand-200 bg-brand-50/30{% endif %}"
+         {% if oob %}hx-swap-oob="beforeend:#article-list"{% endif %}
+         {% if is_running %}
+         hx-get="/writing/articles/{{ article.id }}/generate-status"
+         hx-trigger="every 2s"
+         hx-target="this"
+         hx-swap="outerHTML"
+         {% endif %}>
+  <div class="min-w-0 flex-1">
+    <a href="/writing/articles/{{ article.id }}" target="_blank" rel="noopener"
+       class="group flex items-center gap-1.5 text-sm font-medium text-slate-800 hover:text-brand-600 truncate">
+      {% if is_running %}
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-pulse shrink-0"></span>
+      {% endif %}
+      <span class="truncate group-hover:underline">{{ article.title }}</span>
+    </a>
+    <div class="mt-0.5 text-xs text-slate-400 truncate pl-4">
+      {{ campaign_name }} · 来源选题：{{ topic.title }}
+      {% if is_running %} · <span class="text-brand-600">点击标题查看实时辩论过程</span>{% endif %}
+    </div>
+  </div>
+  <div class="flex items-center gap-2 shrink-0">
+    {{ chip(article.status, "rose" if article.status == "已删除" else ("amber" if article.status in ("辩论中", "写作中", "重写中", "待配图", "待选图") else "emerald")) }}
+    {% if article.status == "已删除" %}
+      <form method="post" action="/writing/articles/{{ article.id }}/restore"
+            hx-post="/writing/articles/{{ article.id }}/restore"
+            hx-target="#article-row-{{ article.id }}"
+            hx-swap="outerHTML"
+            class="inline">
+        {{ button("恢复", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
+      </form>
+    {% elif level >= 1 %}
+      <form method="post" action="/writing/articles/{{ article.id }}/delete"
+            hx-post="/writing/articles/{{ article.id }}/delete"
+            hx-target="#article-row-{{ article.id }}"
+            hx-swap="outerHTML"
+            onsubmit="return confirm('删除文章「{{ article.title }}」？');" class="inline">
+        {{ button("删除", variant="danger", type="submit", extra="!py-1 !text-xs") }}
+      </form>
+    {% endif %}
+  </div>
+</article>

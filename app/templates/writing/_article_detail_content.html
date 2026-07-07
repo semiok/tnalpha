@@ -1,0 +1,262 @@
+{# 文章详情内容片段：由 detail-status 端点返回，按状态展示辩论过程 / 选图 / 最终文章。#}
+{% from "components/ui.html" import chip, button %}
+{% from "writing/_article_progress.html" import progress_bubbles %}
+
+<div id="detail-content"
+     class="space-y-4"
+     x-data="{lightboxSrc: null}"
+     {% if article.status in ("辩论中", "写作中", "重写中", "待配图") and not article.error_message %}
+     hx-get="/writing/articles/{{ article.id }}/detail-status"
+     hx-trigger="every 2s"
+     hx-target="this"
+     hx-swap="outerHTML"
+     {% endif %}>
+  {# 顶部标题栏 #}
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="min-w-0 flex-1">
+      <h1 class="text-lg font-semibold text-slate-800">{{ article.title }}</h1>
+      <div class="mt-0.5 text-xs text-slate-400">
+        {{ campaign_name }} · 来源选题：{{ topic.title }}
+      </div>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+      {{ chip(article.status, "rose" if article.status == "已删除" else ("amber" if article.status in ("辩论中", "写作中", "重写中", "待配图", "待选图") else "emerald")) }}
+      {% if article.status != "已删除" and level >= 1 %}
+        <form method="post" action="/writing/articles/{{ article.id }}/delete"
+              onsubmit="return confirm('删除文章「{{ article.title }}」？');" class="inline">
+          {{ button("删除", variant="danger", type="submit", extra="!py-1 !text-xs") }}
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if article.error_message %}
+    <div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ article.error_message }}</div>
+  {% endif %}
+
+  {# ── 正在生成：展示实时辩论过程 ── #}
+  {% if article.status in ("辩论中", "写作中", "重写中") and not article.error_message %}
+    <div class="rounded-xl border border-brand-100 bg-brand-50/30 p-3">
+      {{ progress_bubbles(article, records, display_phase) }}
+    </div>
+  {% endif %}
+
+  {# ── 待配图 / 待选图：图文混排，图片嵌在正文对应位置 ── #}
+  {% if article.status in ("待配图", "待选图") %}
+    {# 状态提示条 #}
+    <div class="rounded-lg border px-3 py-2 text-sm flex items-center gap-3 flex-wrap
+                {{ 'border-brand-100 bg-brand-50/50 text-brand-700' if article.status == '待配图' else 'border-amber-100 bg-amber-50 text-amber-700' }}">
+      {% if article.status == "待配图" %}
+        <span class="inline-flex items-center gap-2">
+          <span class="inline-block w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+          正文已生成，配图正在后台生成中。每个位置的图选好后即可完成。
+        </span>
+        {% if level >= 1 %}
+          <form method="post" action="/writing/articles/{{ article.id }}/regenerate-images"
+                hx-post="/writing/articles/{{ article.id }}/regenerate-images"
+                hx-target="#detail-content"
+                hx-swap="outerHTML"
+                class="inline">
+            <button type="submit"
+                    class="px-2 py-0.5 rounded text-xs font-medium border border-brand-300 text-brand-700 bg-white hover:bg-brand-50 transition">
+              重新生成配图
+            </button>
+          </form>
+        {% endif %}
+      {% else %}
+        请在每个插图位置选择一张图片，全部选完后点击底部「确认选图」。
+      {% endif %}
+    </div>
+
+    {% if article.debate_brief or article.review_summary %}
+      <details class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+        <summary class="text-xs font-medium text-slate-500 cursor-pointer">AI 辩论/评审记录</summary>
+        <div class="mt-2 space-y-2">
+          {% if article.debate_brief %}
+            <div>
+              <div class="text-xs text-slate-400 mb-1">辩论综合简报（{{ article.debate_rounds }} 轮 × 4 角色）</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.debate_brief }}</div>
+            </div>
+          {% endif %}
+          {% if article.review_summary %}
+            <div>
+              <div class="text-xs text-slate-400 mb-1">评审综合建议（{{ article.review_rounds }} 轮 × 4 角色）</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.review_summary }}</div>
+            </div>
+          {% endif %}
+        </div>
+      </details>
+    {% endif %}
+
+    {# 图文混排正文：按段落切分，遇到插图位置就嵌入候选图组 #}
+    <form method="post" action="/writing/articles/{{ article.id }}/select-images"
+          hx-post="/writing/articles/{{ article.id }}/select-images"
+          hx-target="#detail-content"
+          hx-swap="outerHTML"
+          class="space-y-3">
+      <div class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-3">
+        {% for seg in body_segments %}
+          {% if seg.type == "text" %}
+            <div class="whitespace-pre-wrap text-sm leading-7 text-slate-700">{{ seg.text }}</div>
+          {% elif seg.type == "slot" %}
+            {% set imgs = slots.get(seg.slot_index, []) %}
+            <div class="my-2">
+              <div class="flex items-center gap-2 mb-2 flex-wrap">
+                <span class="text-xs font-medium text-slate-500">📷 插图位置 {{ seg.slot_index + 1 }}</span>
+                <span class="text-xs text-slate-400 flex-1 min-w-0 truncate">{{ seg.desc }}</span>
+                {% if imgs %}
+                  <span class="text-xs text-slate-400">（{{ imgs | length }}/4 张）</span>
+                {% endif %}
+                {% if level >= 1 %}
+                  <button type="button"
+                          hx-post="/writing/articles/{{ article.id }}/slots/{{ seg.slot_index }}/regenerate"
+                          hx-target="#detail-content"
+                          hx-swap="outerHTML"
+                          hx-confirm="重新生成插图位置 {{ seg.slot_index + 1 }} 的候选图？现有候选图会被替换。"
+                          class="px-2 py-0.5 rounded text-xs font-medium border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 hover:text-brand-600 transition">
+                    🔄 重生本位置
+                  </button>
+                {% endif %}
+              </div>
+              {% if imgs %}
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {% for img in imgs %}
+                  <div class="relative group">
+                    <label class="cursor-pointer block">
+                      <input type="radio" name="image_id" value="{{ img.id }}"
+                             class="peer sr-only"
+                             {{ 'checked' if img.is_selected else '' }}
+                             required>
+                      <div class="relative overflow-hidden rounded-lg border-2 transition-all
+                                  peer-checked:border-brand-500 peer-checked:ring-2 peer-checked:ring-brand-300
+                                  border-slate-200 group-hover:border-slate-300">
+                        <img src="{{ img.image_url }}" alt="" class="w-full h-32 object-cover">
+                        <div class="absolute inset-0 peer-checked:bg-brand-500/10 transition"></div>
+                        <div class="absolute top-1 left-1 w-5 h-5 rounded-full bg-white border-2 border-slate-300
+                                    peer-checked:bg-brand-500 peer-checked:border-brand-500
+                                    flex items-center justify-center transition">
+                          <svg class="w-3 h-3 text-white opacity-0 peer-checked:opacity-100" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                          </svg>
+                        </div>
+                      </div>
+                    </label>
+                    {# 放大按钮（不触发 radio 选中） #}
+                    <button type="button"
+                            @click.prevent.stop="lightboxSrc = '{{ img.image_url }}'"
+                            class="absolute top-1 right-1 w-7 h-7 rounded-full bg-white/90 text-slate-600 hover:bg-white hover:text-brand-600
+                                   flex items-center justify-center text-xs shadow opacity-0 group-hover:opacity-100 transition">
+                      🔍
+                    </button>
+                  </div>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <div class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center">
+                  <div class="text-xs text-slate-400">候选图生成中…</div>
+                </div>
+              {% endif %}
+            </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      <div class="sticky bottom-0 bg-white border-t border-slate-100 pt-3">
+        <button type="submit"
+                class="w-full px-4 py-2.5 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700">
+          确认选图，完成生成
+        </button>
+      </div>
+    </form>
+  {% endif %}
+
+  {# ── 已生成：展示最终文章 ── #}
+  {% if article.status in ("已生成", "已排期", "已发布") %}
+    {% if article.debate_brief or article.review_summary %}
+      <details class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" open>
+        <summary class="text-xs font-medium text-slate-500 cursor-pointer">AI 辩论/评审记录</summary>
+        <div class="mt-2 space-y-2">
+          {% if article.debate_brief %}
+            <div>
+              <div class="text-xs text-slate-400 mb-1">辩论综合简报（{{ article.debate_rounds }} 轮 × 4 角色）</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.debate_brief }}</div>
+            </div>
+          {% endif %}
+          {% if article.review_summary %}
+            <div>
+              <div class="text-xs text-slate-400 mb-1">评审综合建议（{{ article.review_rounds }} 轮 × 4 角色）</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.review_summary }}</div>
+            </div>
+          {% endif %}
+          {% if records %}
+            <div class="border-t border-slate-100 pt-2 mt-2">
+              <div class="text-xs text-slate-400 mb-1">完整辩论/评审发言记录</div>
+              {% set role_styles = {
+                'writer':  ('✍️', '主笔',     'bg-blue-50 border-blue-100',    'bg-blue-500',   'text-blue-700'),
+                'editor':   ('✏️', '编辑',     'bg-amber-50 border-amber-100',  'bg-amber-500',  'text-amber-700'),
+                'brand':    ('🏛️', '品牌守护', 'bg-violet-50 border-violet-100','bg-violet-500','text-violet-700'),
+                'reader':   ('👥', '读者代表', 'bg-emerald-50 border-emerald-100','bg-emerald-500','text-emerald-700'),
+              } %}
+              {% set ns = namespace(prev_phase='') %}
+              {% for r in records %}
+                {% set style = role_styles.get(r.role, ('❓', r.role, 'bg-slate-50 border-slate-100', 'bg-slate-400', 'text-slate-600')) %}
+                {% if r.phase != ns.prev_phase %}
+                  {% set phase_name = '💬 辩论阶段' if r.phase == 'debate' else '🔍 评审阶段' %}
+                  <div class="flex items-center gap-2 my-2">
+                    <div class="flex-1 border-t border-dashed border-slate-200"></div>
+                    <span class="text-xs text-slate-400 font-medium">{{ phase_name }}</span>
+                    <div class="flex-1 border-t border-dashed border-slate-200"></div>
+                  </div>
+                  {% set ns.prev_phase = r.phase %}
+                {% endif %}
+                <div class="flex gap-2 mb-2">
+                  <div class="shrink-0 w-8 h-8 rounded-full {{ style[3] }} flex items-center justify-center text-sm">{{ style[0] }}</div>
+                  <div class="min-w-0 flex-1">
+                    <div class="text-xs font-medium {{ style[4] }} mb-0.5">{{ style[1] }} · 第 {{ r.round_num }} 轮</div>
+                    <div class="rounded-lg {{ style[2] }} border px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap break-words">{{ r.content }}</div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      </details>
+    {% endif %}
+    {# 图文混排正文：按段落切分，遇到插图位置就嵌入选中的图 #}
+    <div class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-3">
+      {% for seg in body_segments %}
+        {% if seg.type == "text" %}
+          <div class="whitespace-pre-wrap text-sm leading-7 text-slate-700">{{ seg.text }}</div>
+        {% elif seg.type == "slot" %}
+          {% set imgs = slots.get(seg.slot_index, []) %}
+          {% if imgs %}
+            <div class="my-2 space-y-2">
+              {% for img in imgs %}
+                <img src="{{ img.image_url }}" alt=""
+                     @click="lightboxSrc = '{{ img.image_url }}'"
+                     class="w-full max-h-96 rounded-lg border border-slate-100 object-cover cursor-zoom-in hover:opacity-90 transition">
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {# ── 已删除提示 ── #}
+  {% if article.status == "已删除" %}
+    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">该文章已删除。</div>
+  {% endif %}
+
+  {# ── 图片放大 lightbox ── #}
+  <div x-show="lightboxSrc" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80"
+       @click="lightboxSrc = null"
+       @keydown.escape.window="lightboxSrc = null">
+    <img :src="lightboxSrc" alt=""
+         class="max-w-[92vw] max-h-[92vh] rounded-lg shadow-2xl object-contain">
+    <button type="button" @click.stop="lightboxSrc = null"
+            class="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/90 text-slate-700 hover:bg-white
+                   flex items-center justify-center text-2xl leading-none shadow-lg">&times;</button>
+  </div>
+</div>
