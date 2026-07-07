@@ -13,6 +13,7 @@ from sqlmodel import Session
 
 from app.core import config, db
 from app.core.llm import claude_cli, codex_image, codex_text, minimax_image, openai_compat, stub
+from app.core.llm.errors import ModelRateLimited
 
 
 def _settings(scope: str = "default") -> dict:
@@ -49,6 +50,8 @@ def generate_text(prompt: str, task: str = "default", pdf_path: str | None = Non
         if p == "codex":       # Codex 授权文本（gpt-5.5）；深度读图：PDF→input_file、图片→input_image
             return codex_text.generate_text(prompt, st["codex_model"], timeout=config.LLM_TIMEOUT,
                                             pdf_path=pdf_path, attachments=attachments)
+    except ModelRateLimited:
+        raise
     except Exception as e:
         print(f"[llm] 文本 provider '{p}' 失败，回退 stub：{e}")
     return stub.generate_text(prompt, task=task)

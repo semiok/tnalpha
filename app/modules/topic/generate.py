@@ -65,8 +65,19 @@ def _format_hits(hits: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_rejection_experiences(topics: list[Topic]) -> str:
+    lines = []
+    for t in topics:
+        reason = " ".join((t.rejection_reason or "").split())
+        if not reason:
+            continue
+        lines.append(f"- 《{t.title}》：不采纳原因：{reason}")
+    return "\n".join(lines)
+
+
 def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int,
-                   hot_hits: list[dict] | None = None) -> str:
+                   hot_hits: list[dict] | None = None,
+                   rejection_experiences: list[Topic] | None = None) -> str:
     parts = [
         f"你是内容选题策划。基于以下知识库信息，生成 {count} 个**全新**的内容选题。\n",
         f"【品牌调性·约束】\n{kc.brand_prompt or '（未填）'}\n",
@@ -86,6 +97,13 @@ def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int,
     if kc.pool_experiences:   # 经验包：调打法优先级
         parts.append("【过往经验·打法参考】\n" + "\n---\n".join(kc.pool_experiences)
                      + "\n→ 优先做已验证有效的，规避曾失效的。\n")
+    if rejection_experiences:
+        formatted = _format_rejection_experiences(rejection_experiences)
+        if formatted:
+            parts.append(
+                "【本活动选题经验包（来自回收站）】\n" + formatted
+                + "\n→ 这些是不采纳/删除过的选题及原因。生成新选题时要吸取教训，"
+                "避免重复同类低价值角度，并把原因反向转化为更清晰的选题判断。\n")
     if kc.pool_materials:
         parts.append("【补充素材】\n" + "\n---\n".join(kc.pool_materials) + "\n")
     if existing_titles:
@@ -119,15 +137,15 @@ def _default_query(session: Session, brand_id: int, campaign_id: int | None) -> 
 
 def generate_topics(session: Session, brand_id: int, campaign_id: int | None = None,
                     count: int = 5, sources_used: list[str] | None = None,
-                    hot_query: str = "") -> list[Topic]:
+                    hot_query: str = "", use_rejection_experience: bool = False) -> list[Topic]:
     """读知识库(KnowledgeContext) → [可选]联网搜热点 → 生成 → parse → 落 Topic。
 
     sources_used: 勾选的搜索源 name 列表（core/sources）；空=不联网。
     hot_query: 热点搜索关键词；空则用 品牌名(+活动名) 兜底。
     """
     kc = KnowledgeContext.load(session, brand_id, campaign_id)
-    _log.info("[topic] 生成候选 brand=%s campaign=%s count=%s 勾选搜索源=%s 关键词=%r",
-              brand_id, campaign_id, count, sources_used or [], hot_query or "")
+    _log.info("[topic] 生成候选 brand=%s campaign=%s count=%s 勾选搜索源=%s 关键词=%r 参考回收站经验=%s",
+              brand_id, campaign_id, count, sources_used or [], hot_query or "", use_rejection_experience)
     hot_hits: list[dict] = []
     if sources_used:
         query = (hot_query or "").strip() or _default_query(session, brand_id, campaign_id)
@@ -136,9 +154,16 @@ def generate_topics(session: Session, brand_id: int, campaign_id: int | None = N
         select(Topic).where(Topic.brand_id == brand_id, Topic.campaign_id == campaign_id)
         .order_by(Topic.created_at)).all()
     existing_titles = [t.title for t in existing]
-    raw = llm.generate_text(_topics_prompt(kc, existing_titles, count, hot_hits),
+    rejection_experiences = []
+    if use_rejection_experience:
+        rejection_experiences = [t for t in existing if t.status == "回收站" and t.rejection_reason]
+    raw = llm.generate_text(_topics_prompt(kc, existing_titles, count, hot_hits, rejection_experiences),
                             task="topic_gen", module="topic")
-    cands = parse_candidates(raw)[:count]
+    try:
+        cands = parse_candidates(raw)[:count]
+    except ValueError:
+        _log.error("[topic] 模型输出无法解析为选题，raw 前800字：%r", (raw or "")[:800])
+        raise
     source = "added" if existing else "generated"
     created: list[Topic] = []
     for cand in cands:

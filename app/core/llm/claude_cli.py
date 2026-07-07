@@ -6,6 +6,7 @@
 import subprocess
 
 from app.core import config
+from app.core.llm.errors import ModelRateLimited
 
 
 def generate_text(prompt: str, model: str = "sonnet", timeout: int = 180,
@@ -28,6 +29,8 @@ def generate_text(prompt: str, model: str = "sonnet", timeout: int = 180,
     out = (r.stdout or "").strip()
     # claude 认证失败/API 错误会把错误文本当"回答"打到 stdout（rc 可能为 0）——
     # 视为失败并 raise（让上层回退 stub），否则会把 "Failed to authenticate..." 当解读存库。
+    if out and ("You've hit your limit" in out or "hit your limit" in out):
+        raise ModelRateLimited("当前模型已限流")
     if out and ("Failed to authenticate" in out or "authentication_error" in out
                 or out.startswith("API Error") or '"type":"error"' in out):
         raise RuntimeError(f"claude 输出为错误：{out[:150]}")

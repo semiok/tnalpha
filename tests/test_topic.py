@@ -4,9 +4,11 @@ LLM 走 stub（conftest 强制），故 generate 用 monkeypatch 把 llm.generat
 可解析的纯文本样例——测的是"读 KnowledgeContext→组 prompt→parse→落库"这条链，非真模型输出。
 """
 import pytest
+from urllib.parse import unquote
 from sqlmodel import Session, select
 
 from app.modules.knowledge.models import Brand, Campaign
+from app.core.llm.errors import ModelRateLimited
 from app.modules.topic import generate as gen
 from app.modules.topic import routes as troutes
 from app.modules.topic.generate import parse_candidates
@@ -106,7 +108,8 @@ def test_generate_topics_count_and_source(fresh_db, monkeypatch):
 
 def _stub_generate(monkeypatch):
     """把路由用到的 generate_topics 换成直接落一条，绕开 LLM。"""
-    def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query=""):
+    def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query="",
+                 use_rejection_experience=False):
         t = Topic(brand_id=brand_id, campaign_id=campaign_id, title="测试选题", outline="纲要")
         session.add(t); session.commit(); session.refresh(t)
         return [t]
@@ -128,7 +131,7 @@ def test_generate_route_creates_and_lists(owner_client, fresh_db, monkeypatch):
     assert "测试选题" in owner_client.get("/topics").text
 
 
-def test_adopt_and_delete(owner_client, fresh_db):
+def test_adopt_and_delete_moves_to_recycle_bin(owner_client, fresh_db):
     with Session(fresh_db) as s:
         bid, _ = _seed_brand(s)
         t = Topic(brand_id=bid, title="待采纳")
@@ -138,9 +141,27 @@ def test_adopt_and_delete(owner_client, fresh_db):
     assert r.status_code == 303
     with Session(fresh_db) as s:
         assert s.get(Topic, tid).status == "采纳"
-    owner_client.post(f"/topics/{tid}/delete", follow_redirects=False)
+    owner_client.post(f"/topics/{tid}/delete", data={"rejection_reason": "角度太泛"},
+                      follow_redirects=False)
     with Session(fresh_db) as s:
-        assert s.get(Topic, tid) is None
+        t = s.get(Topic, tid)
+        assert t is not None
+        assert t.status == "回收站"
+        assert t.rejection_reason == "角度太泛"
+        assert t.rejected_at is not None
+
+
+def test_delete_requires_rejection_reason(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        bid, _ = _seed_brand(s)
+        t = Topic(brand_id=bid, title="缺少原因")
+        s.add(t); s.commit(); s.refresh(t)
+        tid = t.id
+    r = owner_client.post(f"/topics/{tid}/delete", data={"rejection_reason": "   "},
+                          follow_redirects=False)
+    assert r.status_code == 400
+    with Session(fresh_db) as s:
+        assert s.get(Topic, tid).status == "候选"
 
 
 def test_unadopt_reverts_to_candidate(owner_client, fresh_db):
@@ -220,15 +241,56 @@ def test_generate_route_passes_and_filters_sources(owner_client, fresh_db, monke
         _seed_brand(s)
     captured = {}
 
-    def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query=""):
-        captured.update(sources_used=sources_used, hot_query=hot_query)
+    def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query="",
+                 use_rejection_experience=False):
+        captured.update(sources_used=sources_used, hot_query=hot_query,
+                        use_rejection_experience=use_rejection_experience)
         return []
 
     monkeypatch.setattr(troutes, "generate_topics", fake_gen)
     owner_client.post("/topics/generate", follow_redirects=False, data={
-        "campaign_id": "", "count": "3", "source": ["google", "bogus"], "hot_query": "敦煌"})
+        "campaign_id": "", "count": "3", "source": ["google", "bogus"], "hot_query": "敦煌",
+        "use_rejection_experience": "true"})
     assert captured["sources_used"] == ["google"]           # 非法源 bogus 被过滤
     assert captured["hot_query"] == "敦煌"
+    assert captured["use_rejection_experience"] is True
+
+
+def test_generate_route_shows_rate_limit_modal(owner_client, fresh_db, monkeypatch):
+    with Session(fresh_db) as s:
+        _seed_brand(s)
+
+    def fake_gen(*a, **k):
+        raise ModelRateLimited("当前模型已限流")
+
+    monkeypatch.setattr(troutes, "generate_topics", fake_gen)
+    r = owner_client.post("/topics/generate", follow_redirects=False, data={
+        "campaign_id": "", "count": "1"})
+    assert r.status_code == 303
+    assert "modal_error=" in r.headers["location"]
+    assert "当前模型已限流" in unquote(r.headers["location"])
+
+
+def test_generate_can_reference_recycle_bin_experience(fresh_db, monkeypatch):
+    seen = {}
+
+    def fake(prompt, task="default", module="default", **k):
+        seen["prompt"] = prompt
+        return _SAMPLE
+
+    monkeypatch.setattr(gen.llm, "generate_text", fake)
+    with Session(fresh_db) as s:
+        bid, cid = _seed_brand(s, with_campaign=True)
+        s.add(Topic(brand_id=bid, campaign_id=cid, title="过宽泛的展览打卡",
+                    status="回收站", rejection_reason="只像普通打卡，缺少丝路知识点"))
+        s.add(Topic(brand_id=bid, campaign_id=None, title="别的范围",
+                    status="回收站", rejection_reason="品牌常青的经验不混入活动"))
+        s.commit()
+        gen.generate_topics(s, bid, cid, count=2, use_rejection_experience=True)
+    assert "本活动选题经验包" in seen["prompt"]
+    assert "过宽泛的展览打卡" in seen["prompt"]
+    assert "只像普通打卡" in seen["prompt"]
+    assert "品牌常青的经验不混入活动" not in seen["prompt"]
 
 
 # ---------- 分类 tab ----------
@@ -239,12 +301,16 @@ def test_topics_tab_filter(owner_client, fresh_db):
         s.add(Topic(brand_id=bid, title="候选选题X", status="候选"))
         s.add(Topic(brand_id=bid, title="采纳选题Y", status="采纳"))
         s.add(Topic(brand_id=bid, title="发布选题Z", status="已发布"))
+        s.add(Topic(brand_id=bid, title="回收选题R", status="回收站", rejection_reason="不够具体"))
         s.commit()
     assert "候选选题X" in owner_client.get("/topics").text           # 全部含候选
+    assert "回收选题R" not in owner_client.get("/topics").text        # 全部不含回收站
     adopted = owner_client.get("/topics?status=采纳").text
     assert "采纳选题Y" in adopted and "候选选题X" not in adopted      # 已采纳 tab 只留采纳
     published = owner_client.get("/topics?status=已发布").text
     assert "发布选题Z" in published and "采纳选题Y" not in published
+    recycle = owner_client.get("/topics?status=回收站").text
+    assert "回收选题R" in recycle and "不采纳原因：不够具体" in recycle
 
 
 def test_topics_show_id_and_gen_time(owner_client, fresh_db):
@@ -264,3 +330,5 @@ def test_topics_catalog_checkboxes_render(owner_client, fresh_db):
     html = owner_client.get("/topics").text
     assert "Google 搜索" in html and "搜狗公众号" in html
     assert "🔥 深度热点" in html and "小红书" in html                # 付费源+占位源也显示
+    assert "参考选题经验包" in html and "回收站" in html
+    assert 'name="use_rejection_experience" value="true"\n                 checked' in html

@@ -12,14 +12,14 @@ def _now() -> datetime:
     return datetime.now()
 
 
-# 选题状态机（共享词表）：候选 → 采纳(待写作) → 写作中 → 图文完成 → 已排期 → 已发布
+# 选题状态机（共享词表）：候选 → 采纳(待写作) → 写作中 → 图文完成 → 已排期 → 已发布；删除进入回收站。
 #
 # 【归属·见 ARCHITECTURE §5.2 ②↔③ 契约】
 #   ②选题库只拥有并写入前两态：候选 ↔ 采纳（生成/采纳/取消采纳）。
 #   ③写作引擎（lindong）读 status=='采纳' 的选题接手，「写作中/图文完成/已排期/已发布」
 #   由③的写作库按 topic_id 持有——②的「已创作/已发布」分类应从③读回，不由②写 Topic.status。
 #   （③未接入前，这些下游态无数据，对应 tab 为空；接入方式待③落地后按契约实现。）
-TOPIC_STATUSES = ("候选", "采纳", "写作中", "图文完成", "已排期", "已发布")
+TOPIC_STATUSES = ("候选", "采纳", "写作中", "图文完成", "已排期", "已发布", "回收站")
 
 
 class Topic(SQLModel, table=True):
@@ -37,4 +37,6 @@ class Topic(SQLModel, table=True):
     publish_window: str = ""      # 建议发布时机
     status: str = "候选"          # 见 TOPIC_STATUSES
     source: str = "generated"     # generated（首次生成）| added（增补去重）
+    rejection_reason: str = ""    # 进回收站时填写：为什么不采纳，后续沉淀选题经验包
+    rejected_at: datetime | None = None
     created_at: datetime = Field(default_factory=_now)

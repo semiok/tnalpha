@@ -3,11 +3,21 @@
 {% block content %}
   {% set can_edit = request.state.level >= 1 %}
   {{ page_header("②选题库", brand.name if brand else "选题库") }}
+  {% if modal_error %}
+  <script>
+    window.addEventListener('DOMContentLoaded', () => alert({{ modal_error|tojson }}));
+  </script>
+  {% endif %}
 
   {% if not brand %}
     {{ empty_state("还没有品牌，先去①知识库建/解析品牌。") }}
   {% else %}
   <p class="text-sm text-slate-500 -mt-3 mb-5">读①知识库（品牌定义 + 活动选题简报 + 数据池）生成候选选题，可选联网蹭热点。</p>
+  {% if error %}
+  <div class="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2.5 text-sm text-rose-700 mb-4">
+    {{ error }}
+  </div>
+  {% endif %}
 
   {% if can_edit %}
   {{ card_open("生成候选选题") }}
@@ -25,6 +35,12 @@
           <span class="block text-xs text-slate-500 mb-1">数量</span>
           <input type="number" name="count" value="5" min="1" max="10"
                  class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm">
+        </label>
+        <label class="inline-flex items-center gap-1.5 pb-2 text-sm text-slate-600">
+          <input type="checkbox" name="use_rejection_experience" value="true"
+                 checked
+                 class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+          <span>参考选题经验包</span>
         </label>
         {# 同步生成约 30–60s：提交即禁用+转文案，防重复点击（Alpine，配色同 primary 宏）#}
         <button type="submit" :disabled="loading"
@@ -57,7 +73,7 @@
         </div>
       </div>
     </form>
-    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效，简报已够全 → <b>默认不联网</b>）；品牌常青=只读品牌层（<b>默认勾 Google</b> 找外部灵感）。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
+    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效，简报已够全 → <b>默认不联网</b>）；品牌常青=只读品牌层（<b>默认勾 Google</b> 找外部灵感）。「选题经验包」来自同范围回收站里的不采纳原因。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
   {{ card_close() }}
   <script>
     // 生成表单：范围联动搜索源默认勾选（活动模式=简报已全→全不勾；品牌常青=勾 default_on 源）
@@ -91,6 +107,8 @@
   </div>
   {% if active_tab in ("已创作", "已发布") %}
   <p class="text-xs text-slate-400 -mt-2 mb-3">「已创作/已发布」状态来自③写作库（lindong），③接入后在此显示；当前未接入为空。</p>
+  {% elif active_tab == "回收站" %}
+  <p class="text-xs text-slate-400 -mt-2 mb-3">删除的选题会进入回收站并保留不采纳原因，后续生成时可勾选「参考选题经验包」。</p>
   {% endif %}
 
   {{ card_open("选题（" ~ topics|length ~ "）") }}
@@ -109,6 +127,11 @@
             </div>
             <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 {{ t.created_at.strftime("%Y-%m-%d %H:00") }}</div>
             {% if t.outline %}<div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{{ t.outline }}</div>{% endif %}
+            {% if t.status == "回收站" and t.rejection_reason %}
+            <div class="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-md px-2 py-1.5 mt-2">
+              不采纳原因：{{ t.rejection_reason }}
+            </div>
+            {% endif %}
             {% if t.audience or t.materials or t.publish_window %}
             <div class="text-xs text-slate-400 mt-1">
               {% if t.audience %}受众：{{ t.audience }}　{% endif %}
@@ -128,9 +151,13 @@
               <button type="submit" class="text-slate-500 hover:text-slate-700">取消采纳</button>
             </form>
             {% endif %}
-            <form method="post" action="/topics/{{ t.id }}/delete" class="inline" onsubmit="return confirm('删除该选题？')">
+            {% if t.status != "回收站" %}
+            <form method="post" action="/topics/{{ t.id }}/delete" class="inline"
+                  onsubmit="const reason = prompt('请输入不采纳原因（用于沉淀选题经验包）'); if (!reason || !reason.trim()) return false; this.querySelector('[name=rejection_reason]').value = reason.trim(); return true;">
+              <input type="hidden" name="rejection_reason" value="">
               <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
             </form>
+            {% endif %}
           </div>
           {% endif %}
         </div>
