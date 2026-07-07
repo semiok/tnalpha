@@ -34,7 +34,8 @@ def _settings(scope: str = "default") -> dict:
 
 
 def generate_text(prompt: str, task: str = "default", pdf_path: str | None = None,
-                  module: str = "default", attachments: list[str] | None = None) -> str:
+                  module: str = "default", attachments: list[str] | None = None,
+                  fallback: bool = True) -> str:
     """module=模块名，按模块选模型（未配→继承 default=知识库锚点）。task 仅供 stub 标注。
     pdf_path/attachments 非空=深度读图（PDF 图片页 / 图片；只 claude-cli / codex 真读，其余 provider 忽略、仅按文本）。"""
     st = _settings(module)
@@ -53,11 +54,13 @@ def generate_text(prompt: str, task: str = "default", pdf_path: str | None = Non
     except ModelRateLimited:
         raise
     except Exception as e:
+        if not fallback:
+            raise RuntimeError(f"文本 provider '{p}' 调用失败：{e}") from e
         print(f"[llm] 文本 provider '{p}' 失败，回退 stub：{e}")
     return stub.generate_text(prompt, task=task)
 
 
-def generate_image(prompt: str, module: str = "default") -> str:
+def generate_image(prompt: str, module: str = "default", fallback: bool = True) -> str:
     """module=模块名，按模块选图像模型（未配→继承 default）。"""
     st = _settings(module)
     p = st["image_provider"]
@@ -69,5 +72,7 @@ def generate_image(prompt: str, module: str = "default") -> str:
                 prompt, st["image_base_url"], st["image_api_key"],
                 st["image_model"], timeout=config.IMAGE_TIMEOUT)
     except Exception as e:
+        if not fallback:
+            raise RuntimeError(f"图像 provider '{p}' 调用失败：{e}") from e
         print(f"[llm] 图像 provider '{p}' 失败，回退 stub：{e}")
     return stub.generate_image(prompt)

@@ -16,7 +16,14 @@ def test_version_semver_and_exposed():
     assert app.version == __version__                    # FastAPI 元数据同源
 
 
-def test_llm_generate_text_nonempty_and_deterministic():
+def test_llm_generate_text_nonempty_and_deterministic(monkeypatch):
+    # 强制使用 stub，避免受本地 DB provider 配置影响
+    monkeypatch.setattr(llm, "_settings", lambda scope="default": {
+        "text_provider": "stub", "image_provider": "stub",
+        "openai_base_url": "", "openai_api_key": "", "openai_model": "",
+        "image_base_url": "", "image_api_key": "", "image_model": "",
+        "claude_model": "", "codex_model": "",
+    })
     out = llm.generate_text("给品牌写个定位摘要", task="brand_digest")
     assert out and isinstance(out, str)
     assert "brand_digest" in out
@@ -24,7 +31,13 @@ def test_llm_generate_text_nonempty_and_deterministic():
     assert out == llm.generate_text("给品牌写个定位摘要", task="brand_digest")
 
 
-def test_llm_generate_image_returns_path():
+def test_llm_generate_image_returns_path(monkeypatch):
+    monkeypatch.setattr(llm, "_settings", lambda scope="default": {
+        "text_provider": "stub", "image_provider": "stub",
+        "openai_base_url": "", "openai_api_key": "", "openai_model": "",
+        "image_base_url": "", "image_api_key": "", "image_model": "",
+        "claude_model": "", "codex_model": "",
+    })
     path = llm.generate_image("敦煌飞天")
     assert isinstance(path, str) and path.endswith(".png")
 

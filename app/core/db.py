@@ -13,6 +13,7 @@ def init_db() -> None:
     import app.core.settings  # noqa: F401  注册 LLMSetting 表
     import app.modules.knowledge.models  # noqa: F401  注册表
     import app.modules.topic.models  # noqa: F401  注册 Topic 表
+    import app.modules.writing.models  # noqa: F401  注册 Article/Style 表
     SQLModel.metadata.create_all(engine)
 
 

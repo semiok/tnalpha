@@ -1,0 +1,130 @@
+{% macro progress_bubbles(article, records, display_phase=None) %}
+{% set role_styles = {
+  'writer':  ('✍️', '主笔',     'bg-blue-50 border-blue-100',    'bg-blue-500',   'text-blue-700'),
+  'editor':   ('✏️', '编辑',     'bg-amber-50 border-amber-100',  'bg-amber-500',  'text-amber-700'),
+  'brand':    ('🏛️', '品牌守护', 'bg-violet-50 border-violet-100','bg-violet-500','text-violet-700'),
+  'reader':   ('👥', '读者代表', 'bg-emerald-50 border-emerald-100','bg-emerald-500','text-emerald-700'),
+} %}
+
+{# 页面展示阶段：优先使用传入的 display_phase，否则按 article.status 推导 #}
+{% set phase = display_phase or article.status %}
+{% set is_debate = phase == '辩论中' %}
+{% set is_writing = phase == '写作中' %}
+{% set is_review = phase == '评审中' %}
+{% set is_rewrite = phase == '重写中' %}
+{% set is_image_gen = phase == '生成配图中' %}
+{% set phase_label = 'AI 多角色辩论' if is_debate else ('AI 正在生成正文' if is_writing else ('AI 多角色评审' if is_review else ('正在按评审建议重写' if is_rewrite else '正在生成多插图候选'))) %}
+{% set phase_icon = '💬' if is_debate else ('✍️' if is_writing else ('🔍' if is_review else ('🔄' if is_rewrite else '🖼️'))) %}
+{% set total_rounds = article.debate_rounds if is_debate else (article.review_rounds if (is_review or is_rewrite) else 0) %}
+{% set phase_records = records | selectattr('phase', 'equalto', 'debate' if is_debate else 'review') | list %}
+{% set current_round = phase_records | map(attribute='round_num') | max | default(0) %}
+{% set current_round_display = current_round + 1 if current_round < total_rounds else current_round %}
+
+<div class="space-y-1">
+  <div class="flex items-center gap-2 mb-3 px-1">
+    <span class="text-lg">{{ phase_icon }}</span>
+    <span class="text-sm font-semibold text-slate-700">{{ phase_label }}</span>
+    {% if total_rounds > 0 %}
+      <span class="text-xs text-slate-400">第 {{ current_round_display }}/{{ total_rounds }} 轮</span>
+    {% endif %}
+    <span class="ml-auto inline-block w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+  </div>
+
+  <div class="max-h-[400px] overflow-y-auto pr-1"
+       x-data="{}"
+       x-init="$nextTick(() => $el.scrollTop = $el.scrollHeight)">
+    {% if article.debate_brief and (is_writing or is_review or is_rewrite) %}
+      <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+        <div class="text-xs text-slate-400 mb-1">📋 辩论综合简报</div>
+        <div class="text-xs text-slate-600 whitespace-pre-wrap line-clamp-4">{{ article.debate_brief }}</div>
+      </div>
+    {% endif %}
+
+    {% if article.review_summary and is_rewrite %}
+      <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+        <div class="text-xs text-slate-400 mb-1">🔍 评审综合建议</div>
+        <div class="text-xs text-slate-600 whitespace-pre-wrap line-clamp-4">{{ article.review_summary }}</div>
+      </div>
+    {% endif %}
+
+    {% set ns = namespace(prev_phase='') %}
+    {% for r in records %}
+      {% set style = role_styles.get(r.role, ('❓', r.role, 'bg-slate-50 border-slate-100', 'bg-slate-400', 'text-slate-600')) %}
+
+      {% if r.phase != ns.prev_phase %}
+        {% set phase_name = '💬 辩论阶段' if r.phase == 'debate' else '🔍 评审阶段' %}
+        <div class="flex items-center gap-2 my-3">
+          <div class="flex-1 border-t border-dashed border-slate-200"></div>
+          <span class="text-xs text-slate-400 font-medium">{{ phase_name }}</span>
+          <div class="flex-1 border-t border-dashed border-slate-200"></div>
+        </div>
+        {% set ns.prev_phase = r.phase %}
+      {% endif %}
+
+      {% if loop.first or records[loop.index0 - 1].phase != r.phase or records[loop.index0 - 1].round_num != r.round_num %}
+        <div class="text-xs text-slate-400 font-medium ml-12 mb-1">第 {{ r.round_num }} 轮</div>
+      {% endif %}
+
+      <div class="flex gap-2 mb-2">
+        <div class="shrink-0 w-8 h-8 rounded-full {{ style[3] }} flex items-center justify-center text-sm">{{ style[0] }}</div>
+        <div class="min-w-0 flex-1">
+          <div class="text-xs font-medium {{ style[4] }} mb-0.5">{{ style[1] }}</div>
+          <div class="rounded-lg {{ style[2] }} border px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap break-words">{{ r.content }}</div>
+        </div>
+      </div>
+    {% endfor %}
+
+    {# 正在发言 / 正在处理指示器 #}
+    {% if is_debate or is_review %}
+      {% set phase_count = phase_records | length %}
+      {% set expected_total = total_rounds * 4 %}
+      {% if phase_count < expected_total %}
+        {% set next_idx = phase_count % 4 %}
+        {% set role_keys = ['writer', 'editor', 'brand', 'reader'] %}
+        {% if next_idx < 4 %}
+          {% set next_role = role_keys[next_idx] %}
+          {% set style = role_styles[next_role] %}
+          <div class="flex gap-2 mb-2 opacity-60">
+            <div class="shrink-0 w-8 h-8 rounded-full {{ style[3] }} flex items-center justify-center text-sm">{{ style[0] }}</div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-medium text-slate-400 mb-0.5">{{ style[1] }}</div>
+              <div class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-sm text-slate-400 flex items-center gap-1">
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:0.15s"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:0.3s"></span>
+                <span class="ml-1">正在发言…</span>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      {% else %}
+        <div class="flex gap-2 mb-2 opacity-60">
+          <div class="shrink-0 w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center text-sm">🤖</div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-medium text-brand-700 mb-0.5">写作引擎</div>
+            <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2 text-sm text-slate-500 flex items-center gap-1">
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-bounce"></span>
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-bounce" style="animation-delay:0.15s"></span>
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-bounce" style="animation-delay:0.3s"></span>
+              <span class="ml-1">正在综合各方观点…</span>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    {% elif is_writing or is_rewrite or is_image_gen %}
+      <div class="flex gap-2 mb-2 opacity-60">
+        <div class="shrink-0 w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center text-sm">🤖</div>
+        <div class="min-w-0 flex-1">
+          <div class="text-xs font-medium text-brand-700 mb-0.5">写作引擎</div>
+          <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2 text-sm text-slate-500 flex items-center gap-1">
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-bounce"></span>
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-bounce" style="animation-delay:0.15s"></span>
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-bounce" style="animation-delay:0.3s"></span>
+            <span class="ml-1">{% if is_writing %}正在生成正文…{% elif is_rewrite %}正在按评审建议重写…{% else %}正在为每个插图位置生成 4 张候选图…{% endif %}</span>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
