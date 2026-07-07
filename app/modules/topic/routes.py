@@ -33,6 +33,43 @@ TABS = [
 ]
 
 
+def _topic_url(status: str = "all", scope: str = "all") -> str:
+    params = {}
+    if status and status != "all":
+        params["status"] = status
+    if scope and scope != "all":
+        params["scope"] = scope
+    query = urlencode(params)
+    return f"/topics?{query}" if query else "/topics"
+
+
+def _scope_from_query(raw: str | None) -> tuple[str, int | None]:
+    if raw in (None, "", "all"):
+        return "all", None
+    if raw == "brand":
+        return "brand", None
+    if raw.startswith("campaign:"):
+        raw = raw.split(":", 1)[1]
+    try:
+        return "campaign", int(raw)
+    except (TypeError, ValueError):
+        return "all", None
+
+
+def _topic_in_scope(topic: Topic, scope: str, campaign_id: int | None) -> bool:
+    if scope == "brand":
+        return topic.campaign_id is None
+    if scope == "campaign":
+        return topic.campaign_id == campaign_id
+    return True
+
+
+def _topics_in_status(topics: list[Topic], statuses: tuple[str, ...] | None) -> list[Topic]:
+    if statuses is None:
+        return [t for t in topics if t.status != "回收站"]
+    return [t for t in topics if t.status in statuses]
+
+
 def _brand_or_404(session: Session) -> Brand:
     brand = session.exec(select(Brand).order_by(Brand.id)).first()
     if brand is None:
@@ -41,26 +78,55 @@ def _brand_or_404(session: Session) -> Brand:
 
 
 @router.get("/topics")
-def topics_home(request: Request, status: str = "", error: str = "", modal_error: str = "",
+def topics_home(request: Request, status: str = "", scope: str = "all",
+                error: str = "", modal_error: str = "",
                 session: Session = Depends(get_session)):
     brand = session.exec(select(Brand).order_by(Brand.id)).first()
-    campaigns, topics, cmap, tab_counts = [], [], {}, {}
+    campaigns, topics, cmap, tab_counts, scope_counts = [], [], {}, {}, {}
     active = status or "all"
+    active_scope = scope or "all"
     if brand is not None:
         campaigns = session.exec(
             select(Campaign).where(Campaign.brand_id == brand.id).order_by(Campaign.id)).all()
         all_topics = session.exec(
             select(Topic).where(Topic.brand_id == brand.id).order_by(Topic.created_at.desc())).all()
-        visible_topics = [t for t in all_topics if t.status != "回收站"]
+        scope_kind, scope_campaign_id = _scope_from_query(active_scope)
+        active_scope = (
+            "brand" if scope_kind == "brand"
+            else f"campaign:{scope_campaign_id}" if scope_kind == "campaign" and scope_campaign_id is not None
+            else "all"
+        )
+        scoped_topics = [t for t in all_topics if _topic_in_scope(t, scope_kind, scope_campaign_id)]
         for key, _label, sts in TABS:   # 每个 tab 的计数
-            tab_counts[key] = len(visible_topics) if sts is None else sum(t.status in sts for t in all_topics)
+            tab_counts[key] = len(_topics_in_status(scoped_topics, sts))
         cur = next((t for t in TABS if t[0] == active), TABS[0])
-        topics = visible_topics if cur[2] is None else [t for t in all_topics if t.status in cur[2]]
+        topics = _topics_in_status(scoped_topics, cur[2])
+        for scope_key, _label in [("all", "全部范围"), ("brand", "品牌常青")]:
+            st = cur[2]
+            in_scope = [t for t in all_topics if _topic_in_scope(t, *_scope_from_query(scope_key))]
+            scope_counts[scope_key] = len(_topics_in_status(in_scope, st))
+        for c in campaigns:
+            scope_key = f"campaign:{c.id}"
+            st = cur[2]
+            in_scope = [t for t in all_topics if _topic_in_scope(t, *_scope_from_query(scope_key))]
+            scope_counts[scope_key] = len(_topics_in_status(in_scope, st))
         cmap = {c.id: c.name for c in campaigns}
+    tab_links = [
+        (key, label, _topic_url(key, active_scope), tab_counts.get(key, 0))
+        for key, label, _sts in TABS
+    ]
+    scope_links = [("all", "全部范围", _topic_url(active, "all"), scope_counts.get("all", 0)),
+                   ("brand", "品牌常青", _topic_url(active, "brand"), scope_counts.get("brand", 0))]
+    scope_links.extend(
+        (f"campaign:{c.id}", f"活动·{c.name}", _topic_url(active, f"campaign:{c.id}"),
+         scope_counts.get(f"campaign:{c.id}", 0))
+        for c in campaigns
+    )
     return templates.TemplateResponse(request, "topic/home.html", {
         "brand": brand, "campaigns": campaigns, "topics": topics, "cmap": cmap,
         "statuses": TOPIC_STATUSES, "catalog": sources.catalog(),
-        "tabs": TABS, "tab_counts": tab_counts, "active_tab": active,
+        "tabs": TABS, "tab_counts": tab_counts, "tab_links": tab_links,
+        "scope_links": scope_links, "active_tab": active, "active_scope": active_scope,
         "error": error, "modal_error": modal_error})
 
 
@@ -81,16 +147,20 @@ def generate(request: Request, campaign_id: str = Form(""), count: int = Form(5)
                         sources_used=valid, hot_query=hot_query,
                         use_rejection_experience=use_rejection_experience)
     except ModelRateLimited:
-        params = urlencode({"status": "候选", "modal_error": "当前模型已限流"})
+        target_scope = "brand" if cid is None else f"campaign:{cid}"
+        params = urlencode({"status": "候选", "scope": target_scope, "modal_error": "当前模型已限流"})
         return RedirectResponse(f"/topics?{params}", status_code=303)
     except ValueError as exc:
-        params = urlencode({"status": "候选", "error": f"生成失败：{exc}"})
+        target_scope = "brand" if cid is None else f"campaign:{cid}"
+        params = urlencode({"status": "候选", "scope": target_scope, "error": f"生成失败：{exc}"})
         return RedirectResponse(f"/topics?{params}", status_code=303)
-    return RedirectResponse("/topics?status=候选", status_code=303)
+    target_scope = "brand" if cid is None else f"campaign:{cid}"
+    return RedirectResponse(_topic_url("候选", target_scope), status_code=303)
 
 
 @router.post("/topics/{topic_id}/adopt")
-def adopt(topic_id: int, request: Request, session: Session = Depends(get_session)):
+def adopt(topic_id: int, request: Request, status: str = "all", scope: str = "all",
+          session: Session = Depends(get_session)):
     """采纳候选：候选 → 采纳(待写作)。"""
     auth.require_level(request, 1)
     t = session.get(Topic, topic_id)
@@ -100,11 +170,12 @@ def adopt(topic_id: int, request: Request, session: Session = Depends(get_sessio
         t.status = "采纳"
         session.add(t)
         session.commit()
-    return RedirectResponse("/topics", status_code=303)
+    return RedirectResponse(_topic_url(status, scope), status_code=303)
 
 
 @router.post("/topics/{topic_id}/unadopt")
-def unadopt(topic_id: int, request: Request, session: Session = Depends(get_session)):
+def unadopt(topic_id: int, request: Request, status: str = "all", scope: str = "all",
+            session: Session = Depends(get_session)):
     """取消采纳：采纳 → 候选。仅②内部状态回退；③写作引擎已接手的选题不应回退（待③接入后加守卫）。"""
     auth.require_level(request, 1)
     t = session.get(Topic, topic_id)
@@ -114,11 +185,12 @@ def unadopt(topic_id: int, request: Request, session: Session = Depends(get_sess
         t.status = "候选"
         session.add(t)
         session.commit()
-    return RedirectResponse("/topics", status_code=303)
+    return RedirectResponse(_topic_url(status, scope), status_code=303)
 
 
 @router.post("/topics/{topic_id}/delete")
-def delete(topic_id: int, request: Request, rejection_reason: str = Form(""),
+def delete(topic_id: int, request: Request, status: str = "回收站", scope: str = "all",
+           rejection_reason: str = Form(""),
            session: Session = Depends(get_session)):
     """删除进入回收站；必须记录不采纳原因，供同 campaign 后续生成选题时参考。"""
     auth.require_level(request, 1)
@@ -132,4 +204,4 @@ def delete(topic_id: int, request: Request, rejection_reason: str = Form(""),
         t.rejected_at = datetime.now()
         session.add(t)
         session.commit()
-    return RedirectResponse("/topics?status=回收站", status_code=303)
+    return RedirectResponse(_topic_url("回收站", scope), status_code=303)

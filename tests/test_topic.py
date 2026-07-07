@@ -313,6 +313,37 @@ def test_topics_tab_filter(owner_client, fresh_db):
     assert "回收选题R" in recycle and "不采纳原因：不够具体" in recycle
 
 
+def test_topics_scope_filter_by_brand_and_campaign(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        bid, cid = _seed_brand(s, with_campaign=True)
+        c2 = Campaign(brand_id=bid, name="莫高精神")
+        s.add(c2); s.commit(); s.refresh(c2)
+        s.add(Topic(brand_id=bid, campaign_id=None, title="品牌常青选题", status="候选"))
+        s.add(Topic(brand_id=bid, campaign_id=cid, title="丝路活动选题", status="候选"))
+        s.add(Topic(brand_id=bid, campaign_id=c2.id, title="莫高活动选题", status="采纳"))
+        s.commit()
+
+    html = owner_client.get("/topics").text
+    assert "全部范围" in html
+    assert "品牌常青" in html
+    assert "活动·丝路有多长" in html
+    assert "活动·莫高精神" in html
+
+    brand = owner_client.get("/topics?scope=brand").text
+    assert "品牌常青选题" in brand
+    assert "丝路活动选题" not in brand
+    assert "莫高活动选题" not in brand
+
+    campaign = owner_client.get(f"/topics?scope=campaign:{cid}").text
+    assert "丝路活动选题" in campaign
+    assert "品牌常青选题" not in campaign
+    assert "莫高活动选题" not in campaign
+
+    scoped_status = owner_client.get(f"/topics?status=采纳&scope=campaign:{cid}").text
+    assert "丝路活动选题" not in scoped_status
+    assert "莫高活动选题" not in scoped_status
+
+
 def test_topics_show_id_and_gen_time(owner_client, fresh_db):
     with Session(fresh_db) as s:
         bid, _ = _seed_brand(s)

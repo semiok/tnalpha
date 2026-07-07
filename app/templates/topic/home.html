@@ -98,10 +98,18 @@
 
   {# 分类 tab #}
   <div class="flex flex-wrap gap-1.5 mb-3">
-    {% for key, label, _sts in tabs %}
-    <a href="/topics?status={{ key }}"
+    {% for key, label, href, count in tab_links %}
+    <a href="{{ href }}"
        class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-brand-600 text-white' if active_tab == key else 'bg-slate-100 text-slate-600 hover:bg-slate-200' }}">
-      {{ label }} <span class="opacity-70">{{ tab_counts.get(key, 0) }}</span>
+      {{ label }} <span class="opacity-70">{{ count }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  <div class="flex flex-wrap gap-1.5 mb-3">
+    {% for key, label, href, count in scope_links %}
+    <a href="{{ href }}"
+       class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-white border border-brand-200 text-brand-700 shadow-sm' if active_scope == key else 'bg-white border border-slate-200 text-slate-500 hover:border-slate-300' }}">
+      {{ label }} <span class="opacity-70">{{ count }}</span>
     </a>
     {% endfor %}
   </div>
@@ -143,16 +151,16 @@
           {% if can_edit %}
           <div class="flex items-center gap-3 text-xs shrink-0">
             {% if t.status == "候选" %}
-            <form method="post" action="/topics/{{ t.id }}/adopt" class="inline">
+            <form method="post" action="/topics/{{ t.id }}/adopt?status={{ active_tab }}&scope={{ active_scope }}" class="inline">
               <button type="submit" class="text-brand-600 hover:text-brand-700">采纳</button>
             </form>
             {% elif t.status == "采纳" %}
-            <form method="post" action="/topics/{{ t.id }}/unadopt" class="inline">
+            <form method="post" action="/topics/{{ t.id }}/unadopt?status={{ active_tab }}&scope={{ active_scope }}" class="inline">
               <button type="submit" class="text-slate-500 hover:text-slate-700">取消采纳</button>
             </form>
             {% endif %}
             {% if t.status != "回收站" %}
-            <form method="post" action="/topics/{{ t.id }}/delete" class="inline"
+            <form method="post" action="/topics/{{ t.id }}/delete?status={{ active_tab }}&scope={{ active_scope }}" class="inline"
                   onsubmit="const reason = prompt('请输入不采纳原因（用于沉淀选题经验包）'); if (!reason || !reason.trim()) return false; this.querySelector('[name=rejection_reason]').value = reason.trim(); return true;">
               <input type="hidden" name="rejection_reason" value="">
               <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>

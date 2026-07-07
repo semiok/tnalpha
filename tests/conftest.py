@@ -13,6 +13,7 @@ import app.core.settings  # noqa: F401  注册 LLMSetting
 import app.modules.knowledge.models  # noqa: F401
 import app.modules.topic.models  # noqa: F401  注册 Topic 表
 import app.modules.writing.models  # noqa: F401  注册 Article/Style 表
+import app.modules.schedule.models  # noqa: F401  注册 Schedule 表
 from app.core import auth, config, runtime
 from app.core import db as _dbmod
 from app.core.db import get_session

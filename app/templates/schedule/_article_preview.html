@@ -1,0 +1,28 @@
+{% from "components/ui.html" import modal_open, modal_close, chip %}
+{{ modal_open(article.title) }}
+  <div class="space-y-3 text-sm">
+    <div class="flex flex-wrap gap-2">
+      {{ chip(article.status, "emerald" if article.status == "已生成" else "slate") }}
+      {% if article.platform %}{{ chip(article.platform, "brand") }}{% endif %}
+      {% if article.word_count %}{{ chip(article.word_count ~ "字", "slate") }}{% endif %}
+    </div>
+    {% if topic %}
+      <div class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+        <div class="text-xs text-slate-400 mb-1">来源选题</div>
+        <div class="text-slate-700">{{ topic.title }}</div>
+      </div>
+    {% endif %}
+    {% if article.body %}
+      <div>
+        <div class="text-xs text-slate-400 mb-1">正文</div>
+        <div class="max-h-80 overflow-auto whitespace-pre-wrap leading-6 text-slate-700">{{ article.body }}</div>
+      </div>
+    {% endif %}
+    {% if article.image_prompt %}
+      <div>
+        <div class="text-xs text-slate-400 mb-1">生成的提示词</div>
+        <div class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 whitespace-pre-wrap text-slate-600">{{ article.image_prompt }}</div>
+      </div>
+    {% endif %}
+  </div>
+{{ modal_close() }}

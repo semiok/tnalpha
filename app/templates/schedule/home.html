@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, notice, empty_state, chip, text_input, select_input %}
+{% block content %}
+  {{ page_header("④模块", "排期版", [("首页", "/")]) }}
+
+  {% if not brand %}
+    {{ notice("还没有品牌。先到①知识库创建品牌，再排期。", "amber") }}
+    {{ empty_state("暂无可排期内容") }}
+  {% else %}
+    <div class="mb-4 flex flex-wrap items-center gap-2">
+      <a href="/schedule?campaign_id=all"
+         class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-brand-600 text-white' if selected_campaign == 'all' else 'bg-white border border-slate-200 text-slate-600' }}">全部</a>
+      <a href="/schedule?campaign_id=brand"
+         class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-brand-600 text-white' if selected_campaign == 'brand' else 'bg-white border border-slate-200 text-slate-600' }}">品牌常青</a>
+      {% for c in campaigns %}
+        <a href="/schedule?campaign_id={{ c.id }}"
+           class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-brand-600 text-white' if selected_campaign == c.id|string else 'bg-white border border-slate-200 text-slate-600' }}">{{ c.name }}</a>
+      {% endfor %}
+    </div>
+
+    <section class="bg-white rounded-xl border border-slate-200 p-5 mb-5">
+      <div class="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <div class="text-sm font-semibold text-slate-700">可排期文章</div>
+          <div class="text-xs text-slate-400 mt-1">来源于③写作引擎中状态为“已生成”的文章；④只读文章，不回写③状态。</div>
+        </div>
+        {% if level >= 1 %}
+        <div class="flex flex-wrap items-center gap-2">
+          <form method="post" action="/schedule/recommend">
+            <input type="hidden" name="campaign_id" value="{{ selected_campaign }}">
+            <button class="px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700">AI 推荐排期</button>
+          </form>
+          <form method="post" action="/schedule/weeks/add" class="flex items-center gap-2">
+            <select name="campaign_id" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+              <option value="brand">品牌常青</option>
+              {% for c in campaigns %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+            </select>
+            <button class="px-3.5 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">新增 week</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+      {% if articles %}
+        <div class="space-y-3">
+          {% for article in articles %}
+            {% set topic = article_topics.get(article.topic_id) %}
+            {% set matched_weeks = [] %}
+            {% for w in weeks %}
+              {% if w.campaign_id == article.campaign_id %}
+                {% set _ = matched_weeks.append(w) %}
+              {% endif %}
+            {% endfor %}
+            <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <button type="button" hx-get="/schedule/articles/{{ article.id }}/preview" hx-target="#modal-slot" hx-swap="innerHTML"
+                          class="text-left text-sm font-semibold text-brand-700 hover:underline">{{ article.title }}</button>
+                  <div class="text-xs text-slate-400 mt-1">
+                    {{ campaign_name.get(article.campaign_id, "品牌常青") }} · {{ article.platform or "未设平台" }} · {{ article.word_count or "不限" }}字
+                  </div>
+                  {% if topic %}<div class="text-xs text-slate-500 mt-1 truncate">来源选题：{{ topic.title }}</div>{% endif %}
+                </div>
+                {{ chip("已生成", "emerald") }}
+              </div>
+              {% if level >= 1 %}
+                {% if matched_weeks %}
+                <form method="post" action="/schedule/slots/add" class="mt-3 grid grid-cols-1 md:grid-cols-[1.2fr_1fr_1fr_auto] gap-2 items-center">
+                  <input type="hidden" name="article_id" value="{{ article.id }}">
+                  <select name="week_id" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+                    {% for w in matched_weeks %}
+                      <option value="{{ w.id }}">{{ w.week_start.strftime('%m.%d') }}-{{ w.week_end.strftime('%m.%d') }}</option>
+                    {% endfor %}
+                  </select>
+                  <input type="date" name="publish_date" value="{{ matched_weeks[0].week_start.isoformat() }}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm">
+                  <input type="time" name="publish_time" class="border border-slate-200 rounded-lg px-3 py-2 text-sm">
+                  <button class="px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700">加入排期</button>
+                </form>
+                {% else %}
+                  <div class="text-xs text-amber-600 mt-3">该范围还没有 week。先在右上角新增对应的 week。</div>
+                {% endif %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        {{ empty_state("暂无可排期文章。写作引擎中已生成且未排期的文章会出现在这里。") }}
+      {% endif %}
+    </section>
+
+    <section class="bg-white rounded-xl border border-slate-200 p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="text-sm font-semibold text-slate-700">周排期表</div>
+          <div class="text-xs text-slate-400 mt-1">按周分组，周内可排多篇文章；发布后锁定，需撤销发布后才能移除。</div>
+        </div>
+      </div>
+      {% if weeks %}
+        <div class="space-y-4">
+          {% for w in weeks %}
+            {% set slots = week_slots.get(w.id, []) %}
+            <div class="rounded-lg border border-slate-200 px-4 py-3">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="font-mono text-sm text-slate-600">{{ w.week_start.strftime('%Y.%m.%d') }} - {{ w.week_end.strftime('%m.%d') }}</div>
+                  <div class="text-xs text-slate-400 mt-1">{{ campaign_name.get(w.campaign_id, "品牌常青") }}</div>
+                </div>
+                {% if level >= 1 and not slots %}
+                <form method="post" action="/schedule/weeks/{{ w.id }}/delete">
+                  <button class="px-2.5 py-1.5 rounded-lg text-xs text-rose-600 hover:bg-rose-50" onclick="return confirm('删除这个空周？')">删除空周</button>
+                </form>
+                {% endif %}
+              </div>
+              {% if slots %}
+                <div class="mt-3 divide-y divide-slate-100">
+                  {% for slot in slots %}
+                    {% set article = slot_articles.get(slot.article_id) %}
+                    <div class="py-3">
+                      <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                          <button type="button" hx-get="/schedule/articles/{{ slot.article_id }}/preview" hx-target="#modal-slot" hx-swap="innerHTML"
+                                  class="text-left text-sm font-semibold text-brand-700 hover:underline">
+                            {{ article.title if article else "文章 #" ~ slot.article_id }}
+                          </button>
+                          <div class="text-xs text-slate-500 mt-1">
+                            {{ slot.publish_date.strftime('%m.%d') }}{% if slot.publish_time %} {{ slot.publish_time }}{% endif %}
+                            · {{ slot.platform or "未设平台" }}
+                            · {{ slot.status }}
+                          </div>
+                          {% if slot.published_url %}
+                            <a href="{{ slot.published_url }}" target="_blank" class="text-xs text-brand-600 hover:underline mt-1 inline-block">{{ slot.published_url }}</a>
+                          {% endif %}
+                        </div>
+                        {{ chip(slot.status, "emerald" if slot.status == "已发布" else "brand") }}
+                      </div>
+                      <div class="mt-3 flex flex-wrap gap-2 items-center">
+                        {% if slot.status == "已发布" %}
+                          <form method="post" action="/schedule/slots/{{ slot.id }}/unpublish">
+                            <button class="px-2.5 py-1.5 rounded-lg text-xs bg-slate-100 text-slate-600 hover:bg-slate-200">撤销发布</button>
+                          </form>
+                        {% else %}
+                          {% if level >= 1 %}
+                          <form method="post" action="/schedule/slots/{{ slot.id }}/move" class="flex gap-2 items-center">
+                            <input type="date" name="publish_date" value="{{ slot.publish_date.isoformat() }}" min="{{ w.week_start.isoformat() }}" max="{{ w.week_end.isoformat() }}" class="border border-slate-200 rounded-lg px-2 py-1.5 text-xs">
+                            <input type="time" name="publish_time" value="{{ slot.publish_time }}" class="border border-slate-200 rounded-lg px-2 py-1.5 text-xs">
+                            <button class="px-2.5 py-1.5 rounded-lg text-xs bg-slate-100 text-slate-600 hover:bg-slate-200">调整</button>
+                          </form>
+                          <form method="post" action="/schedule/slots/{{ slot.id }}/remove">
+                            <button class="px-2.5 py-1.5 rounded-lg text-xs text-rose-600 hover:bg-rose-50" onclick="return confirm('移出这篇文章？')">移除</button>
+                          </form>
+                          {% endif %}
+                          <form method="post" action="/schedule/slots/{{ slot.id }}/publish" class="flex flex-wrap gap-2 items-center">
+                            <input type="text" name="platform" value="{{ slot.platform }}" placeholder="平台" class="border border-slate-200 rounded-lg px-2 py-1.5 text-xs w-24">
+                            <input type="url" name="published_url" placeholder="发布链接" class="border border-slate-200 rounded-lg px-2 py-1.5 text-xs w-48">
+                            <input type="datetime-local" name="published_at" class="border border-slate-200 rounded-lg px-2 py-1.5 text-xs">
+                            <button class="px-2.5 py-1.5 rounded-lg text-xs bg-emerald-600 text-white hover:bg-emerald-700">发布回填</button>
+                          </form>
+                        {% endif %}
+                      </div>
+                    </div>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <div class="text-slate-400 text-sm py-4">本周暂无文章。</div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        {{ empty_state("还没有 week。先新增一个 week，再把已生成文章加入排期。") }}
+      {% endif %}
+    </section>
+  {% endif %}
+{% endblock %}
