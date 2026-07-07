@@ -12,7 +12,7 @@ def _now() -> datetime:
     return datetime.now()
 
 
-ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图", "待选图", "已生成", "已排期", "已发布", "已删除")
+ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图", "待审核", "已排期", "已发布", "已删除")
 
 # 发布平台选项
 PLATFORMS = ("小红书", "微信公众号")

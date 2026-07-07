@@ -7,6 +7,7 @@
 - LLM / 图片都走 core.llm 统一入口
 - 多角色辩论/评审记录持久化到 DebateRecord
 """
+import io
 import time
 
 from sqlmodel import Session, select
@@ -98,9 +99,9 @@ def _seed_topic(session: Session, status: str = "采纳") -> tuple[Brand, Campai
 def test_writing_status_map_reads_article_state(fresh_db):
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
-        s.add(Article(topic_id=topic.id, campaign_id=campaign.id, title="稿件", status="已生成"))
+        s.add(Article(topic_id=topic.id, campaign_id=campaign.id, title="稿件", status="待审核"))
         s.commit()
-        assert writing_status_map(s, [topic.id, 999]) == {topic.id: "已生成"}
+        assert writing_status_map(s, [topic.id, 999]) == {topic.id: "待审核"}
 
 
 def test_writing_home_lists_only_adopted_topics(owner_client, fresh_db):
@@ -116,7 +117,7 @@ def test_writing_home_lists_only_adopted_topics(owner_client, fresh_db):
 def test_writing_home_shows_adopted_topic_even_with_article(owner_client, fresh_db):
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s, status="采纳")
-        s.add(Article(topic_id=topic.id, campaign_id=campaign.id, title="已生成文章", status="已生成"))
+        s.add(Article(topic_id=topic.id, campaign_id=campaign.id, title="待审核文章", status="待审核"))
         s.commit()
     html = owner_client.get("/writing").text
     assert "待写作选题" in html
@@ -183,12 +184,12 @@ def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
         seen["text"] = {"prompt": prompt, "task": task, "module": module, "fallback": k.get("fallback")}
         return "标题：一枚汉简写了什么\n\n正文：这是一篇完整文章。"
 
-    def fake_image(prompt, module="default", **k):
+    def fake_images(prompt, module="default", n=4, **k):
         seen["image"] = {"prompt": prompt, "module": module, "fallback": k.get("fallback")}
-        return "/static/generated/hanjian.png"
+        return ["/static/generated/hanjian.png"] * n
 
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
-    monkeypatch.setattr(wroutes.llm, "generate_image", fake_image)
+    monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
         s.add(Style(campaign_id=campaign.id, name="默认风格", summary="短句开场，史料收束", is_default=True))
@@ -196,7 +197,7 @@ def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
         tid = topic.id
 
     r = owner_client.post(f"/writing/topics/{tid}/generate",
-                           data={"debate_rounds": "0", "review_rounds": "0"}, follow_redirects=False)
+                           data={"debate_rounds": "0", "review_rounds": "0", "ai_images": "true"}, follow_redirects=False)
     assert r.status_code == 303
     assert seen["text"]["module"] == "writing"
     assert seen["image"]["module"] == "writing"
@@ -209,13 +210,60 @@ def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
         topic = s.get(Topic, tid)
         article = s.exec(select(Article).where(Article.topic_id == tid)).one()
         assert topic.status == "采纳"
-        assert article.status == "待选图"
+        assert article.status == "待审核"
         assert "完整文章" in article.body
         images = s.exec(select(ArticleImage).where(ArticleImage.article_id == article.id)).all()
         assert len(images) >= 1
         assert all(img.image_url.endswith(".png") for img in images)
         assert article.debate_rounds == 0
         assert article.review_rounds == 0
+
+
+def test_regenerate_clears_old_candidate_images(owner_client, fresh_db, monkeypatch):
+    """重新生成（含未勾 AI 配图）时，旧候选图与主图字段必须被清空，避免与新正文错位残留。"""
+    _patch_threading(monkeypatch)
+    call_count = {"img": 0}
+
+    def fake_text(prompt, task="default", module="default", **k):
+        return "标题：一枚汉简写了什么\n\n正文：这是一篇完整文章。"
+
+    def fake_images(prompt, module="default", n=4, **k):
+        call_count["img"] += 1
+        return [f"/static/generated/r{call_count['img']}-{i}.png" for i in range(n)]
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        s.add(Style(campaign_id=campaign.id, name="默认风格", summary="短句开场", is_default=True))
+        s.commit()
+        tid = topic.id
+
+    # 第一次：勾 AI 配图生成，留下候选图 + 主图
+    owner_client.post(f"/writing/topics/{tid}/generate",
+                      data={"debate_rounds": "0", "review_rounds": "0", "ai_images": "true"},
+                      follow_redirects=False)
+    with Session(fresh_db) as s:
+        article = s.exec(select(Article).where(Article.topic_id == tid)).one()
+        aid = article.id
+        old_count = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(old_count) >= 1
+        article.image_url = "/writing/uploads/old.jpg"
+        article.image_prompt = "手动上传"
+        s.add(article)
+        s.commit()
+
+    # 第二次：不勾 AI 配图重新生成（checkbox 未勾选 → ai_images 不发送）
+    owner_client.post(f"/writing/topics/{tid}/generate",
+                      data={"debate_rounds": "0", "review_rounds": "0", "ai_images": ""},
+                      follow_redirects=False)
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.status == "待审核"
+        assert article.image_url == ""
+        assert article.image_prompt == ""
+        remaining = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert remaining == [], f"重新生成后旧候选图应被清空，但剩 {len(remaining)} 张"
 
 
 def test_generate_with_debate_creates_records(owner_client, fresh_db, monkeypatch):
@@ -238,12 +286,12 @@ def test_generate_with_debate_creates_records(owner_client, fresh_db, monkeypatc
         # article generation
         return "标题：一枚汉简写了什么\n\n正文：这是一篇完整文章。"
 
-    def fake_image(prompt, module="default", **k):
+    def fake_images(prompt, module="default", n=4, **k):
         call_count["image"] += 1
-        return "/static/generated/hanjian.png"
+        return ["/static/generated/hanjian.png"] * n
 
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
-    monkeypatch.setattr(wroutes.llm, "generate_image", fake_image)
+    monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
         tid = topic.id
@@ -253,7 +301,7 @@ def test_generate_with_debate_creates_records(owner_client, fresh_db, monkeypatc
     assert r.status_code == 303
     with Session(fresh_db) as s:
         article = s.exec(select(Article).where(Article.topic_id == tid)).one()
-        assert article.status == "待选图"
+        assert article.status == "待审核"
         assert article.debate_rounds == 2
         assert article.review_rounds == 0
         assert "写作简报" in article.debate_brief
@@ -288,7 +336,7 @@ def test_generate_with_review_rewrites_article(owner_client, fresh_db, monkeypat
         return "标题：原标题\n\n正文：原始正文。"
 
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
-    monkeypatch.setattr(wroutes.llm, "generate_image", lambda *a, **k: "/static/generated/a.png")
+    monkeypatch.setattr(wroutes.llm, "generate_images", lambda *a, **k: ["/static/generated/a.png"] * k.get("n", 4))
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
         tid = topic.id
@@ -298,7 +346,7 @@ def test_generate_with_review_rewrites_article(owner_client, fresh_db, monkeypat
     assert r.status_code == 303
     with Session(fresh_db) as s:
         article = s.exec(select(Article).where(Article.topic_id == tid)).one()
-        assert article.status == "待选图"
+        assert article.status == "待审核"
         assert article.review_rounds == 1
         assert "重写后的正文" in article.body
         assert article.title == "重写标题"
@@ -329,7 +377,7 @@ def test_generate_with_debate_and_review_full_flow(owner_client, fresh_db, monke
         return "标题：初版\n\n正文：初版正文。"
 
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
-    monkeypatch.setattr(wroutes.llm, "generate_image", lambda *a, **k: "/static/generated/a.png")
+    monkeypatch.setattr(wroutes.llm, "generate_images", lambda *a, **k: ["/static/generated/a.png"] * k.get("n", 4))
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
         tid = topic.id
@@ -339,7 +387,7 @@ def test_generate_with_debate_and_review_full_flow(owner_client, fresh_db, monke
     assert r.status_code == 303
     with Session(fresh_db) as s:
         article = s.exec(select(Article).where(Article.topic_id == tid)).one()
-        assert article.status == "待选图"
+        assert article.status == "待审核"
         assert article.debate_rounds == 1
         assert article.review_rounds == 1
         assert "最终正文" in article.body
@@ -348,6 +396,369 @@ def test_generate_with_debate_and_review_full_flow(owner_client, fresh_db, monke
         ).all()
         # 1 轮辩论 × 4 + 1 轮评审 × 4 = 8
         assert len(all_records) == 8
+
+
+def test_multi_slot_images_generate_four_candidates_and_select_per_slot(owner_client, fresh_db, monkeypatch):
+    """每个插图提示词生成 4 张候选图；提交时每个 slot 可独立选择一张。"""
+    _patch_threading(monkeypatch)
+    calls = {"image": 0}
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *a, **k: "标题：多图稿\n\n正文：第一段。\n[插图：汉简暗场特写]\n第二段。\n[插图：丝路地图装置]\n结尾。",
+    )
+
+    def fake_images(prompt, module="default", n=4, **k):
+        calls["image"] += 1
+        return [f"https://img.example/{calls['image']}-{i}.png" for i in range(n)]
+
+    monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
+    with Session(fresh_db) as s:
+        _brand, _campaign, topic = _seed_topic(s)
+        tid = topic.id
+
+    r = owner_client.post(
+        f"/writing/topics/{tid}/generate",
+        data={"debate_rounds": "0", "review_rounds": "0", "ai_images": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        article = s.exec(select(Article).where(Article.topic_id == tid)).one()
+        aid = article.id
+        images = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.slot_index, ArticleImage.id)
+        ).all()
+        assert len(images) == 8
+        assert [len([img for img in images if img.slot_index == idx]) for idx in (0, 1)] == [4, 4]
+        assert len([img for img in images if img.is_selected]) == 2
+        second_by_slot = {
+            idx: [img for img in images if img.slot_index == idx][1].id
+            for idx in (0, 1)
+        }
+
+    r = owner_client.post(
+        f"/writing/articles/{aid}/select-images",
+        data={"image_id_0": str(second_by_slot[0]), "image_id_1": str(second_by_slot[1])},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        selected = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid, ArticleImage.is_selected == True)
+            .order_by(ArticleImage.slot_index)
+        ).all()
+        assert article.status == "待审核"
+        assert [img.id for img in selected] == [second_by_slot[0], second_by_slot[1]]
+        assert article.image_url == selected[0].image_url
+
+
+def test_detail_renders_fallback_image_slot_when_body_has_no_marker(owner_client, fresh_db):
+    """正文没插图标记时，后端兜底生成的候选图仍会显示在详情页。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title="无标记正文",
+            body="正文没有插图标记，但仍需要展示候选图。",
+            status="待审核",
+        )
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        for i in range(4):
+            s.add(ArticleImage(
+                article_id=article.id,
+                prompt="文章配图",
+                image_url=f"https://img.example/fallback-{i}.png",
+                slot_index=0,
+                slot_desc="文章配图",
+                is_selected=(i == 0),
+            ))
+        s.commit()
+        aid = article.id
+
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "插图位置 1" in html
+    assert "fallback-0.png" in html
+    assert 'name="image_id_0"' in html
+    assert "确认选图" not in html
+    assert f'hx-post="/writing/articles/{aid}/slots/0/select"' in html
+    assert "@dblclick" in html
+
+
+def test_regenerate_slot_replaces_only_that_slot(owner_client, fresh_db, monkeypatch):
+    """单个提示词可重新生成 4 张候选图，其他提示词候选图保留。"""
+    _patch_threading(monkeypatch)
+    calls = {"image": 0}
+
+    def fake_images(prompt, module="default", n=4, **k):
+        calls["image"] += 1
+        return [f"https://img.example/new-{calls['image']}-{i}.png" for i in range(n)]
+
+    monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title="多图稿",
+            body="正文\n[插图：旧提示一]\n正文\n[插图：旧提示二]",
+            status="待审核",
+        )
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        for slot_idx in (0, 1):
+            for i in range(4):
+                s.add(ArticleImage(
+                    article_id=article.id,
+                    prompt=f"old-{slot_idx}",
+                    image_url=f"https://img.example/old-{slot_idx}-{i}.png",
+                    slot_index=slot_idx,
+                    slot_desc=f"旧提示{slot_idx}",
+                    is_selected=(i == 0),
+                ))
+        s.commit()
+        aid = article.id
+
+    r = owner_client.post(f"/writing/articles/{aid}/slots/1/regenerate", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        images = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.slot_index, ArticleImage.id)
+        ).all()
+        slot0 = [img.image_url for img in images if img.slot_index == 0]
+        slot1 = [img.image_url for img in images if img.slot_index == 1]
+        assert slot0 == [f"https://img.example/old-0-{i}.png" for i in range(4)]
+        assert len(slot1) == 4
+        assert all("/new-" in url for url in slot1)
+
+
+def test_select_slot_image_updates_only_that_slot(owner_client, fresh_db):
+    """选择某一组候选图会立即保存该组选择，不要求其他组一起确认。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title="逐组选图",
+            body="正文\n[插图：位置一]\n正文\n[插图：位置二]",
+            status="待审核",
+        )
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        ids: dict[tuple[int, int], int] = {}
+        for slot_idx in (0, 1):
+            for i in range(4):
+                img = ArticleImage(
+                    article_id=article.id,
+                    prompt=f"slot-{slot_idx}",
+                    image_url=f"https://img.example/{slot_idx}-{i}.png",
+                    slot_index=slot_idx,
+                    slot_desc=f"位置{slot_idx}",
+                    is_selected=(i == 0),
+                )
+                s.add(img)
+                s.commit()
+                s.refresh(img)
+                ids[(slot_idx, i)] = img.id
+        aid = article.id
+
+    r = owner_client.post(
+        f"/writing/articles/{aid}/slots/1/select",
+        data={"image_id": str(ids[(1, 2)])},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    assert "确认选图" not in r.text
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        selected = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid, ArticleImage.is_selected == True)
+            .order_by(ArticleImage.slot_index, ArticleImage.id)
+        ).all()
+        assert article.status == "待审核"
+        assert [img.id for img in selected] == [ids[(0, 0)], ids[(1, 2)]]
+        assert article.image_url == "https://img.example/0-0.png"
+
+
+def test_select_slot_can_change_multiple_times_before_confirm(owner_client, fresh_db):
+    """单个 slot 换选保持「待审核」，用户可反复换选其他图片。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title="反复换选",
+            body="正文\n[插图：位置一]\n正文\n[插图：位置二]",
+            status="待审核",
+        )
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        ids: dict[tuple[int, int], int] = {}
+        for slot_idx in (0, 1):
+            for i in range(4):
+                img = ArticleImage(
+                    article_id=article.id,
+                    prompt=f"slot-{slot_idx}",
+                    image_url=f"https://img.example/{slot_idx}-{i}.png",
+                    slot_index=slot_idx,
+                    slot_desc=f"位置{slot_idx}",
+                    is_selected=(i == 0),
+                )
+                s.add(img)
+                s.commit()
+                s.refresh(img)
+                ids[(slot_idx, i)] = img.id
+        aid = article.id
+
+    # 第一次换选 slot 0 的第 1 张
+    r = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/select",
+        data={"image_id": str(ids[(0, 1)])},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.status == "待审核"  # 换选不改变状态
+
+    # 再次换选 slot 0 的第 2 张（验证可反复换选）
+    r = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/select",
+        data={"image_id": str(ids[(0, 2)])},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.status == "待审核"
+        selected = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid, ArticleImage.is_selected == True)
+            .order_by(ArticleImage.slot_index)
+        ).all()
+        assert [img.id for img in selected] == [ids[(0, 2)], ids[(1, 0)]]
+
+    # 换选 slot 1
+    r = owner_client.post(
+        f"/writing/articles/{aid}/slots/1/select",
+        data={"image_id": str(ids[(1, 3)])},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.status == "待审核"  # 仍保持待审核
+        assert article.image_url == "https://img.example/0-2.png"
+
+
+def test_parse_image_slots_accepts_marker_variants():
+    """_parse_image_slots 兼容 LLM 常见变体：[插图：]、[插图位：]、[插图位置：]。"""
+    body = (
+        "正文一\n"
+        "[插图：第一处描述]\n"
+        "正文二\n"
+        "[插图位：第二处描述]\n"
+        "正文三\n"
+        "[插图位置：第三处描述]\n"
+        "结尾"
+    )
+    slots = wroutes._parse_image_slots(body)
+    assert len(slots) == 3
+    assert [desc for _, desc in slots] == ["第一处描述", "第二处描述", "第三处描述"]
+    # _strip_image_slots 也要兼容
+    stripped = wroutes._strip_image_slots(body)
+    assert "[插图" not in stripped
+    assert "第一处描述" not in stripped
+    assert "正文一" in stripped
+    assert "结尾" in stripped
+
+
+def test_upload_slot_image_selects_uploaded_and_keeps_four(owner_client, fresh_db):
+    """手动上传图片后立即成为该 slot 选中图，并且该位置最多保留 4 张展示图。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title="上传替换",
+            body="正文\n[插图：位置一]",
+            status="待审核",
+        )
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        for i in range(4):
+            s.add(ArticleImage(
+                article_id=article.id,
+                prompt="old",
+                image_url=f"https://img.example/old-{i}.png",
+                slot_index=0,
+                slot_desc="位置一",
+                is_selected=(i == 0),
+            ))
+        s.commit()
+        aid = article.id
+
+    r = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/upload",
+        files={"file": ("manual.png", io.BytesIO(b"manual-image"), "image/png")},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    assert "manual.png" not in r.text  # 文件名已随机化
+    with Session(fresh_db) as s:
+        images = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid, ArticleImage.slot_index == 0)
+            .order_by(ArticleImage.id)
+        ).all()
+        selected = [img for img in images if img.is_selected]
+        assert len(images) == 4
+        assert len(selected) == 1
+        assert selected[0].prompt == "手动上传"
+        assert selected[0].image_url.startswith("/writing/uploads/writing/articles/")
+        upload_url = selected[0].image_url
+
+    file_r = owner_client.get(upload_url)
+    assert file_r.status_code == 200
+    assert file_r.content == b"manual-image"
+
+
+def test_generated_article_images_can_be_replaced_by_upload(owner_client, fresh_db):
+    """待审核文章详情页也保留手动上传入口，方便后续替换不满意的 AI 图。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title="已完成图文",
+            body="正文\n[插图：位置一]",
+            status="待审核",
+            image_url="https://img.example/final.png",
+        )
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        s.add(ArticleImage(
+            article_id=article.id,
+            prompt="ai",
+            image_url="https://img.example/final.png",
+            slot_index=0,
+            slot_desc="位置一",
+            is_selected=True,
+        ))
+        s.commit()
+        aid = article.id
+
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert f'hx-post="/writing/articles/{aid}/slots/0/upload"' in html
+    assert "@dblclick" in html
 
 
 # ── 权限测试 ──
@@ -390,7 +801,7 @@ def test_generate_strips_model_thinking_before_save(owner_client, fresh_db, monk
         "generate_text",
         lambda *a, **k: "\u003cthought\u003einternal reasoning\u003c/thought\u003e\n标题：正式标题\n\n正文：正式文章。",
     )
-    monkeypatch.setattr(wroutes.llm, "generate_image", lambda *a, **k: "https://img.example/a.png")
+    monkeypatch.setattr(wroutes.llm, "generate_images", lambda *a, **k: ["https://img.example/a.png"] * k.get("n", 4))
     with Session(fresh_db) as s:
         _brand, _campaign, topic = _seed_topic(s)
         tid = topic.id
@@ -411,7 +822,7 @@ def test_generate_strips_markdown_fence_before_save(owner_client, fresh_db, monk
         "generate_text",
         lambda *a, **k: "```\n标题：正式标题\n\n正文：正式文章。\n```",
     )
-    monkeypatch.setattr(wroutes.llm, "generate_image", lambda *a, **k: "https://img.example/a.png")
+    monkeypatch.setattr(wroutes.llm, "generate_images", lambda *a, **k: ["https://img.example/a.png"] * k.get("n", 4))
     with Session(fresh_db) as s:
         _brand, _campaign, topic = _seed_topic(s)
         tid = topic.id
@@ -443,7 +854,7 @@ def test_article_library_hides_deleted_by_default_and_can_restore(owner_client, 
             title="可删除文章",
             body="正文",
             image_url="https://img.example/a.png",
-            status="已生成",
+            status="待审核",
         )
         s.add(article)
         s.commit()
@@ -479,7 +890,7 @@ def test_generate_status_returns_progress_for_running_article(owner_client, fres
         s.add(DebateRecord(article_id=aid, phase="debate", round_num=1, role="writer", content="主笔发言"))
         s.commit()
     r = owner_client.get(f"/writing/articles/{aid}/generate-status")
-    assert "辩论中" in r.text or "主笔" in r.text
+    assert "生成中" in r.text or "主笔" in r.text
     assert f"article-row-{aid}" in r.text
 
 
@@ -488,7 +899,7 @@ def test_generate_status_returns_final_card_when_done(owner_client, fresh_db):
         _brand, campaign, topic = _seed_topic(s)
         article = Article(
             topic_id=topic.id, campaign_id=campaign.id, title="已完成",
-            body="正文", image_url="https://img.example/a.png", status="已生成"
+            body="正文", image_url="https://img.example/a.png", status="待审核"
         )
         s.add(article)
         s.commit()
@@ -504,7 +915,7 @@ def test_generate_htmx_returns_topic_card_and_oob_generating_card(owner_client, 
     """HTMX 点击生成图文：左侧刷新选题卡片 + 右侧 OOB 追加生成中卡片。"""
     _patch_threading(monkeypatch)
     monkeypatch.setattr(wroutes.llm, "generate_text", lambda *a, **k: "标题：T\n\n正文：B")
-    monkeypatch.setattr(wroutes.llm, "generate_image", lambda *a, **k: "https://img.example/a.png")
+    monkeypatch.setattr(wroutes.llm, "generate_images", lambda *a, **k: ["https://img.example/a.png"] * k.get("n", 4))
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
         tid = topic.id

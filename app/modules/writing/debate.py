@@ -180,7 +180,7 @@ def _review_prompt(role_key: str, role_name: str, role_stance: str,
 
 
 def run_review(session: Session, article_id: int, rounds: int, article: Article) -> str:
-    """执行 M 轮评审，每轮 4 角色评审已生成图文，返回综合评审摘要。"""
+    """执行 M 轮评审，每轮 4 角色评审当前图文草稿，返回综合评审摘要。"""
     for rnd in range(1, rounds + 1):
         records = list(session.exec(
             select(DebateRecord).where(DebateRecord.article_id == article_id)
@@ -259,7 +259,8 @@ def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
 【原文章】
 {article.body}
 
-请按评审建议改进，保留优点，修正问题。输出格式：
+请按评审建议改进，保留优点，修正问题。
+**重要**：原文章中的 `[插图：...]` 标记必须在重写后的正文中保留（格式不变，位置可调整），用于后续 AI 配图。输出格式：
 标题：...
 
 正文：...

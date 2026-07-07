@@ -3,14 +3,16 @@
 边界：读② Topic(status='采纳')，写③ Article/Style；不回写 Topic.status。
 """
 import threading
+import os
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.requests import Request
 
-from app.core import auth, db, llm, sources
+from app.core import auth, config, db, llm, sources, storage
 from app.core.db import get_session
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
@@ -20,7 +22,20 @@ from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCE
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
-RUNNING_ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图", "待选图")
+RUNNING_ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图")
+
+# 配图子线程互斥锁：防止同一文章并发跑多个 worker（用户双击「补生」等场景）
+_image_worker_locks: dict[int, threading.Lock] = {}
+_image_worker_locks_guard = threading.Lock()
+
+
+def _get_article_lock(article_id: int) -> threading.Lock:
+    with _image_worker_locks_guard:
+        lock = _image_worker_locks.get(article_id)
+        if lock is None:
+            lock = threading.Lock()
+            _image_worker_locks[article_id] = lock
+        return lock
 
 
 def _first_brand(session: Session) -> Brand | None:
@@ -157,7 +172,13 @@ def _fetch_url_text(url: str, timeout: int = 20) -> str:
 @router.get("/writing")
 def writing_home(request: Request, session: Session = Depends(get_session)):
     status_filter = request.query_params.get("status", "全部")
-    if status_filter not in (*ARTICLE_STATUSES, "全部"):
+    # 筛选栏分组标签：4 个对外展示分组映射到实际 status 值
+    STATUS_GROUPS = {
+        "生成中": ("辩论中", "写作中", "重写中", "待配图"),
+        "待审核": ("待审核",),
+        "已删除": ("已删除",),
+    }
+    if status_filter not in (*STATUS_GROUPS, "全部"):
         status_filter = "全部"
     tab = request.query_params.get("tab", "preset")
     if tab not in ("preset", "library", "new"):
@@ -195,11 +216,13 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         if status_filter == "全部":
             # 全部 = 含已删除在内的所有状态
             pass
-        elif status_filter == "已删除":
-            article_q = article_q.where(Article.status == "已删除")
         else:
-            article_q = article_q.where(Article.deleted_at == None, Article.status != "已删除")
-            article_q = article_q.where(Article.status == status_filter)
+            group_statuses = STATUS_GROUPS[status_filter]
+            if status_filter == "已删除":
+                article_q = article_q.where(Article.status.in_(group_statuses))
+            else:
+                article_q = article_q.where(Article.deleted_at == None, Article.status != "已删除")
+                article_q = article_q.where(Article.status.in_(group_statuses))
         all_topic_ids = [a.topic_id for a in session.exec(article_q).all()]
         topic_map = {t.id: t for t in session.exec(select(Topic).where(Topic.id.in_(all_topic_ids))).all()} if all_topic_ids else {}
         for article in session.exec(article_q).all():
@@ -229,7 +252,7 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         "topic_articles": topic_articles,
         "status_filter": status_filter,
         "article_statuses": ARTICLE_STATUSES,
-        "status_filters": ("全部", *ARTICLE_STATUSES),
+        "status_filters": ("全部", "生成中", "待审核", "已删除"),
         "styles": styles,
         "preset_styles": preset_styles,
         "style_sources": STYLE_SOURCES,
@@ -312,6 +335,18 @@ def set_default_style(style_id: int, request: Request, session: Session = Depend
     peers = session.exec(select(Style).where(Style.campaign_id == style.campaign_id)).all()
     for peer in peers:
         peer.is_default = peer.id == style_id
+        session.add(peer)
+    session.commit()
+    return RedirectResponse("/writing", status_code=303)
+
+
+@router.post("/writing/styles/campaign/{campaign_id}/unset-default")
+def unset_default_style(campaign_id: int, request: Request, session: Session = Depends(get_session)):
+    """取消该活动的默认风格——所有风格 is_default=False，让 AI 自行决定文风。"""
+    auth.require_level(request, 1)
+    peers = session.exec(select(Style).where(Style.campaign_id == campaign_id)).all()
+    for peer in peers:
+        peer.is_default = False
         session.add(peer)
     session.commit()
     return RedirectResponse("/writing", status_code=303)
@@ -403,8 +438,9 @@ def extract_style(campaign_id: int, request: Request, url: str = Form(...),
 def generate_article(topic_id: int, request: Request,
                       debate_rounds: int = Form(2), review_rounds: int = Form(2),
                       platform: str = Form(""), word_count: int = Form(0),
+                      ai_images: str = Form(""),
                       session: Session = Depends(get_session)):
-    """生成图文（异步后台）：辩论 → 生成文本 → 多插图候选 → 评审 → 重写 → 待选图。
+    """生成图文（异步后台）：辩论 → 生成文本 → 多插图候选 → 评审 → 重写 → 待审核。
 
     HTMX 请求：返回替换当前选题卡片的进度片段，页面不跳转、用户原地看辩论。
     普通请求：重定向回 /writing。
@@ -419,6 +455,8 @@ def generate_article(topic_id: int, request: Request,
     rr = max(0, min(review_rounds, 5))
     pf = platform.strip() if platform and platform.strip() in PLATFORMS else ""
     wc = max(0, min(word_count, 10000))
+    # checkbox 勾选才发送 ai_images=true，未勾选时字段缺失（Form("") 兜底）→ False
+    ai_images_flag = ai_images.strip().lower() in ("true", "1", "yes", "on")
     article = session.exec(
         _active_article_query().where(Article.topic_id == topic.id).order_by(Article.updated_at.desc())
     ).first()
@@ -446,18 +484,25 @@ def generate_article(topic_id: int, request: Request,
                 "platforms": PLATFORMS,
             })
         return RedirectResponse("/writing", status_code=303)
-    # 清空旧辩论记录（重新生成时）
+    # 清空旧辩论记录 + 旧候选图（重新生成时，避免残留与新正文错位）
     old_records = session.exec(
         select(DebateRecord).where(DebateRecord.article_id == article.id)
     ).all() if article.id else []
     for r in old_records:
         session.delete(r)
+    if article.id:
+        for oi in session.exec(
+            select(ArticleImage).where(ArticleImage.article_id == article.id)
+        ).all():
+            session.delete(oi)
     article.status = "辩论中" if dr > 0 else "写作中"
     article.error_message = ""
     article.debate_rounds = dr
     article.review_rounds = rr
     article.debate_brief = ""
     article.review_summary = ""
+    article.image_url = ""
+    article.image_prompt = ""
     article.platform = pf
     article.word_count = wc
     article.updated_at = _now()
@@ -467,7 +512,7 @@ def generate_article(topic_id: int, request: Request,
     # 后台线程跑完整流程
     t = threading.Thread(
         target=_run_generation_worker,
-        args=(article.id, topic.id, dr, rr, pf, wc),
+        args=(article.id, topic.id, dr, rr, pf, wc, ai_images_flag),
         daemon=True,
     )
     t.start()
@@ -493,7 +538,7 @@ def generate_article(topic_id: int, request: Request,
 
 
 def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, review_rounds: int,
-                           platform: str = "", word_count: int = 0) -> None:
+                           platform: str = "", word_count: int = 0, ai_images: bool = True) -> None:
     """后台线程：辩论 → 生成文本 → 评审 → 重写 → 待配图（提交正文，可阅读）。
 
     文本完成后立即把状态置为「待配图」并启动配图子线程，不阻塞用户阅读正文。
@@ -557,88 +602,127 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
                     s.commit()
                     s.refresh(article)
 
-            # ── 文本完成：立即提交「待配图」状态，用户可阅读正文 ──
-            article.status = "待配图"
+            # ── 文本完成：AI 配图→「待配图」并启动子线程；自配图→直接「待审核」等用户上传 ──
+            article.status = "待配图" if ai_images else "待审核"
             article.error_message = ""
             article.generated_at = _now()
             article.updated_at = article.generated_at
             s.add(article)
             s.commit()
 
-            # 启动配图子线程，异步生成多插图候选
-            t = threading.Thread(
-                target=_run_image_worker,
-                args=(article_id, topic_id, platform),
-                daemon=True,
-            )
-            t.start()
+            # AI 配图：启动子线程异步生成多插图候选
+            if ai_images:
+                t = threading.Thread(
+                    target=_run_image_worker,
+                    args=(article_id, topic_id, platform),
+                    daemon=True,
+                )
+                t.start()
 
         except Exception as exc:
             s.rollback()
             article = s.get(Article, article_id)
             if article:
-                article.status = "已生成" if article.body else "写作中"
+                article.status = "待审核" if article.body else "写作中"
                 article.error_message = str(exc)[:500]
                 article.updated_at = _now()
                 s.add(article)
                 s.commit()
 
 
-def _run_image_worker(article_id: int, topic_id: int, platform: str = "") -> None:
-    """配图子线程：为已生成的正文生成多插图候选(4张/位置) → 待选图。
+def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
+                      missing_only: bool = False) -> None:
+    """配图子线程：为已生成的正文生成多插图候选(4张/位置) → 待审核/待配图。
 
     独立 Session，失败写 error_message（不影响已完成的正文）。
+    missing_only=True：只补生候选图不足 4 张的 slot，不清理已有图（用于「补生缺失配图」）。
+    每 slot 用 minimax n 参数批量生成（1 次 API 调用出 4 张，而非 4 次串行调用）。
     """
-    from sqlmodel import Session as SMSession
-    with SMSession(db.engine) as s:
-        try:
-            article = s.get(Article, article_id)
-            topic = s.get(Topic, topic_id)
-            if article is None or topic is None:
-                return
-            if not article.body:
-                return  # 没正文，没法配图
-            ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
-            style = _default_style(s, topic.campaign_id)
+    lock = _get_article_lock(article_id)
+    if not lock.acquire(blocking=False):
+        return  # 该文章已有配图 worker 在跑，跳过
+    try:
+        from sqlmodel import Session as SMSession
+        with SMSession(db.engine) as s:
+            try:
+                article = s.get(Article, article_id)
+                topic = s.get(Topic, topic_id)
+                if article is None or topic is None:
+                    return
+                if not article.body:
+                    return  # 没正文，没法配图
+                ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
+                style = _default_style(s, topic.campaign_id)
 
-            slots = _parse_image_slots(article.body)
-            if not slots:
-                slots = [(0, topic.image_hint or "文章配图")]
-            # 清理旧候选图
-            old_imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == article_id)).all()
-            for oi in old_imgs:
-                s.delete(oi)
-            s.commit()
+                slots = _parse_image_slots(article.body)
+                if not slots:
+                    slots = [(0, topic.image_hint or "文章配图")]
 
-            for slot_idx, (_, slot_desc) in enumerate(slots):
-                img_p = _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, platform)
-                for _ in range(4):
+                if missing_only:
+                    # 补生模式：只处理候选图不足 4 张的 slot，不清理已有图
+                    existing = s.exec(
+                        select(ArticleImage).where(ArticleImage.article_id == article_id)
+                    ).all()
+                    existing_count: dict[int, int] = {}
+                    for img in existing:
+                        existing_count[img.slot_index] = existing_count.get(img.slot_index, 0) + 1
+                else:
+                    # 全量模式：清理旧候选图
+                    old_imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == article_id)).all()
+                    for oi in old_imgs:
+                        s.delete(oi)
+                    s.commit()
+                    existing_count = {}
+
+                for slot_idx, (_, slot_desc) in enumerate(slots):
+                    if missing_only:
+                        cur_count = existing_count.get(slot_idx, 0)
+                        if cur_count >= 4:
+                            continue  # 该 slot 已满 4 张，跳过
+                        need = 4 - cur_count
+                    else:
+                        need = 4
+                    img_p = _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, platform)
                     try:
-                        url = llm.generate_image(img_p, module="writing", fallback=False)
+                        urls = llm.generate_images(img_p, module="writing", n=need, fallback=False)
+                    except RuntimeError:
+                        continue  # 该 slot 批量生成失败，跳过（不中断其他 slot）
+                    for candidate_idx, url in enumerate(urls):
+                        # 补生模式下，如果该 slot 已有选中图，新图不选中；否则第一张选中
+                        if missing_only and cur_count > 0:
+                            is_sel = False
+                        else:
+                            is_sel = (candidate_idx == 0)
                         s.add(ArticleImage(
                             article_id=article_id, prompt=img_p, image_url=url,
                             slot_index=slot_idx, slot_desc=slot_desc,
-                            is_selected=(slot_idx == 0),
+                            is_selected=is_sel,
                         ))
-                        s.commit()
-                    except RuntimeError:
-                        continue  # 单张失败跳过，不中断
+                    s.commit()
 
-            article.status = "待选图"
-            article.updated_at = _now()
-            s.add(article)
-            s.commit()
-
-        except Exception as exc:
-            s.rollback()
-            article = s.get(Article, article_id)
-            if article:
-                # 配图失败但正文已完成：回到「已生成」让用户查阅，错误记在 error_message
-                article.status = "已生成"
-                article.error_message = f"配图生成失败：{str(exc)[:400]}"
+                # 所有 slot 满 4 张 → 待审核（默认选中 idx0，用户可换选）；
+                # 有 slot 不足 4 张（部分失败）→ 待配图，让用户点「补生缺失配图」。
+                all_imgs = s.exec(
+                    select(ArticleImage).where(ArticleImage.article_id == article_id)
+                ).all()
+                article.status = "待审核" if _all_image_slots_full(article.body, all_imgs) else "待配图"
+                article.error_message = ""
                 article.updated_at = _now()
                 s.add(article)
                 s.commit()
+
+            except Exception as exc:
+                s.rollback()
+                article = s.get(Article, article_id)
+                if article:
+                    # 配图失败但正文已完成：回到「待审核」让用户查阅，错误记在 error_message
+                    article.status = "待审核"
+                    article.error_message = f"配图生成失败：{str(exc)[:400]}"
+                    article.updated_at = _now()
+                    s.add(article)
+                    s.commit()
+    finally:
+        lock.release()
 
 
 def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
@@ -646,64 +730,74 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
     """配图子线程：为指定 slot 重新生成 4 张候选图。
 
     清理该 slot 的旧候选图，保留其他 slot 的图。
+    用 minimax n 参数批量生成 4 张（1 次 API 调用）。
     """
-    from sqlmodel import Session as SMSession
-    with SMSession(db.engine) as s:
-        try:
-            article = s.get(Article, article_id)
-            topic = s.get(Topic, topic_id)
-            if article is None or topic is None:
-                return
-            if not article.body:
-                return
-            ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
-            style = _default_style(s, topic.campaign_id)
+    lock = _get_article_lock(article_id)
+    if not lock.acquire(blocking=False):
+        return  # 该文章已有配图 worker 在跑，跳过
+    try:
+        from sqlmodel import Session as SMSession
+        with SMSession(db.engine) as s:
+            try:
+                article = s.get(Article, article_id)
+                topic = s.get(Topic, topic_id)
+                if article is None or topic is None:
+                    return
+                if not article.body:
+                    return
+                ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
+                style = _default_style(s, topic.campaign_id)
 
-            # 清理该 slot 的旧候选图
-            old_imgs = s.exec(
-                select(ArticleImage).where(
-                    ArticleImage.article_id == article_id,
-                    ArticleImage.slot_index == slot_index,
-                )
-            ).all()
-            for oi in old_imgs:
-                s.delete(oi)
-            s.commit()
+                # 清理该 slot 的旧候选图
+                old_imgs = s.exec(
+                    select(ArticleImage).where(
+                        ArticleImage.article_id == article_id,
+                        ArticleImage.slot_index == slot_index,
+                    )
+                ).all()
+                for oi in old_imgs:
+                    s.delete(oi)
+                s.commit()
 
-            img_p = _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, platform)
-            for _ in range(4):
+                img_p = _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, platform)
                 try:
-                    url = llm.generate_image(img_p, module="writing", fallback=False)
+                    urls = llm.generate_images(img_p, module="writing", n=4, fallback=False)
+                except RuntimeError:
+                    urls = []
+                for candidate_idx, url in enumerate(urls):
+                    # 默认选中第 0 张：AI 给默认选择，用户不换 = 默认认可
                     s.add(ArticleImage(
                         article_id=article_id, prompt=img_p, image_url=url,
                         slot_index=slot_index, slot_desc=slot_desc,
-                        is_selected=False,
+                        is_selected=(candidate_idx == 0),
                     ))
-                    s.commit()
-                except RuntimeError:
-                    continue
+                s.commit()
 
-            # 配图完成，状态保持「待选图」（让用户选）
-            # 如果原来就是「待配图」，切到「待选图」；如果已经是「待选图」，保持
-            if article.status == "待配图":
-                article.status = "待选图"
-            article.updated_at = _now()
-            s.add(article)
-            s.commit()
+                # 单 slot 重生后：若所有 slot 满 4 张 → 待审核；否则保持待配图
+                all_imgs = s.exec(
+                    select(ArticleImage).where(ArticleImage.article_id == article_id)
+                ).all()
+                if _all_image_slots_full(article.body, all_imgs):
+                    article.status = "待审核"
+                article.updated_at = _now()
+                s.add(article)
+                s.commit()
 
-        except Exception as exc:
-            s.rollback()
-            # 单 slot 失败不影响整体，记日志即可（article 状态不变）
-            print(f"[single-slot-worker] article={article_id} slot={slot_index} 失败: {exc}", flush=True)
+            except Exception as exc:
+                s.rollback()
+                # 单 slot 失败不影响整体，记日志即可（article 状态不变）
+                print(f"[single-slot-worker] article={article_id} slot={slot_index} 失败: {exc}", flush=True)
+    finally:
+        lock.release()
 
 
 def _display_phase_for_article(article: Article) -> str | None:
     """根据 article 当前持久化状态推导页面应展示的阶段标签。"""
     if article.status in ("辩论中", "写作中", "重写中"):
         return article.status
-    if article.status == "已生成" and article.review_rounds > 0 and not article.review_summary:
+    if article.status == "待审核" and article.review_rounds > 0 and not article.review_summary:
         return "评审中"
-    # 待选图和已完成 → None（generate_status 单独处理待选图）
+    # 待配图/待审核/已排期/已发布 → None（待配图/待审核单独处理选图界面）
     return None
 
 
@@ -733,21 +827,35 @@ def _article_detail_fragment(request: Request, article: Article, topic: Topic,
         "records": [],
         "display_phase": None,
         "slots": {},
+        "has_pending_images": False,
+        "all_slots_selected": False,
+        "has_missing_slots": False,
         "article_body_clean": "",
         "body_segments": [],
     }
-    # 待配图 / 待选图：装载候选图数据 + 图文混排切片
-    if article.status in ("待配图", "待选图"):
+    # 待配图 / 待审核：装载全部候选图（供换选/重生）+ 图文混排切片
+    if article.status in ("待配图", "待审核"):
         images = session.exec(
             select(ArticleImage).where(ArticleImage.article_id == article.id)
             .order_by(ArticleImage.slot_index, ArticleImage.id)
         ).all()
+        # 自动恢复卡住的配图 worker（待配图 + 超 5 分钟无更新 + 有缺失 slot）
+        if _maybe_resume_stalled_image_worker(article, images):
+            session.refresh(article)
         slots: dict[int, list[ArticleImage]] = {}
         for img in images:
             slots.setdefault(img.slot_index, []).append(img)
         ctx["slots"] = slots
+        ctx["has_pending_images"] = _has_pending_image_candidates(article.body, slots)
         ctx["article_body_clean"] = _strip_image_slots(article.body)
-        ctx["body_segments"] = _split_body_by_slots(article.body)
+        ctx["body_segments"] = _split_body_by_slots(article.body, slots)
+        ctx["all_slots_selected"] = _all_slots_selected(article.body, images)
+        ctx["has_missing_slots"] = _has_missing_slots(article.body, images)
+        # 待审核也装载辩论/评审记录供查阅
+        ctx["records"] = session.exec(
+            select(DebateRecord).where(DebateRecord.article_id == article.id)
+            .order_by(DebateRecord.round_num, DebateRecord.id)
+        ).all()
         return templates.TemplateResponse(request, "writing/_article_detail_content.html", ctx)
 
     # 正在生成：装载辩论记录
@@ -760,7 +868,7 @@ def _article_detail_fragment(request: Request, article: Article, topic: Topic,
         ctx["display_phase"] = display_phase
         return templates.TemplateResponse(request, "writing/_article_detail_content.html", ctx)
 
-    # 已完成：装载完整辩论/评审记录供查阅 + 选中的图用于图文混排展示
+    # 已排期/已发布：装载辩论/评审记录 + 选中的图用于图文混排展示（只读）
     ctx["records"] = session.exec(
         select(DebateRecord).where(DebateRecord.article_id == article.id)
         .order_by(DebateRecord.round_num, DebateRecord.id)
@@ -775,7 +883,7 @@ def _article_detail_fragment(request: Request, article: Article, topic: Topic,
     for img in selected_imgs:
         slots.setdefault(img.slot_index, []).append(img)
     ctx["slots"] = slots
-    ctx["body_segments"] = _split_body_by_slots(article.body)
+    ctx["body_segments"] = _split_body_by_slots(article.body, slots)
     return templates.TemplateResponse(request, "writing/_article_detail_content.html", ctx)
 
 
@@ -797,20 +905,32 @@ def article_detail(article_id: int, request: Request, session: Session = Depends
         "records": [],
         "display_phase": None,
         "slots": {},
+        "has_pending_images": False,
         "article_body_clean": "",
         "body_segments": [],
     }
-    if article.status in ("待配图", "待选图"):
+    if article.status in ("待配图", "待审核"):
         images = session.exec(
             select(ArticleImage).where(ArticleImage.article_id == article.id)
             .order_by(ArticleImage.slot_index, ArticleImage.id)
         ).all()
+        # 自动恢复卡住的配图 worker（待配图 + 超 5 分钟无更新 + 有缺失 slot）
+        if _maybe_resume_stalled_image_worker(article, images):
+            session.refresh(article)
         slots: dict[int, list[ArticleImage]] = {}
         for img in images:
             slots.setdefault(img.slot_index, []).append(img)
         ctx["slots"] = slots
+        ctx["has_pending_images"] = _has_pending_image_candidates(article.body, slots)
         ctx["article_body_clean"] = _strip_image_slots(article.body)
-        ctx["body_segments"] = _split_body_by_slots(article.body)
+        ctx["body_segments"] = _split_body_by_slots(article.body, slots)
+        ctx["all_slots_selected"] = _all_slots_selected(article.body, images)
+        ctx["has_missing_slots"] = _has_missing_slots(article.body, images)
+        # 待审核也装载辩论/评审记录供查阅
+        ctx["records"] = session.exec(
+            select(DebateRecord).where(DebateRecord.article_id == article.id)
+            .order_by(DebateRecord.round_num, DebateRecord.id)
+        ).all()
     elif _display_phase_for_article(article) is not None:
         ctx["records"] = session.exec(
             select(DebateRecord).where(DebateRecord.article_id == article.id)
@@ -818,7 +938,7 @@ def article_detail(article_id: int, request: Request, session: Session = Depends
         ).all()
         ctx["display_phase"] = _display_phase_for_article(article)
     else:
-        # 已完成：装载辩论/评审记录 + 选中的图用于图文混排展示
+        # 已排期/已发布：装载辩论/评审记录 + 选中的图用于图文混排展示（只读）
         ctx["records"] = session.exec(
             select(DebateRecord).where(DebateRecord.article_id == article.id)
             .order_by(DebateRecord.round_num, DebateRecord.id)
@@ -833,7 +953,7 @@ def article_detail(article_id: int, request: Request, session: Session = Depends
         for img in selected_imgs:
             slots.setdefault(img.slot_index, []).append(img)
         ctx["slots"] = slots
-        ctx["body_segments"] = _split_body_by_slots(article.body)
+        ctx["body_segments"] = _split_body_by_slots(article.body, slots)
     return templates.TemplateResponse(request, "writing/article_detail.html", ctx)
 
 
@@ -852,7 +972,7 @@ def generate_status(article_id: int, request: Request, session: Session = Depend
 
 @router.get("/writing/articles/{article_id}/detail-status")
 def detail_status(article_id: int, request: Request, session: Session = Depends(get_session)):
-    """HTMX 轮询（详情页用）：辩论/写作/重写中 → 更新辩论过程；待选图 → 选图界面；已完成 → 最终文章。"""
+    """HTMX 轮询（详情页用）：辩论/写作/重写中 → 更新辩论过程；待配图 → 选图界面；待审核 → 最终文章+换选。"""
     article = session.get(Article, article_id)
     if article is None:
         return RedirectResponse("/writing", status_code=303)
@@ -861,6 +981,19 @@ def detail_status(article_id: int, request: Request, session: Session = Depends(
         return RedirectResponse("/writing", status_code=303)
     campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all()
     return _article_detail_fragment(request, article, topic, campaigns, session)
+
+
+@router.get("/writing/uploads/{rel_path:path}")
+def writing_upload(rel_path: str, request: Request):
+    """读取写作模块上传图片。走应用登录中间件，不直接暴露整个 data 目录。"""
+    auth.require_level(request, 0)
+    root = os.path.realpath(config.DATA_DIR)
+    path = os.path.realpath(os.path.join(config.DATA_DIR, rel_path))
+    if not (path == root or path.startswith(root + os.sep)):
+        raise HTTPException(404, "文件不存在")
+    if not os.path.exists(path) or not os.path.isfile(path):
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(path)
 
 
 @router.post("/writing/articles/{article_id}/delete")
@@ -917,6 +1050,32 @@ def regenerate_images(article_id: int, request: Request, session: Session = Depe
     return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
 
 
+@router.post("/writing/articles/{article_id}/regenerate-missing-images")
+def regenerate_missing_images(article_id: int, request: Request, session: Session = Depends(get_session)):
+    """补生缺失的配图：只生成候选图不足 4 张的 slot，保留已有图。
+
+    用于配图子线程部分失败后，部分 slot 无图的场景。不清理已有候选图。
+    """
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if not article.body:
+        raise HTTPException(400, "文章还没有正文，无法配图")
+    # 启动补生子线程（missing_only=True，不清理已有图）
+    t = threading.Thread(
+        target=_run_image_worker,
+        args=(article_id, article.topic_id, article.platform, True),
+        daemon=True,
+    )
+    t.start()
+    if request.headers.get("HX-Request") == "true":
+        topic = session.get(Topic, article.topic_id)
+        campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+        return _article_detail_fragment(request, article, topic, campaigns, session)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
 @router.post("/writing/articles/{article_id}/slots/{slot_index}/regenerate")
 def regenerate_slot(article_id: int, slot_index: int, request: Request,
                     session: Session = Depends(get_session)):
@@ -932,9 +1091,29 @@ def regenerate_slot(article_id: int, slot_index: int, request: Request,
         raise HTTPException(400, "文章还没有正文，无法配图")
     # 从正文解析该 slot 的描述
     slots = _parse_image_slots(article.body)
-    if not slots or slot_index >= len(slots):
-        raise HTTPException(400, f"插图位置 {slot_index + 1} 不存在")
-    _, slot_desc = slots[slot_index]
+    if slots and slot_index < len(slots):
+        _, slot_desc = slots[slot_index]
+    else:
+        existing = session.exec(
+            select(ArticleImage).where(
+                ArticleImage.article_id == article_id,
+                ArticleImage.slot_index == slot_index,
+            ).order_by(ArticleImage.id)
+        ).first()
+        if existing is None:
+            raise HTTPException(400, f"插图位置 {slot_index + 1} 不存在")
+        slot_desc = existing.slot_desc or "文章配图"
+    old_imgs = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article_id,
+            ArticleImage.slot_index == slot_index,
+        )
+    ).all()
+    for oi in old_imgs:
+        session.delete(oi)
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
     # 启动子线程异步重生该 slot
     t = threading.Thread(
         target=_run_single_slot_worker,
@@ -944,38 +1123,106 @@ def regenerate_slot(article_id: int, slot_index: int, request: Request,
     t.start()
     # 立即返回当前详情片段（旧图已被清理，新图生成中，轮询会自动补上）
     if request.headers.get("HX-Request") == "true":
-        # 先清掉旧候选图，避免页面还显示旧图
-        old_imgs = session.exec(
-            select(ArticleImage).where(
-                ArticleImage.article_id == article_id,
-                ArticleImage.slot_index == slot_index,
-            )
-        ).all()
-        for oi in old_imgs:
-            session.delete(oi)
-        session.commit()
         topic = session.get(Topic, article.topic_id)
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
         return _article_detail_fragment(request, article, topic, campaigns, session)
     return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
 
 
-@router.post("/writing/articles/{article_id}/select-images")
-def select_images(article_id: int, request: Request,
-                  image_id: list[int] = Form([]),
-                  session: Session = Depends(get_session)):
-    """用户选图：接收每个 slot 选中的 image_id，标记 is_selected，完成后状态改为已生成。"""
+@router.post("/writing/articles/{article_id}/slots/{slot_index}/select")
+def select_slot_image(article_id: int, slot_index: int, request: Request,
+                      image_id: int = Form(...),
+                      session: Session = Depends(get_session)):
+    """即时选中某个插图位置的一张图，不要求其他位置同时确认。"""
     auth.require_level(request, 1)
     article = session.get(Article, article_id)
     if article is None:
         raise HTTPException(404, "文章不存在")
-    selected_set = {str(i) for i in image_id}
+    image = session.get(ArticleImage, image_id)
+    if image is None or image.article_id != article_id or image.slot_index != slot_index:
+        raise HTTPException(400, "图片不属于该插图位置")
+    _select_slot_image(session, article, image)
+    topic = session.get(Topic, article.topic_id)
+    campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+    if request.headers.get("HX-Request") == "true":
+        return _article_detail_fragment(request, article, topic, campaigns, session)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+@router.post("/writing/articles/{article_id}/slots/{slot_index}/upload")
+def upload_slot_image(article_id: int, slot_index: int, request: Request,
+                      file: UploadFile = File(...),
+                      session: Session = Depends(get_session)):
+    """手动上传某个插图位置的图片，并立即设为该组当前选中图。"""
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(400, "请上传图片文件")
+    slot_desc = _slot_desc(article, slot_index, session) or "手动上传图片"
+    path = storage.save_upload(file, subdir=f"writing/articles/{article_id}")
+    image = ArticleImage(
+        article_id=article_id,
+        prompt="手动上传",
+        image_url=_storage_url(path),
+        slot_index=slot_index,
+        slot_desc=slot_desc,
+        is_selected=True,
+    )
+    session.add(image)
+    session.commit()
+    session.refresh(image)
+    _select_slot_image(session, article, image)
+    _prune_slot_images(session, article_id, slot_index, keep_id=image.id, max_count=4)
+    topic = session.get(Topic, article.topic_id)
+    campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+    if request.headers.get("HX-Request") == "true":
+        return _article_detail_fragment(request, article, topic, campaigns, session)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+@router.post("/writing/articles/{article_id}/select-images")
+async def select_images(article_id: int, request: Request,
+                        session: Session = Depends(get_session)):
+    """用户选图：接收每个 slot 选中的 image_id，标记 is_selected，完成后状态改为待审核。"""
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    form = await request.form()
+    selected_set: set[int] = set()
+    # 新表单：image_id_0 / image_id_1 ...，让每个 slot 拥有独立 radio 组。
+    for key, value in form.multi_items():
+        if key.startswith("image_id_"):
+            try:
+                selected_set.add(int(str(value)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "包含无效图片") from None
+    # 兼容旧表单字段，方便测试和已有页面提交。
+    for value in form.getlist("image_id"):
+        try:
+            selected_set.add(int(str(value)))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "包含无效图片") from None
+    if not selected_set:
+        raise HTTPException(400, "请至少选择一张图片")
 
     # 清除旧选择，标记新选择
     all_imgs = session.exec(select(ArticleImage).where(ArticleImage.article_id == article_id)).all()
+    known_ids = {img.id for img in all_imgs}
+    if not selected_set.issubset(known_ids):
+        raise HTTPException(400, "包含无效图片")
+    selected_slots: set[int] = set()
     for img in all_imgs:
-        img.is_selected = str(img.id) in selected_set
+        img.is_selected = img.id in selected_set
+        if img.is_selected:
+            selected_slots.add(img.slot_index)
         session.add(img)
+    expected_slots = sorted(_expected_slot_indexes(article.body, all_imgs))
+    missing_slots = [idx for idx in expected_slots if idx not in selected_slots]
+    if missing_slots:
+        raise HTTPException(400, f"请为插图位置 {missing_slots[0] + 1} 选择图片")
     session.commit()
 
     # 设置主图 url（slot_index 最小的选中图）
@@ -987,7 +1234,7 @@ def select_images(article_id: int, request: Request,
     if first_selected:
         article.image_url = first_selected.image_url
         article.image_prompt = first_selected.prompt
-    article.status = "已生成"
+    article.status = "待审核"
     article.updated_at = _now()
     session.add(article)
     session.commit()
@@ -1007,7 +1254,7 @@ def restore_article(article_id: int, request: Request, session: Session = Depend
     if article is None:
         raise HTTPException(404, "文章不存在")
     article.deleted_at = None
-    article.status = "已生成" if article.body and article.image_url else "写作中"
+    article.status = "待审核" if article.body and article.image_url else "写作中"
     article.updated_at = _now()
     session.add(article)
     session.commit()
@@ -1031,29 +1278,55 @@ _PLATFORM_IMG_HINT = {
 }
 
 
-def _platform_directive(platform: str, word_count: int) -> str:
-    """平台风格指令 + 目标字数。"""
-    parts = []
+def _resolve_style_text(style: Style | None, platform: str) -> str:
+    """决定写作风格文本：
+    - 有默认风格 → 用默认风格（不注入平台特点，避免冲突）
+    - 无默认风格但选了平台 → 用平台特点作为写作风格
+    - 都没有 → 提示使用品牌内容要求
+    """
+    if style:
+        return style.summary
     if platform in _PLATFORM_STYLE:
-        parts.append(_PLATFORM_STYLE[platform])
+        return _PLATFORM_STYLE[platform]
+    return "无默认风格，使用品牌内容要求。"
+
+
+# 无默认风格时，在 prompt 末尾强化平台文风约束（注意力最高位）
+_PLATFORM_ENFORCE = {
+    "小红书": "⚠️ 严格遵循小红书文风（上述【写作风格】要求）：每段不超过 3 行、每段 1-2 个 emoji、口语化亲切、开头强钩子、结尾引导互动。禁止写成正式长段落或学术腔。",
+    "微信公众号": "⚠️ 严格遵循公众号文风（上述【写作风格】要求）：正式有温度、小标题分隔、起承转合、用词精准、结尾余韵。禁止口语化或堆砌 emoji。",
+}
+
+
+def _platform_enforce(style: Style | None, platform: str) -> str:
+    """无默认风格 + 选了平台时，返回末尾强化约束；否则空。"""
+    if style:
+        return ""
+    return _PLATFORM_ENFORCE.get(platform, "")
+
+
+def _platform_directive(platform: str, word_count: int) -> str:
+    """目标字数指令（平台文风由 _resolve_style_text 按需注入，此处只管字数）。"""
     if word_count > 0:
-        parts.append(f"目标字数约 {word_count} 字（允许 ±20% 浮动）。")
-    return "\n".join(parts)
+        return f"目标字数约 {word_count} 字（允许 ±20% 浮动）。"
+    return ""
 
 
 def _image_slot_directive(platform: str) -> str:
     """多插图位置标记指令。"""
     hint = _PLATFORM_IMG_HINT.get(platform, "")
-    return f"""在文章正文中，请在合适的位置插入插图标记，格式为 {_IMAGE_SLOT_MARK}插图描述]。插图描述要具体（如「敦煌飞天的色彩渐变示意」），用于后续 AI 配图。
+    return f"""在文章正文中，请在合适的位置插入插图标记，**严格**使用格式 {_IMAGE_SLOT_MARK}插图描述]（注意：「插图」二字后紧跟半角或全角冒号，不要写成「插图位」或「插图位置」）。
+插图描述要具体（如「敦煌飞天的色彩渐变示意」），用于后续 AI 配图。
 根据文章长度和内容，自动决定插入 2-4 张插图，均匀分布在文章中。{hint}
 不要把所有插图都放在开头或结尾，要穿插在正文段落之间。"""
 
 
 def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
                     platform: str = "", word_count: int = 0) -> str:
-    style_text = style.summary if style else "无默认风格，使用品牌内容要求。"
+    style_text = _resolve_style_text(style, platform)
     platform_dir = _platform_directive(platform, word_count)
     img_slot_dir = _image_slot_directive(platform)
+    enforce = _platform_enforce(style, platform)
     return f"""你是③写作引擎，请基于已采纳选题生成一篇可直接编辑的中文图文稿。
 
 【选题】
@@ -1073,12 +1346,14 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 数据池资料：{"；".join(ctx.pool_materials)}
 经验包：{"；".join(ctx.pool_experiences)}
 
-【默认写作风格】
+【写作风格】
 {style_text}
 
 {platform_dir}
 
 {img_slot_dir}
+
+{enforce}
 
 请输出：
 标题：...
@@ -1090,9 +1365,10 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style | None,
                                brief: str, platform: str = "", word_count: int = 0) -> str:
     """带辩论简报的文章生成 prompt。"""
-    style_text = style.summary if style else "无默认风格，使用品牌内容要求。"
+    style_text = _resolve_style_text(style, platform)
     platform_dir = _platform_directive(platform, word_count)
     img_slot_dir = _image_slot_directive(platform)
+    enforce = _platform_enforce(style, platform)
     return f"""你是③写作引擎，请基于已采纳选题和辩论简报生成一篇可直接编辑的中文图文稿。
 
 【选题】
@@ -1112,7 +1388,7 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 数据池资料：{"；".join(ctx.pool_materials)}
 经验包：{"；".join(ctx.pool_experiences)}
 
-【默认写作风格】
+【写作风格】
 {style_text}
 
 【辩论综合写作简报】
@@ -1122,6 +1398,8 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 
 {img_slot_dir}
 
+{enforce}
+
 请严格按照辩论简报的切入角度和结构建议写作。请输出：
 标题：...
 
@@ -1130,26 +1408,181 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 
 
 def _parse_image_slots(body: str) -> list[tuple[int, str]]:
-    """从文章正文中解析插图标记 [插图：描述]，返回 [(位置在 body 中的字符偏移, 描述), ...]。"""
+    """从文章正文中解析插图标记，返回 [(位置在 body 中的字符偏移, 描述), ...]。
+
+    兼容 LLM 常见变体：[插图：...]、[插图位：...]、[插图位置：...]。
+    """
     import re
-    pattern = re.compile(r'\[插图[：:](.+?)\]')
+    pattern = re.compile(r'\[插图(?:位|位置)?[：:](.+?)\]')
     return [(m.start(), m.group(1).strip()) for m in pattern.finditer(body)]
 
 
 def _strip_image_slots(body: str) -> str:
-    """从文章正文中移除插图标记，保留纯净正文。"""
+    """从文章正文中移除插图标记（兼容 [插图：]、[插图位：]、[插图位置：] 变体），保留纯净正文。"""
     import re
-    return re.sub(r'\[插图[：:].+?\]\n*', '\n', body).strip()
+    return re.sub(r'\[插图(?:位|位置)?[：:].+?\]\n*', '\n', body).strip()
 
 
-def _split_body_by_slots(body: str) -> list[dict]:
-    """把正文按 [插图：...] 标记切片，返回段落序列供图文混排展示。
+def _storage_url(path: str) -> str:
+    """把 DATA_DIR 下的本地文件路径转成写作模块可访问 URL。"""
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(config.DATA_DIR))
+    return f"/writing/uploads/{quote(rel, safe='/')}"
 
+
+def _slot_desc(article: Article, slot_index: int, session: Session) -> str:
+    slots = _parse_image_slots(article.body)
+    if slots and slot_index < len(slots):
+        return slots[slot_index][1]
+    existing = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article.id,
+            ArticleImage.slot_index == slot_index,
+        ).order_by(ArticleImage.id)
+    ).first()
+    return existing.slot_desc if existing else ""
+
+
+def _select_slot_image(session: Session, article: Article, selected: ArticleImage) -> None:
+    """标记某个 slot 的当前图，并同步文章主图字段。
+
+    所有 expected slot 都选好后自动切「待审核」。
+    """
+    peers = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == selected.article_id,
+            ArticleImage.slot_index == selected.slot_index,
+        )
+    ).all()
+    for img in peers:
+        img.is_selected = img.id == selected.id
+        session.add(img)
+    all_imgs = session.exec(
+        select(ArticleImage).where(ArticleImage.article_id == article.id)
+    ).all()
+    first_selected = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article.id,
+            ArticleImage.is_selected == True,
+        ).order_by(ArticleImage.slot_index, ArticleImage.id)
+    ).first()
+    if first_selected:
+        article.image_url = first_selected.image_url
+        article.image_prompt = first_selected.prompt
+    # 注意：单个 slot 选图不自动切「待审核」，让用户能继续换选其他 slot；
+    # 全部选好后由用户点「完成配图」按钮显式确认（/confirm-images）。
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
+
+
+def _prune_slot_images(session: Session, article_id: int, slot_index: int,
+                       keep_id: int | None, max_count: int = 4) -> None:
+    """每个 slot 最多保留 max_count 张展示图，优先保留选中图和新上传图。"""
+    images = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article_id,
+            ArticleImage.slot_index == slot_index,
+        ).order_by(ArticleImage.is_selected.desc(), ArticleImage.id.desc())
+    ).all()
+    kept = 0
+    for img in images:
+        if img.id == keep_id or kept < max_count:
+            kept += 1
+            continue
+        session.delete(img)
+    session.commit()
+
+
+def _expected_slot_indexes(body: str, images: list[ArticleImage] | None = None) -> set[int]:
+    """正文标记和已生成候选图共同决定需要用户选图的 slot。"""
+    marked = set(range(len(_parse_image_slots(body))))
+    image_slots = {img.slot_index for img in (images or [])}
+    return marked | image_slots
+
+
+def _has_pending_image_candidates(body: str, slots: dict[int, list[ArticleImage]]) -> bool:
+    """是否还有 slot 未生成满 4 张候选图，用于待配图页面继续轮询。
+
+    slots 全空 → 自配图模式（用户不上传），不需要轮询。
+    """
+    expected = _expected_slot_indexes(body)
+    if not expected and slots:
+        expected = set(slots.keys())
+    if not expected:
+        return True
+    if all(len(slots.get(idx, [])) == 0 for idx in expected):
+        return False
+    return any(len(slots.get(idx, [])) < 4 for idx in expected)
+
+
+def _all_slots_selected(body: str, images: list[ArticleImage]) -> bool:
+    """所有 expected slot 是否都已选好图（用于显示「完成配图」按钮）。"""
+    expected = _expected_slot_indexes(body, images)
+    if not expected:
+        return False
+    selected_slots = {img.slot_index for img in images if img.is_selected}
+    return expected.issubset(selected_slots)
+
+
+def _has_missing_slots(body: str, images: list[ArticleImage]) -> bool:
+    """是否有 expected slot 完全没有候选图（用于显示「补生缺失配图」按钮）。
+
+    只在 AI 配图模式（正文有插图标记）下有意义；自配图模式返回 False。
+    """
+    marked = _parse_image_slots(body)
+    if not marked:
+        return False  # 自配图模式，不提示
+    expected = set(range(len(marked)))
+    existing_slots = {img.slot_index for img in images}
+    return bool(expected - existing_slots)
+
+
+def _all_image_slots_full(body: str, images: list[ArticleImage]) -> bool:
+    """所有 expected slot 是否都已生成满 4 张候选图（用于「待配图」→「待审核」切换判断）。
+
+    自配图模式（正文无插图标记且无候选图）返回 True（视作完成，等用户上传）。
+    """
+    expected = _expected_slot_indexes(body, images)
+    if not expected:
+        return True
+    counts: dict[int, int] = {}
+    for img in images:
+        counts[img.slot_index] = counts.get(img.slot_index, 0) + 1
+    return all(counts.get(idx, 0) >= 4 for idx in expected)
+
+
+def _maybe_resume_stalled_image_worker(article: Article, images: list[ArticleImage]) -> bool:
+    """检测「待配图」状态卡住（worker 死了）：超过 5 分钟无更新且有缺失 slot → 触发补生。
+
+    返回 True 表示刚触发了补生（调用方应刷新 images 后再渲染）。
+    幂等：互斥锁保证不会重复触发。
+    """
+    if article.status != "待配图":
+        return False
+    if not _has_missing_slots(article.body, images):
+        return False
+    # 超过 5 分钟没更新 = worker 卡住
+    age = (_now() - article.updated_at).total_seconds()
+    if age < 300:
+        return False
+    t = threading.Thread(
+        target=_run_image_worker,
+        args=(article.id, article.topic_id, article.platform, True),
+        daemon=True,
+    )
+    t.start()
+    return True
+
+
+def _split_body_by_slots(body: str, slots: dict[int, list[ArticleImage]] | None = None) -> list[dict]:
+    """把正文按插图标记切片，返回段落序列供图文混排展示。
+
+    兼容 [插图：...]、[插图位：...]、[插图位置：...] 变体。
     返回 [{"type": "text", "text": "..."}, {"type": "slot", "slot_index": 0, "desc": "..."}] 交替序列。
     slot_index 从 0 递增，对应 ArticleImage.slot_index。
     """
     import re
-    pattern = re.compile(r'\[插图[：:](.+?)\]')
+    pattern = re.compile(r'\[插图(?:位|位置)?[：:](.+?)\]')
     result: list[dict] = []
     last_end = 0
     slot_idx = 0
@@ -1166,6 +1599,12 @@ def _split_body_by_slots(body: str) -> list[dict]:
     tail = body[last_end:].strip()
     if tail:
         result.append({"type": "text", "text": tail})
+    # 如果模型没按要求插入插图标记，但后端兜底生成了候选图，也要在正文末尾展示选图位。
+    if slot_idx == 0 and slots:
+        for idx in sorted(slots):
+            imgs = slots.get(idx) or []
+            desc = next((img.slot_desc for img in imgs if img.slot_desc), "文章配图")
+            result.append({"type": "slot", "slot_index": idx, "desc": desc})
     return result
 
 
@@ -1187,10 +1626,13 @@ def _image_prompt_for_slot(topic: Topic, ctx: KnowledgeContext, style: Style | N
                 style_core = line
                 break
     # 文章上下文：取该 slot 前后各 100 字，让模型理解这位置插图的语境
-    slot_marker = f"{_IMAGE_SLOT_MARK}{slot_desc}]"
-    slot_pos = body.find(slot_marker)
-    if slot_pos >= 0:
-        context = body[max(0, slot_pos - 100):slot_pos + len(slot_marker) + 100]
+    # 兼容 [插图：]、[插图位：]、[插图位置：] 变体
+    import re
+    slot_pattern = re.compile(r'\[插图(?:位|位置)?[：:]' + re.escape(slot_desc) + r'\]')
+    m = slot_pattern.search(body)
+    if m:
+        slot_pos = m.start()
+        context = body[max(0, slot_pos - 100):m.end() + 100]
     else:
         context = body[:200]
 

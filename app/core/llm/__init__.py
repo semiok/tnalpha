@@ -73,3 +73,26 @@ def generate_image(prompt: str, module: str = "default", fallback: bool = True) 
             raise RuntimeError(f"图像 provider '{p}' 调用失败：{e}") from e
         print(f"[llm] 图像 provider '{p}' 失败，回退 stub：{e}")
     return stub.generate_image(prompt)
+
+
+def generate_images(prompt: str, module: str = "default", n: int = 4,
+                    fallback: bool = True) -> list[str]:
+    """批量生成 n 张图，返回 URL 列表。
+
+    minimax 用 API 的 n 参数一次出图（高效）；codex/stub 退化为调用 n 次单图。
+    fallback=True 时整批失败回退 n 张 stub 图；fallback=False 抛 RuntimeError。
+    """
+    st = _settings(module)
+    p = st["image_provider"]
+    try:
+        if p == "codex":
+            return [codex_image.generate_image(prompt) for _ in range(n)]
+        if p == "minimax-m3":
+            return minimax_image.generate_images(
+                prompt, st["image_base_url"], st["image_api_key"],
+                st["image_model"], n=n, timeout=config.IMAGE_TIMEOUT)
+    except Exception as e:
+        if not fallback:
+            raise RuntimeError(f"图像 provider '{p}' 调用失败：{e}") from e
+        print(f"[llm] 图像 provider '{p}' 失败，回退 stub：{e}")
+    return [stub.generate_image(prompt) for _ in range(n)]

@@ -24,7 +24,17 @@
                    x-data="{expanded: false}">
                 <div class="flex items-center justify-between mb-3">
                   <div class="text-sm font-medium text-slate-700">{{ c.name }}</div>
-                  <span class="text-xs text-slate-400">{{ c_presets | length }} 个预设风格</span>
+                  <div class="flex items-center gap-3">
+                    {% if c_presets | selectattr('is_default') | list %}
+                      {% if request.state.level >= 1 %}
+                        <form method="post" action="/writing/styles/campaign/{{ c.id }}/unset-default" class="inline"
+                              onsubmit="return confirm('取消「{{ c.name }}」的默认风格？取消后 AI 将自行决定文风。');">
+                          {{ button("取消默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
+                        </form>
+                      {% endif %}
+                    {% endif %}
+                    <span class="text-xs text-slate-400">{{ c_presets | length }} 个预设风格</span>
+                  </div>
                 </div>
                 {# 已生成的预设风格列表：默认只显示前 4 个 #}
                 <div class="grid gap-2 sm:grid-cols-2 mb-3">
@@ -74,7 +84,17 @@
                    x-data="{expanded: false}">
                 <div class="flex items-center justify-between mb-2">
                   <div class="text-sm font-medium text-slate-700">{{ c.name }}</div>
-                  <span class="text-xs text-slate-400">{{ c_styles | length }} 个风格</span>
+                  <div class="flex items-center gap-3">
+                    {% if c_styles | selectattr('is_default') | list %}
+                      {% if request.state.level >= 1 %}
+                        <form method="post" action="/writing/styles/campaign/{{ c.id }}/unset-default" class="inline"
+                              onsubmit="return confirm('取消「{{ c.name }}」的默认风格？取消后 AI 将自行决定文风。');">
+                          {{ button("取消默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
+                        </form>
+                      {% endif %}
+                    {% endif %}
+                    <span class="text-xs text-slate-400">{{ c_styles | length }} 个风格</span>
+                  </div>
                 </div>
                 <div class="grid gap-2 sm:grid-cols-2">
                   {% for style in c_styles %}
@@ -239,15 +259,9 @@
 
     {% if status_filter == "全部" %}
       {{ card_open("状态说明") }}
-        <div class="grid gap-2 text-sm text-slate-600 md:grid-cols-6">
-          <div>{{ chip("辩论中", "amber") }} <span class="ml-1">AI 多角色辩论中。</span></div>
-          <div>{{ chip("写作中", "brand") }} <span class="ml-1">模型生成文本中。</span></div>
-          <div>{{ chip("重写中", "brand") }} <span class="ml-1">按评审建议重写中。</span></div>
-          <div>{{ chip("待配图", "amber") }} <span class="ml-1">正文已生成，配图异步生成中。</span></div>
-          <div>{{ chip("待选图", "amber") }} <span class="ml-1">多插图候选已生成，请选图。</span></div>
-          <div>{{ chip("已生成", "emerald") }} <span class="ml-1">文章和图片已完成。</span></div>
-          <div>{{ chip("已排期", "amber") }} <span class="ml-1">后续排期模块接入。</span></div>
-          <div>{{ chip("已发布", "emerald") }} <span class="ml-1">后续发布/反馈接入。</span></div>
+        <div class="grid gap-2 text-sm text-slate-600 md:grid-cols-3">
+          <div>{{ chip("生成中", "amber") }} <span class="ml-1">AI 正在辩论/写作/配图。</span></div>
+          <div>{{ chip("待审核", "emerald") }} <span class="ml-1">图文已完成，等待审核（可换选图片）。</span></div>
           <div>{{ chip("已删除", "rose") }} <span class="ml-1">软删除，默认隐藏。</span></div>
         </div>
       {{ card_close() }}
