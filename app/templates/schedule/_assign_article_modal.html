@@ -1,0 +1,49 @@
+<div class="fixed inset-0 z-40 bg-black/30 grid place-items-center" onclick="if(event.target===this)tnCloseModal()">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden m-4">
+    <form method="post" action="/schedule/slots/add"
+          x-data='{weeks: {{ week_options|tojson }}, weekId: "{{ week_options[0].id if week_options else "" }}", publishDate: "{{ week_options[0].week_start if week_options else "" }}", publishTime: "", get current(){return this.weeks.find(w => String(w.id) === String(this.weekId)) || this.weeks[0] || {}}, syncWeek(){this.publishDate = this.current.week_start || ""}}'
+          class="p-5">
+      <input type="hidden" name="article_id" value="{{ article.id }}">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div class="min-w-0">
+          <div class="font-semibold text-slate-800">指定发布周</div>
+          <div class="text-xs text-slate-400 mt-1 truncate">{{ article.title }}</div>
+          <div class="text-xs text-slate-400 mt-1">推荐平台：{{ article.platform or "未设" }}</div>
+        </div>
+        <button type="button" onclick="tnCloseModal()" class="text-slate-400 hover:text-slate-600">✕</button>
+      </div>
+
+      {% if weeks %}
+      <div class="space-y-3">
+        <label class="block text-xs text-slate-500">发布周
+          <select name="week_id" x-model="weekId" @change="syncWeek()" class="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700">
+            {% for w in weeks %}
+              <option value="{{ w.id }}">{{ w.week_start.strftime('%m.%d') }}-{{ w.week_end.strftime('%m.%d') }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="block text-xs text-slate-500">发布日期
+            <input type="date" name="publish_date" x-model="publishDate" :min="current.week_start" :max="current.week_end" class="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm">
+          </label>
+          <label class="block text-xs text-slate-500">发布时间
+            <input type="time" name="publish_time" x-model="publishTime" class="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm">
+          </label>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 mt-5">
+        <button type="button" onclick="tnCloseModal()" class="px-3.5 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">取消</button>
+        <button class="px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700">加入排期</button>
+      </div>
+      {% else %}
+      <div class="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-sm text-amber-700">还没有 week。先回排期表新增 week。</div>
+      <div class="flex justify-end mt-5">
+        <button type="button" onclick="tnCloseModal()" class="px-3.5 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">关闭</button>
+      </div>
+      {% endif %}
+    </form>
+  </div>
+</div>

@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, notice, empty_state, chip %}
+{% block content %}
+  {{ page_header("⑤模块", "数据反馈", [("首页", "/")]) }}
+
+  {% if not brand %}
+    {{ notice("还没有品牌。先到①知识库创建品牌。", "amber") }}
+    {{ empty_state("暂无发布数据") }}
+  {% else %}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+      <div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <div class="text-xs text-slate-400">已发布文章</div>
+        <div class="text-2xl font-bold text-slate-700 mt-1">{{ stats.published }}</div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <div class="text-xs text-slate-400">待总结</div>
+        <div class="text-2xl font-bold text-amber-600 mt-1">{{ stats.pending }}</div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <div class="text-xs text-slate-400">已总结</div>
+        <div class="text-2xl font-bold text-brand-600 mt-1">{{ stats.summarized }}</div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <div class="text-xs text-slate-400">经验条目</div>
+        <div class="text-2xl font-bold text-emerald-600 mt-1">{{ stats.experiences }}</div>
+      </div>
+    </div>
+
+    <div class="mb-4 space-y-2">
+      <div class="flex flex-wrap items-center gap-2">
+        {% for key, label, href, count in status_links %}
+        <a href="{{ href }}"
+           class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-brand-600 text-white' if active_status == key else 'bg-slate-100 text-slate-600 hover:bg-slate-200' }}">
+          {{ label }} <span class="opacity-70">{{ count }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        {% for key, label, href, count in scope_links %}
+        <a href="{{ href }}"
+           class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-white border border-brand-200 text-brand-700 shadow-sm' if selected_campaign == key else 'bg-white border border-slate-200 text-slate-500 hover:border-slate-300' }}">
+          {{ label }} <span class="opacity-70">{{ count }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if request.state.level >= 1 %}
+    <form id="batch-experience-form" method="post" action="/feedback/experiences/batch">
+      <input type="hidden" name="scope" value="campaign">
+      <input type="hidden" name="return_to" value="/feedback?status=已总结{% if selected_campaign != 'all' %}&campaign_id={{ selected_campaign }}{% endif %}">
+    </form>
+    {% endif %}
+
+    <section class="bg-white rounded-xl border border-slate-200 p-5">
+      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
+        <div>
+          <div class="text-sm font-semibold text-slate-700">发布文章复盘</div>
+          <div class="text-xs text-slate-400 mt-1">以文章为单位沉淀经验；生成时会同时总结选题和正文，供②选题库和③写作引擎引用。</div>
+        </div>
+        {% if request.state.level >= 1 and samples %}
+        <button type="submit" form="batch-experience-form"
+                data-loading-text="批量生成中"
+                class="px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-800 text-white hover:bg-slate-900">
+          批量生成经验
+        </button>
+        {% endif %}
+      </div>
+
+      {% if samples %}
+        <div class="space-y-3">
+          {% for sample in samples %}
+          {% set slot = sample.slot %}
+          {% set article = sample.article %}
+          {% set topic = sample.topic %}
+          {% set metric = sample.metric %}
+          {% set slot_entries = entries_by_slot.get(slot.id, []) %}
+          {% set exp = namespace(topic=None, writing=None) %}
+          {% for e in slot_entries %}
+            {% if e.experience_type == "选题经验" and not exp.topic %}{% set exp.topic = e %}{% endif %}
+            {% if e.experience_type == "写作经验" and not exp.writing %}{% set exp.writing = e %}{% endif %}
+          {% endfor %}
+          {% set row_status = "已总结" if exp.topic and exp.writing else "待总结" %}
+          {% set has_partial_experience = (exp.topic and not exp.writing) or (exp.writing and not exp.topic) %}
+          <div id="sample-{{ slot.id }}" class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div class="flex min-w-0 flex-1 gap-3">
+                {% if request.state.level >= 1 %}
+                <input form="batch-experience-form" type="checkbox" name="slot_id" value="{{ slot.id }}"
+                       class="mt-1 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+                {% endif %}
+                <details class="min-w-0 flex-1" {% if request.query_params.get('open') == slot.id|string %}open{% endif %}>
+                  <summary class="cursor-pointer select-none list-none">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-sm font-semibold text-brand-700 hover:underline">
+                        {{ article.title if article else "文章 #" ~ slot.article_id }}
+                      </span>
+                      {{ chip(row_status, "brand" if row_status == "已总结" else "amber") }}
+                      {{ chip(sample.performance_level, "emerald" if sample.performance_level == "高表现" else "amber" if sample.performance_level == "中表现" else "rose" if sample.performance_level == "低表现" else "slate") }}
+                      {{ chip(slot.platform or "未填平台", "slate") }}
+                    </div>
+                    <div class="text-xs text-slate-400 mt-1">
+                      {{ sample.campaign_name }} · 发布于 {{ (slot.published_at.strftime('%Y.%m.%d %H:%M') if slot.published_at else slot.publish_date.strftime('%Y.%m.%d')) }}
+                      {% if slot.published_url %} · <a href="{{ slot.published_url }}" target="_blank" class="text-brand-600 hover:underline">发布链接</a>{% endif %}
+                    </div>
+                    <div class="text-xs text-slate-500 mt-2">
+                      {% if metric %}
+                        {% if "小红书" in slot.platform %}
+                          小红书：点赞 {{ metric.xhs_like }} 评论 {{ metric.xhs_comment }} 收藏 {{ metric.xhs_collect }}
+                        {% else %}
+                          公众号：阅读 {{ metric.wechat_read }} 点赞 {{ metric.wechat_like }} 转发 {{ metric.wechat_share }}
+                        {% endif %}
+                        {% if metric.notes %}<span class="text-slate-400"> · 备注：{{ metric.notes }}</span>{% endif %}
+                      {% else %}
+                        尚未回填媒体数据
+                      {% endif %}
+                    </div>
+                  </summary>
+
+                  <div class="mt-4 border-t border-slate-100 pt-4">
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div class="flex flex-wrap items-center gap-2 mb-4">
+                        <span class="text-sm font-semibold text-slate-700">综合分析</span>
+                        {{ chip(row_status, "brand" if row_status == "已总结" else "amber") }}
+                        {{ chip(sample.performance_level, "emerald" if sample.performance_level == "高表现" else "amber" if sample.performance_level == "中表现" else "rose" if sample.performance_level == "低表现" else "slate") }}
+                        {{ chip(slot.platform or "未填平台", "slate") }}
+                        <span class="text-xs text-slate-400">{{ sample.campaign_name }}</span>
+                      </div>
+
+                      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs mb-4">
+                        <div class="rounded-lg bg-white border border-slate-100 px-3 py-2">
+                          <div class="font-semibold text-slate-600 mb-1">来源选题</div>
+                          <div class="text-slate-700">{{ topic.title if topic else "未关联选题" }}</div>
+                          {% if topic and topic.outline %}<div class="text-slate-500 mt-1 line-clamp-3">{{ topic.outline }}</div>{% endif %}
+                        </div>
+                        <div class="rounded-lg bg-white border border-slate-100 px-3 py-2">
+                          <div class="font-semibold text-slate-600 mb-1">正文切片</div>
+                          <div class="text-slate-500 line-clamp-4 whitespace-pre-line">{{ article.body[:420] if article else "未找到正文" }}</div>
+                        </div>
+                        <div class="rounded-lg bg-white border border-slate-100 px-3 py-2">
+                          <div class="font-semibold text-slate-600 mb-1">发布数据</div>
+                          <div class="text-slate-600">
+                            {% if metric %}
+                              {% if "小红书" in slot.platform %}
+                                点赞 {{ metric.xhs_like }} · 评论 {{ metric.xhs_comment }} · 收藏 {{ metric.xhs_collect }}
+                              {% else %}
+                                阅读 {{ metric.wechat_read }} · 点赞 {{ metric.wechat_like }} · 转发 {{ metric.wechat_share }}
+                              {% endif %}
+                              {% if metric.notes %}<div class="mt-1 text-slate-400 line-clamp-2">{{ metric.notes }}</div>{% endif %}
+                            {% else %}
+                              尚未回填媒体数据
+                            {% endif %}
+                          </div>
+                        </div>
+                      </div>
+
+                      {% if exp.topic or exp.writing %}
+                      <form method="post" action="/feedback/experiences/slot/{{ slot.id }}/update" class="space-y-4">
+                        <input type="hidden" name="return_to" value="/feedback?status={{ active_status }}{% if selected_campaign != 'all' %}&campaign_id={{ selected_campaign }}{% endif %}">
+                        {% if exp.topic %}
+                        <section id="experience-{{ exp.topic.id }}" class="rounded-lg border border-brand-100 bg-white px-3 py-3">
+                          <div class="mb-3 flex items-center gap-2">
+                            {{ chip("选题经验", "brand") }}
+                            <span class="text-xs text-slate-400">沉淀这篇文章为什么值得做、下次怎么选题。</span>
+                          </div>
+                          <label class="block text-xs text-slate-500">判断
+                            <input type="text" name="topic_title" value="{{ exp.topic.title }}" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">
+                          </label>
+                          <label class="block text-xs text-slate-500 mt-2">总结
+                            <textarea name="topic_summary" rows="2" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.topic.summary }}</textarea>
+                          </label>
+                          <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+                            <label class="block text-xs text-slate-500">正向经验
+                              <textarea name="topic_positive_notes" rows="3" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.topic.positive_notes }}</textarea>
+                            </label>
+                            <label class="block text-xs text-slate-500">反向风险
+                              <textarea name="topic_negative_notes" rows="3" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.topic.negative_notes }}</textarea>
+                            </label>
+                          </div>
+                          <label class="block text-xs text-slate-500 mt-2">给②选题库的复用指令
+                            <textarea name="topic_action_advice" rows="3" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.topic.action_advice }}</textarea>
+                          </label>
+                        </section>
+                        {% else %}
+                        <div class="rounded-lg border border-dashed border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-700">这篇文章还缺选题经验，点击“生成缺失经验”生成。</div>
+                        {% endif %}
+
+                        {% if exp.writing %}
+                        <section id="experience-{{ exp.writing.id }}" class="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                          <div class="mb-3 flex items-center gap-2">
+                            {{ chip("写作经验", "slate") }}
+                            <span class="text-xs text-slate-400">沉淀正文结构、表达方式和平台语气。</span>
+                          </div>
+                          <label class="block text-xs text-slate-500">判断
+                            <input type="text" name="writing_title" value="{{ exp.writing.title }}" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">
+                          </label>
+                          <label class="block text-xs text-slate-500 mt-2">总结
+                            <textarea name="writing_summary" rows="2" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.writing.summary }}</textarea>
+                          </label>
+                          <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+                            <label class="block text-xs text-slate-500">正向经验
+                              <textarea name="writing_positive_notes" rows="3" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.writing.positive_notes }}</textarea>
+                            </label>
+                            <label class="block text-xs text-slate-500">反向风险
+                              <textarea name="writing_negative_notes" rows="3" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.writing.negative_notes }}</textarea>
+                            </label>
+                          </div>
+                          <label class="block text-xs text-slate-500 mt-2">给③写作引擎的复用指令
+                            <textarea name="writing_action_advice" rows="3" class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm">{{ exp.writing.action_advice }}</textarea>
+                          </label>
+                        </section>
+                        {% else %}
+                        <div class="rounded-lg border border-dashed border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-700">这篇文章还缺写作经验，点击“生成缺失经验”生成。</div>
+                        {% endif %}
+
+                        {% if request.state.level >= 1 and exp.topic and exp.writing %}
+                        <div class="flex justify-end">
+                          <button class="px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700">保存综合分析</button>
+                        </div>
+                        {% endif %}
+                      </form>
+                      {% else %}
+                        <div class="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-center text-sm text-slate-400">
+                          这篇文章还没有综合分析。点击生成后会同时得到选题经验和写作经验。
+                        </div>
+                      {% endif %}
+                    </div>
+                  </div>
+                </details>
+              </div>
+
+              {% if request.state.level >= 1 and row_status == "待总结" %}
+              <form method="post" action="/feedback/experiences/from-slot" class="shrink-0">
+                <input type="hidden" name="slot_id" value="{{ slot.id }}">
+                <input type="hidden" name="scope" value="campaign">
+                <input type="hidden" name="platform" value="{{ slot.platform or '通用' }}">
+                <input type="hidden" name="return_to" value="/feedback?status=已总结{% if selected_campaign != 'all' %}&campaign_id={{ selected_campaign }}{% endif %}">
+                <button data-loading-text="经验生成中"
+                        class="w-full lg:w-auto px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700">
+                  {{ "生成缺失经验" if has_partial_experience else "生成经验" }}
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        {{ empty_state("这个筛选下暂无可复盘文章。") }}
+      {% endif %}
+    </section>
+  {% endif %}
+  <script>
+    document.addEventListener("submit", function (event) {
+      var form = event.target;
+      var submitter = event.submitter;
+      if (!submitter || !submitter.dataset.loadingText) return;
+      submitter.disabled = true;
+      submitter.textContent = submitter.dataset.loadingText;
+      submitter.classList.add("opacity-70", "pointer-events-none");
+      form.querySelectorAll("button[type='submit'], button:not([type])").forEach(function (button) {
+        if (button.dataset.loadingText) button.disabled = true;
+      });
+    });
+  </script>
+{% endblock %}

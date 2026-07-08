@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, table_open, table_close, text_input, textarea, select_input, notice, file_input %}
+{% from "components/ui.html" import page_header, card_open, card_close, chip, button, empty_state, table_open, table_close, text_input, textarea, notice, file_input %}
 {% block content %}
   {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
   {{ page_header("①知识库", "全局数据池", crumbs=[("首页","/"), ("数据池", "")]) }}
@@ -8,13 +8,34 @@
     资料包（①上传）+ 经验包（⑤复盘沉淀）。②选题库读这里做推荐参考。
   </p>
 
-  {{ card_open("数据池条目") }}
-    {% if topics %}
-    {{ table_open(["标题", "类型", "触网", "来源", "品牌", "时间"]) }}
-      {% for t in topics %}
+  {{ card_open("经验包") }}
+    {% if campaign_packs %}
+    <div class="space-y-3">
+      {% for pack in campaign_packs %}
+      <details class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <summary class="cursor-pointer select-none">
+          <span class="font-semibold text-sm text-slate-700">{{ pack.label }}</span>
+          <span class="ml-2">{{ chip("经验包", "brand") }}</span>
+          <span>{{ chip(pack.article_count ~ "篇文章", "slate") }}</span>
+        </summary>
+        <div class="mt-3 rounded-lg border border-slate-100 bg-white px-3 py-3">
+          <div class="text-xs text-slate-400 mb-2">新建 campaign 时可以继承这个经验包；被引用后会进入②选题库和③写作引擎的经验参考。</div>
+          <pre class="whitespace-pre-wrap text-xs leading-5 text-slate-600 max-h-72 overflow-auto">{{ pack.pool_topic.content }}</pre>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% else %}
+      {{ empty_state("还没有 campaign 经验包。先在⑤数据反馈里为已发布文章生成综合分析。") }}
+    {% endif %}
+  {{ card_close() }}
+
+  {{ card_open("资料包") }}
+    {% if material_topics %}
+    {{ table_open(["标题", "触网", "来源", "品牌", "时间"]) }}
+      {% for t in material_topics %}
       <tr class="border-b border-slate-50">
         <td class="py-2">{{ t.title }}{% if t.file_path %} <a href="/pool/{{ t.id }}/download" class="text-brand-600 hover:text-brand-700 text-xs ml-1">📎 下载</a>{% set ext = t.file_path.lower().rsplit('.', 1)[-1] if '.' in t.file_path else '' %}{% if ext == 'pdf' and can_edit %} <form method="post" action="/pool/{{ t.id }}/deep-read" class="inline ml-2"><label class="text-xs {{ 'text-brand-600' if t.deep_read else 'text-slate-400' }} cursor-pointer"><input type="checkbox" onchange="this.form.submit()" {{ 'checked' if t.deep_read else '' }}> 深度读图</label></form>{% elif ext in ['png','jpg','jpeg','webp','gif'] %} <span class="text-emerald-600 text-xs ml-2">🖼 自动读图</span>{% endif %}{% endif %}</td>
-        <td>{{ chip(t.kind, "brand" if t.kind == "经验包" else "slate") }}</td>
         <td>{{ chip("触网", "emerald") if t.web_access else chip("不触网", "amber") }}</td>
         <td class="text-slate-500">{{ t.source }}</td>
         <td class="text-slate-500">{{ t.brand_tag or "通用" }}</td>
@@ -23,7 +44,7 @@
       {% endfor %}
     {{ table_close() }}
     {% else %}
-    {{ empty_state("数据池还是空的，添加一个资料包开始。") }}
+    {{ empty_state("还没有资料包，添加一个资料开始。") }}
     {% endif %}
   {{ card_close() }}
 
@@ -31,8 +52,8 @@
   {{ card_open("新增资料包") }}
     <form method="post" action="/pool" enctype="multipart/form-data" class="space-y-3">
       {{ text_input("title", placeholder="标题", required=True, extra="w-full") }}
+      <input type="hidden" name="kind" value="资料包">
       <div class="flex flex-wrap items-center gap-3 text-sm">
-        {{ select_input("kind", ["资料包", "经验包"]) }}
         <label class="flex items-center gap-2 text-slate-600">
           {# checkbox 语义：勾选→提交 "true"→True；不勾→不提交→路由 Form(False) 兜底为 False #}
           <input type="checkbox" name="web_access" value="true" checked> 触网

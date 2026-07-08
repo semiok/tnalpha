@@ -45,7 +45,7 @@ def parse_candidates(text: str) -> list[TopicCandidate]:
     return out
 
 
-_HIT_SUMMARY_MAX = 240   # 每条热点摘要上限：google/sonar 会返回数百字综合长答案，截断防撑爆 prompt
+_HIT_SUMMARY_MAX = 240   # 每条热点摘要上限：google 会返回数百字综合长答案，截断防撑爆 prompt
 
 
 def _format_hits(hits: list[dict]) -> str:
@@ -94,9 +94,10 @@ def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int,
             f"【本次活动·选题简报】\n{kc.campaign_digest}\n"
             "→ 这是高时效活动选题：**优先采纳/细化简报里③选题方向**（已标受众·时效），"
             "配④关键素材，按②时效节点定发布时机。\n")
-    if kc.pool_experiences:   # 经验包：调打法优先级
-        parts.append("【过往经验·打法参考】\n" + "\n---\n".join(kc.pool_experiences)
-                     + "\n→ 优先做已验证有效的，规避曾失效的。\n")
+    if kc.pool_experiences:   # ①知识库里当前 campaign 已关联的经验包
+        parts.append("【知识库关联经验包】\n" + "\n---\n".join(kc.pool_experiences)
+                     + "\n→ 这些经验来自①知识库里当前范围已关联的经验包。优先做已验证有效的，"
+                     "规避曾失效的；不要机械复刻旧标题，要迁移打法。\n")
     if rejection_experiences:
         formatted = _format_rejection_experiences(rejection_experiences)
         if formatted:
@@ -137,15 +138,17 @@ def _default_query(session: Session, brand_id: int, campaign_id: int | None) -> 
 
 def generate_topics(session: Session, brand_id: int, campaign_id: int | None = None,
                     count: int = 5, sources_used: list[str] | None = None,
-                    hot_query: str = "", use_rejection_experience: bool = False) -> list[Topic]:
+                    hot_query: str = "", use_rejection_experience: bool = True,
+                    use_publish_experience: bool = False) -> list[Topic]:
     """读知识库(KnowledgeContext) → [可选]联网搜热点 → 生成 → parse → 落 Topic。
 
     sources_used: 勾选的搜索源 name 列表（core/sources）；空=不联网。
     hot_query: 热点搜索关键词；空则用 品牌名(+活动名) 兜底。
     """
     kc = KnowledgeContext.load(session, brand_id, campaign_id)
-    _log.info("[topic] 生成候选 brand=%s campaign=%s count=%s 勾选搜索源=%s 关键词=%r 参考回收站经验=%s",
-              brand_id, campaign_id, count, sources_used or [], hot_query or "", use_rejection_experience)
+    _log.info("[topic] 生成候选 brand=%s campaign=%s count=%s 勾选搜索源=%s 关键词=%r 参考回收站经验=%s 知识库经验包=%s",
+              brand_id, campaign_id, count, sources_used or [], hot_query or "",
+              use_rejection_experience, bool(kc.pool_experiences))
     hot_hits: list[dict] = []
     if sources_used:
         query = (hot_query or "").strip() or _default_query(session, brand_id, campaign_id)
@@ -157,7 +160,8 @@ def generate_topics(session: Session, brand_id: int, campaign_id: int | None = N
     rejection_experiences = []
     if use_rejection_experience:
         rejection_experiences = [t for t in existing if t.status == "回收站" and t.rejection_reason]
-    raw = llm.generate_text(_topics_prompt(kc, existing_titles, count, hot_hits, rejection_experiences),
+    raw = llm.generate_text(_topics_prompt(
+        kc, existing_titles, count, hot_hits, rejection_experiences),
                             task="topic_gen", module="topic")
     try:
         cands = parse_candidates(raw)[:count]
@@ -177,4 +181,69 @@ def generate_topics(session: Session, brand_id: int, campaign_id: int | None = N
     session.commit()
     for t in created:
         session.refresh(t)
+    return created
+
+
+def _manual_prompt(kc: KnowledgeContext, titles: list[str]) -> str:
+    return "\n".join([
+        "你是内容选题策划。用户已经手动指定了一组选题标题，请只补全选题信息。",
+        "标题必须逐字使用用户输入，不得改写、扩写、增删标点。",
+        f"【品牌调性·约束】\n{kc.brand_prompt or '（未填）'}",
+        f"【内容要求·约束】\n{kc.content_notes or '（未填）'}",
+        f"【品牌内容定义】\n{kc.doc_digest or '（暂无）'}",
+        f"【本次活动·选题简报】\n{kc.campaign_digest}" if kc.has_campaign else "【范围】品牌常青（不限活动）",
+        "【用户指定标题】\n" + "\n".join(f"{i + 1}. {title}" for i, title in enumerate(titles)),
+        "",
+        "请为每个标题补全字段，严格按以下格式输出；标题必须与上面完全一致：",
+        "标题：用户原题",
+        "纲要：100-200字，写什么、核心切入点、可用素材",
+        "受众：目标受众",
+        "时效：强 / 中 / 弱",
+        "素材：关联的具体素材，无则留空",
+        "配图：配图方向，无则留空",
+        "时机：建议发布时机，无则留空",
+    ])
+
+
+def create_manual_topics(session: Session, brand_id: int, campaign_id: int | None,
+                         titles: list[str]) -> list[Topic]:
+    """手动录入标题 → 补全字段 → 落库。标题以用户输入为准，模型输出不能改标题。"""
+    cleaned = []
+    seen = set()
+    for raw in titles:
+        title = " ".join((raw or "").split())
+        if not title or title in seen:
+            continue
+        cleaned.append(title)
+        seen.add(title)
+    if not cleaned:
+        raise ValueError("请至少填写一个选题标题")
+    kc = KnowledgeContext.load(session, brand_id, campaign_id)
+    parsed: list[TopicCandidate] = []
+    try:
+        raw = llm.generate_text(_manual_prompt(kc, cleaned), task="topic_manual", module="topic")
+        parsed = parse_candidates(raw)
+    except Exception as exc:
+        _log.warning("[topic] 手动选题补全失败，按空字段落库：%s", exc)
+    created: list[Topic] = []
+    for idx, title in enumerate(cleaned):
+        cand = parsed[idx] if idx < len(parsed) else TopicCandidate(title=title)
+        topic = Topic(
+            brand_id=brand_id,
+            campaign_id=campaign_id,
+            source="manual",
+            title=title,
+            outline=cand.outline,
+            audience=cand.audience,
+            content_type=cand.content_type,
+            timeliness=cand.timeliness,
+            materials=cand.materials,
+            image_hint=cand.image_hint,
+            publish_window=cand.publish_window,
+        )
+        session.add(topic)
+        created.append(topic)
+    session.commit()
+    for topic in created:
+        session.refresh(topic)
     return created

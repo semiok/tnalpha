@@ -15,6 +15,7 @@ def init_db() -> None:
     import app.modules.topic.models  # noqa: F401  注册 Topic 表
     import app.modules.writing.models  # noqa: F401  注册 Article/Style 表
     import app.modules.schedule.models  # noqa: F401  注册 ScheduleWeek/ScheduleSlot 表
+    import app.modules.feedback.models  # noqa: F401  注册 FeedbackExperience 表
     SQLModel.metadata.create_all(engine)
 
 

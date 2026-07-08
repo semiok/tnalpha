@@ -109,7 +109,7 @@ def test_generate_topics_count_and_source(fresh_db, monkeypatch):
 def _stub_generate(monkeypatch):
     """把路由用到的 generate_topics 换成直接落一条，绕开 LLM。"""
     def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query="",
-                 use_rejection_experience=False):
+                 use_rejection_experience=False, use_publish_experience=False):
         t = Topic(brand_id=brand_id, campaign_id=campaign_id, title="测试选题", outline="纲要")
         session.add(t); session.commit(); session.refresh(t)
         return [t]
@@ -242,18 +242,45 @@ def test_generate_route_passes_and_filters_sources(owner_client, fresh_db, monke
     captured = {}
 
     def fake_gen(session, brand_id, campaign_id=None, count=5, sources_used=None, hot_query="",
-                 use_rejection_experience=False):
+                 use_rejection_experience=False, **_kwargs):
         captured.update(sources_used=sources_used, hot_query=hot_query,
                         use_rejection_experience=use_rejection_experience)
         return []
 
     monkeypatch.setattr(troutes, "generate_topics", fake_gen)
     owner_client.post("/topics/generate", follow_redirects=False, data={
-        "campaign_id": "", "count": "3", "source": ["google", "bogus"], "hot_query": "敦煌",
-        "use_rejection_experience": "true"})
+        "campaign_id": "", "count": "3", "source": ["google", "bogus"], "hot_query": "敦煌"})
     assert captured["sources_used"] == ["google"]           # 非法源 bogus 被过滤
     assert captured["hot_query"] == "敦煌"
     assert captured["use_rejection_experience"] is True
+
+
+def test_manual_topics_keep_input_titles(owner_client, fresh_db, monkeypatch):
+    def fake(prompt, task="default", module="default", **k):
+        assert "用户已经手动指定" in prompt
+        return """标题：模型想改掉的题目
+纲要：模型补的纲要
+受众：亲子
+时效：中
+素材：习字简
+配图：简牍
+时机：周末"""
+
+    monkeypatch.setattr(gen.llm, "generate_text", fake)
+    with Session(fresh_db) as s:
+        bid, cid = _seed_brand(s, with_campaign=True)
+    r = owner_client.post(
+        "/topics/manual",
+        data={"campaign_id": str(cid), "title": ["在边塞练字的人：一枚习字简", "", "300尊佛，翻模300次"]},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        rows = s.exec(select(Topic).where(Topic.brand_id == bid).order_by(Topic.id)).all()
+        assert [t.title for t in rows] == ["在边塞练字的人：一枚习字简", "300尊佛，翻模300次"]
+        assert all(t.source == "manual" for t in rows)
+        assert all(t.campaign_id == cid for t in rows)
+        assert rows[0].outline == "模型补的纲要"
 
 
 def test_generate_route_shows_rate_limit_modal(owner_client, fresh_db, monkeypatch):
@@ -360,6 +387,9 @@ def test_topics_catalog_checkboxes_render(owner_client, fresh_db):
         _seed_brand(s)
     html = owner_client.get("/topics").text
     assert "Google 搜索" in html and "搜狗公众号" in html
-    assert "🔥 深度热点" in html and "小红书" in html                # 付费源+占位源也显示
-    assert "参考选题经验包" in html and "回收站" in html
-    assert 'name="use_rejection_experience" value="true"\n                 checked' in html
+    assert "weixin.sogou.com" in html
+    assert "🔥 深度热点" not in html and "小红书" in html
+    assert "手动上传选题" in html and "确认上传" in html
+    assert "不采纳原因默认作为选题经验参考" in html
+    assert "参考选题经验包" not in html and "参考发布经验包" not in html
+    assert 'name="use_rejection_experience"' not in html

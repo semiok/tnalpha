@@ -171,12 +171,13 @@ def test_pool_file_download(owner_client, fresh_db):
 
 def test_pool_add_and_list(owner_client):
     resp = owner_client.post("/pool",
-                             data={"title": "618复盘经验", "kind": "经验包",
-                                   "brand_tag": "敦煌", "content": "转化率要点"},
+                             data={"title": "竹简资料", "kind": "资料包",
+                                   "brand_tag": "敦煌", "content": "竹简图文资料"},
                              follow_redirects=False)
     assert resp.status_code == 303
     page = owner_client.get("/pool").text
-    assert "618复盘经验" in page and "经验包" in page
+    assert "资料包" in page
+    assert "竹简资料" in page
 
 
 # ── 权限：editor/publisher 越权写 → 403 ──
@@ -441,6 +442,129 @@ def test_campaign_parse_with_ref_generates_digest(owner_client, fresh_db):
     assert r.status_code == 200
     with Session(fresh_db) as s:
         assert "campaign_digest" in s.get(Campaign, cid).campaign_digest
+
+
+def test_campaign_experience_pack_shows_in_pool_and_can_be_inherited(owner_client, fresh_db, monkeypatch):
+    from datetime import datetime
+    from sqlmodel import Session, select
+    from app.modules.feedback.experience import create_experience_pair_from_slot
+    from app.modules.feedback.models import FeedbackExperience
+    from app.modules.knowledge.models import CampaignPoolRef, PoolTopic
+    from app.modules.schedule import schedule
+    from app.modules.schedule.models import ScheduleMetric
+    from app.modules.topic.contract import KnowledgeContext
+    from app.modules.topic.models import Topic
+    from app.modules.writing.models import Article
+
+    def fake_draft(session, slot_id, experience_type):
+        return {
+            "title": f"{experience_type}：物件切口有效",
+            "summary": "从发布数据沉淀 campaign 方法",
+            "positive_notes": "保留具体物件和现代场景",
+            "negative_notes": "避免只讲抽象历史",
+            "action_advice": "新 campaign 生成选题时优先复用这条经验",
+        }
+
+    monkeypatch.setattr("app.modules.feedback.experience.build_experience_draft", fake_draft)
+    brand_id = _create_brand(owner_client)
+    old_cid = _create_campaign(owner_client, brand_id, "丝路有多长")
+    with Session(fresh_db) as s:
+        topic = Topic(brand_id=brand_id, campaign_id=old_cid, title="习字简", status="采纳")
+        s.add(topic)
+        s.commit()
+        s.refresh(topic)
+        article = Article(topic_id=topic.id, campaign_id=old_cid, title="在边塞练字的人", body="正文", status="待审核")
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        week = schedule.add_week(s, brand_id)
+        slot = schedule.add_slot(s, week.id, article.id, week.week_start, "09:30")
+        slot = schedule.publish_slot(s, slot.id, "小红书", "https://example.com", datetime(2026, 7, 8, 9, 30))
+        s.add(ScheduleMetric(
+            slot_id=slot.id,
+            article_id=article.id,
+            topic_id=topic.id,
+            brand_id=brand_id,
+            campaign_id=old_cid,
+            xhs_like=100,
+            xhs_comment=10,
+            xhs_collect=20,
+        ))
+        s.commit()
+        create_experience_pair_from_slot(s, slot.id)
+        pack = s.exec(select(PoolTopic).where(PoolTopic.source_campaign_id == old_cid)).first()
+        assert pack is not None
+        assert pack.kind == "经验包"
+        assert "在边塞练字的人" in pack.content
+        assert "选题经验" in pack.content and "写作经验" in pack.content
+        pack_id = pack.id
+        assert len(s.exec(select(FeedbackExperience).where(FeedbackExperience.source_slot_id == slot.id)).all()) == 2
+
+    pool_page = owner_client.get("/pool")
+    assert pool_page.status_code == 200
+    assert "经验包" in pool_page.text
+    assert "丝路有多长" in pool_page.text
+    assert "2条经验" not in pool_page.text
+    home = owner_client.get("/")
+    assert "继承历史经验包" in home.text
+
+    created = owner_client.post(
+        "/campaigns",
+        data={"brand_id": brand_id, "name": "新活动", "experience_pack_id": [pack_id]},
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+    new_cid = int(created.headers["location"].rsplit("/", 1)[-1])
+    with Session(fresh_db) as s:
+        ref = s.exec(
+            select(CampaignPoolRef).where(
+                CampaignPoolRef.campaign_id == new_cid,
+                CampaignPoolRef.pool_topic_id == pack_id,
+            )
+        ).first()
+        assert ref is not None
+        ctx = KnowledgeContext.load(s, brand_id, new_cid)
+        assert any("新 campaign 生成选题时优先复用" in item for item in ctx.pool_experiences)
+
+
+def test_brand_evergreen_experience_pack_shows_in_pool(owner_client, fresh_db):
+    from sqlmodel import Session, select
+    from app.modules.feedback.models import FeedbackExperience
+    from app.modules.knowledge.models import PoolTopic
+
+    brand_id = _create_brand(owner_client)
+    with Session(fresh_db) as s:
+        s.add(FeedbackExperience(
+            brand_id=brand_id,
+            campaign_id=None,
+            platform="通用",
+            experience_type="选题经验",
+            title="品牌常青切口",
+            summary="品牌常青也要沉淀复盘经验",
+            action_advice="品牌常青生成选题时复用",
+            performance_level="中表现",
+        ))
+        s.add(FeedbackExperience(
+            brand_id=brand_id,
+            campaign_id=None,
+            platform="通用",
+            experience_type="写作经验",
+            title="品牌常青写法",
+            summary="正文也要延续品牌常青经验",
+            action_advice="品牌常青写作时复用",
+            performance_level="中表现",
+        ))
+        s.commit()
+
+    page = owner_client.get("/pool")
+    assert page.status_code == 200
+    assert "品牌常青" in page.text
+    assert "1篇文章" in page.text
+    with Session(fresh_db) as s:
+        pack = s.exec(select(PoolTopic).where(PoolTopic.title == "经验包｜品牌常青")).first()
+        assert pack is not None
+        assert pack.source_campaign_id is None
+        assert "品牌常青生成选题时复用" in pack.content
 
 
 # ── 新写路由权限：editor 越权 → 403 ──
