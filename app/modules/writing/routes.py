@@ -677,6 +677,10 @@ def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
                 for slot_idx, (_, slot_desc) in enumerate(slots):
                     if missing_only:
                         cur_count = existing_count.get(slot_idx, 0)
+                        # 手动上传 slot（用户已上传图）不补 AI 候选
+                        slot_imgs = [im for im in existing if im.slot_index == slot_idx]
+                        if slot_imgs and all(im.prompt == "手动上传" for im in slot_imgs):
+                            continue
                         if cur_count >= 4:
                             continue  # 该 slot 已满 4 张，跳过
                         need = 4 - cur_count
@@ -815,8 +819,12 @@ def _article_list_item_fragment(request: Request, article: Article, topic: Topic
 
 
 def _article_detail_fragment(request: Request, article: Article, topic: Topic,
-                              campaigns: list[Campaign], session: Session):
-    """返回文章详情内容片段（详情页轮询用）：辩论过程 / 选图 / 最终文章。"""
+                              campaigns: list[Campaign], session: Session,
+                              force_editing: bool = False):
+    """返回文章详情内容片段（详情页轮询用）：辩论过程 / 选图 / 最终文章。
+
+    force_editing=True 时片段以编辑模式初始渲染（用于 edit-body/insert-image 后保持编辑状态）。
+    """
     cmap = {c.id: c.name for c in campaigns}
     ctx = {
         "request": request,
@@ -832,6 +840,7 @@ def _article_detail_fragment(request: Request, article: Article, topic: Topic,
         "has_missing_slots": False,
         "article_body_clean": "",
         "body_segments": [],
+        "force_editing": force_editing,
     }
     # 待配图 / 待审核：装载全部候选图（供换选/重生）+ 图文混排切片
     if article.status in ("待配图", "待审核"):
@@ -908,6 +917,7 @@ def article_detail(article_id: int, request: Request, session: Session = Depends
         "has_pending_images": False,
         "article_body_clean": "",
         "body_segments": [],
+        "force_editing": False,
     }
     if article.status in ("待配图", "待审核"):
         images = session.exec(
@@ -1153,7 +1163,10 @@ def select_slot_image(article_id: int, slot_index: int, request: Request,
 def upload_slot_image(article_id: int, slot_index: int, request: Request,
                       file: UploadFile = File(...),
                       session: Session = Depends(get_session)):
-    """手动上传某个插图位置的图片，并立即设为该组当前选中图。"""
+    """手动上传某个插图位置的图片，并立即设为该组当前选中图。
+
+    若该 slot 当前是"待选择"占位，上传后把正文标记改为"手动上传"。
+    """
     auth.require_level(request, 1)
     article = session.get(Article, article_id)
     if article is None:
@@ -1173,12 +1186,34 @@ def upload_slot_image(article_id: int, slot_index: int, request: Request,
     session.add(image)
     session.commit()
     session.refresh(image)
+    # 用户上传 = 该位置最终用图：清除该 slot 所有其他图（AI 候选 + 旧上传），只留这一张
+    old_imgs = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article_id,
+            ArticleImage.slot_index == slot_index,
+            ArticleImage.id != image.id,
+        )
+    ).all()
+    for old in old_imgs:
+        session.delete(old)
+    session.commit()
+    # 若该 slot 原是"待选择"占位，把正文标记改为"手动上传"
+    if slot_desc == "待选择":
+        import re as _re
+        pattern = _re.compile(r'\[插图(?:位|位置)?[：:]待选择\]')
+        matches = list(pattern.finditer(article.body))
+        if 0 <= slot_index < len(matches):
+            m = matches[slot_index]
+            article.body = article.body[:m.start()] + "[插图：手动上传]" + article.body[m.end():]
+            article.updated_at = _now()
+            session.add(article)
+            session.commit()
+            session.refresh(article)
     _select_slot_image(session, article, image)
-    _prune_slot_images(session, article_id, slot_index, keep_id=image.id, max_count=4)
     topic = session.get(Topic, article.topic_id)
     campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
     if request.headers.get("HX-Request") == "true":
-        return _article_detail_fragment(request, article, topic, campaigns, session)
+        return _article_detail_fragment(request, article, topic, campaigns, session, force_editing=True)
     return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
 
 
@@ -1263,6 +1298,196 @@ def restore_article(article_id: int, request: Request, session: Session = Depend
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
         return _article_list_item_fragment(request, article, topic, campaigns)
     return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+def _reindex_slots_by_body(session: Session, article: Article) -> None:
+    """按当前 article.body 中的 [插图：...] 标记顺序，重排所有 ArticleImage.slot_index。
+
+    用于正文编辑后插入/删除标记导致 slot 顺序变化时，把已存候选图重新对齐到新位置。
+    规则：
+      - 按 body 中标记顺序分配新 slot_index 0,1,2...
+      - 用 slot_desc 匹配 body 标记内容，找到则映射到新 index（同 desc 多 slot 按 slot_index 升序取）
+      - body 中已无标记对应的旧 slot（用户删了标记）→ 删除该 slot 所有候选图
+    """
+    import re
+    body_slots = re.findall(r'\[插图(?:位|位置)?[：:](.+?)\]', article.body or "")
+    all_imgs = session.exec(
+        select(ArticleImage).where(ArticleImage.article_id == article.id)
+        .order_by(ArticleImage.slot_index, ArticleImage.id)
+    ).all()
+    by_slot: dict[int, list[ArticleImage]] = {}
+    for img in all_imgs:
+        by_slot.setdefault(img.slot_index, []).append(img)
+    # 按 slot_desc 建立旧 slot 索引（desc → 升序的 old_slot_idx 列表）
+    desc_to_slots: dict[str, list[int]] = {}
+    for old_idx in sorted(by_slot.keys()):
+        desc = by_slot[old_idx][0].slot_desc or ""
+        desc_to_slots.setdefault(desc, []).append(old_idx)
+    used_old: set[int] = set()
+    # body 标记顺序 → 新 slot_index，用 desc 匹配旧 slot
+    for new_idx, desc in enumerate(body_slots):
+        for old_idx in desc_to_slots.get(desc, []):
+            if old_idx not in used_old:
+                used_old.add(old_idx)
+                for img in by_slot[old_idx]:
+                    if img.slot_index != new_idx:
+                        img.slot_index = new_idx
+                        session.add(img)
+                break
+    # 未匹配到 body 标记的旧 slot（标记被删）→ 删除候选图
+    for old_idx in by_slot:
+        if old_idx not in used_old:
+            for img in by_slot[old_idx]:
+                session.delete(img)
+    session.commit()
+
+
+@router.post("/writing/articles/{article_id}/edit-body")
+def edit_article_body(article_id: int, request: Request,
+                      body: str = Form(...), title: str = Form(""),
+                      session: Session = Depends(get_session)):
+    """待审核下就地编辑正文（含 [插图：...] 标记）和标题。
+
+    保存后重排 slot_index（正文标记顺序可能变了）。
+    """
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "待审核":
+        raise HTTPException(400, "只有待审核状态可以编辑正文")
+    new_body = (body or "").strip()
+    if not new_body:
+        raise HTTPException(400, "正文不能为空")
+    article.body = new_body
+    new_title = (title or "").strip()
+    if new_title:
+        article.title = new_title[:200]
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
+    session.refresh(article)
+    # 正文标记顺序可能变了 → 重排 slot_index
+    _reindex_slots_by_body(session, article)
+    if request.headers.get("HX-Request") == "true":
+        topic = session.get(Topic, article.topic_id)
+        campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+        # 保存后退出编辑模式（force_editing=False），让页面回到非编辑状态
+        return _article_detail_fragment(request, article, topic, campaigns, session, force_editing=False)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+@router.post("/writing/articles/{article_id}/insert-placeholder")
+async def insert_placeholder(article_id: int, request: Request,
+                             anchor_text: str = Form(""),
+                             insert_position: int = Form(-1),
+                             body: str = Form(""),
+                             title: str = Form(""),
+                             session: Session = Depends(get_session)):
+    """插入图片占位符标记 [插图：待选择]（不传文件）。
+
+    定位方式（优先级）：
+      1. insert_position >= 0：用字符偏移量在光标位置拆分段落插入
+      2. anchor_text：在 body 中 rfind 该文本，在其末尾插入（段落模式）
+    """
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "待审核":
+        raise HTTPException(400, "只有待审核状态可以插入图片占位")
+
+    # 先保存前端编辑的正文（用户可能改了文字还没保存）
+    edited_body = (body or "").strip()
+    if edited_body:
+        article.body = edited_body
+    edited_title = (title or "").strip()
+    if edited_title:
+        article.title = edited_title[:200]
+
+    # 定位插入点
+    if insert_position >= 0:
+        insert_pos = min(insert_position, len(article.body))
+    else:
+        insert_pos = _find_text_segment_end(article.body, anchor_text)
+
+    new_marker = f"\n[插图：待选择]\n"
+    article.body = article.body[:insert_pos] + new_marker + article.body[insert_pos:]
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
+    session.refresh(article)
+
+    # 重排 slot_index（新标记改变了顺序）
+    _reindex_slots_by_body(session, article)
+
+    if request.headers.get("HX-Request") == "true":
+        topic = session.get(Topic, article.topic_id)
+        campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+        return _article_detail_fragment(request, article, topic, campaigns, session, force_editing=True)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+@router.post("/writing/articles/{article_id}/slots/{slot_index}/delete")
+def delete_slot(article_id: int, slot_index: int, request: Request,
+                session: Session = Depends(get_session)):
+    """删除某个插图位置：移除正文中的 [插图：...] 标记 + 删除该 slot 所有候选图。"""
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "待审核":
+        raise HTTPException(400, "只有待审核状态可以删除插图位置")
+
+    # 删除该 slot 的所有候选图
+    imgs = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article_id,
+            ArticleImage.slot_index == slot_index,
+        )
+    ).all()
+    for img in imgs:
+        session.delete(img)
+
+    # 从正文中移除对应标记（按 slot_index 顺序找第 N 个标记）
+    import re
+    pattern = re.compile(r'\n?\[插图(?:位|位置)?[：:].+?\]\n?')
+    matches = list(pattern.finditer(article.body))
+    if 0 <= slot_index < len(matches):
+        m = matches[slot_index]
+        article.body = article.body[:m.start()] + article.body[m.end():]
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
+    session.refresh(article)
+
+    # 重排剩余 slot_index
+    _reindex_slots_by_body(session, article)
+
+    if request.headers.get("HX-Request") == "true":
+        topic = session.get(Topic, article.topic_id)
+        campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+        return _article_detail_fragment(request, article, topic, campaigns, session, force_editing=True)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+def _find_text_segment_end(body: str, text: str) -> int:
+    """在 body 中定位某个 text 段的结束字符位置（用于占位标记插入点）。
+
+    text 是 _split_body_by_slots 切出的纯净文本（已 strip）。
+    找 text 在 body 中最后一次出现的位置的末尾；找不到则追加到 body 末尾。
+    """
+    if not text:
+        return len(body)
+    pos = body.rfind(text)
+    if pos < 0:
+        # 文本可能被 strip 过，尝试找首行
+        first_line = text.splitlines()[0].strip() if text.splitlines() else text
+        pos = body.rfind(first_line)
+        if pos < 0:
+            return len(body)
+        return pos + len(first_line)
+    return pos + len(text)
 
 
 _PLATFORM_STYLE = {
@@ -1504,6 +1729,7 @@ def _has_pending_image_candidates(body: str, slots: dict[int, list[ArticleImage]
     """是否还有 slot 未生成满 4 张候选图，用于待配图页面继续轮询。
 
     slots 全空 → 自配图模式（用户不上传），不需要轮询。
+    手动上传的 slot（所有图都是 prompt='手动上传'）→ 用户自选，不需要补 4 张候选，跳过。
     """
     expected = _expected_slot_indexes(body)
     if not expected and slots:
@@ -1512,7 +1738,16 @@ def _has_pending_image_candidates(body: str, slots: dict[int, list[ArticleImage]
         return True
     if all(len(slots.get(idx, [])) == 0 for idx in expected):
         return False
-    return any(len(slots.get(idx, [])) < 4 for idx in expected)
+    for idx in expected:
+        imgs = slots.get(idx, [])
+        if not imgs:
+            return True  # expected 但无图 → AI 还没生成
+        # 手动上传的 slot 不需要补候选
+        if all(im.prompt == "手动上传" for im in imgs):
+            continue
+        if len(imgs) < 4:
+            return True
+    return False
 
 
 def _all_slots_selected(body: str, images: list[ArticleImage]) -> bool:

@@ -680,8 +680,8 @@ def test_parse_image_slots_accepts_marker_variants():
     assert "结尾" in stripped
 
 
-def test_upload_slot_image_selects_uploaded_and_keeps_four(owner_client, fresh_db):
-    """手动上传图片后立即成为该 slot 选中图，并且该位置最多保留 4 张展示图。"""
+def test_upload_slot_image_replaces_ai_candidates(owner_client, fresh_db):
+    """手动上传图片 = 该位置最终用图：清除所有 AI 候选，只留这一张上传图。"""
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
         article = Article(
@@ -697,7 +697,7 @@ def test_upload_slot_image_selects_uploaded_and_keeps_four(owner_client, fresh_d
         for i in range(4):
             s.add(ArticleImage(
                 article_id=article.id,
-                prompt="old",
+                prompt="old-ai",
                 image_url=f"https://img.example/old-{i}.png",
                 slot_index=0,
                 slot_desc="位置一",
@@ -713,13 +713,16 @@ def test_upload_slot_image_selects_uploaded_and_keeps_four(owner_client, fresh_d
     )
     assert r.status_code == 200
     assert "manual.png" not in r.text  # 文件名已随机化
+    # 上传后保持编辑状态（force_editing=True）
+    assert "editing: true" in r.text
     with Session(fresh_db) as s:
         images = s.exec(
             select(ArticleImage).where(ArticleImage.article_id == aid, ArticleImage.slot_index == 0)
             .order_by(ArticleImage.id)
         ).all()
         selected = [img for img in images if img.is_selected]
-        assert len(images) == 4
+        # 只留上传图，AI 候选全删
+        assert len(images) == 1
         assert len(selected) == 1
         assert selected[0].prompt == "手动上传"
         assert selected[0].image_url.startswith("/writing/uploads/writing/articles/")
@@ -932,3 +935,384 @@ def test_generate_htmx_returns_topic_card_and_oob_generating_card(owner_client, 
     # OOB 追加右侧列表项
     assert 'hx-swap-oob="beforeend:#article-list"' in r.text
     assert "article-row-" in r.text
+
+
+# ── 待审核下编辑正文 + 自定义插图位置 测试 ──
+
+def test_edit_body_updates_article_and_keeps_markers(owner_client, fresh_db):
+    """待审核下保存编辑后的正文，[插图：...] 标记保留，slot_index 重排正确。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id,
+            title="原标题",
+            body="第一段\n[插图：位置一]\n第二段\n[插图：位置二]",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        # 两 slot 各 1 张候选图
+        for idx in (0, 1):
+            s.add(ArticleImage(
+                article_id=article.id, prompt=f"p{idx}",
+                image_url=f"https://img.example/{idx}.png",
+                slot_index=idx, slot_desc=f"位置{'一二'[idx]}",
+                is_selected=True,
+            ))
+        s.commit()
+        aid = article.id
+
+    new_body = "改过的第一段\n[插图：位置一]\n改过的第二段\n[插图：位置二]"
+    r = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={"body": new_body, "title": "新标题"},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.body == new_body
+        assert a.title == "新标题"
+        # slot_index 仍为 0,1（标记顺序未变）
+        imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.slot_index)).all()
+        assert [im.slot_index for im in imgs] == [0, 1]
+
+
+def test_edit_body_reindexes_slots_when_marker_order_changes(owner_client, fresh_db):
+    """编辑正文导致标记顺序变化时，已存候选图 slot_index 重排对齐新顺序。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="正文A\n[插图：位置一]\n正文B\n[插图：位置二]",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        s.add(ArticleImage(article_id=article.id, prompt="p1", image_url="https://img.example/1.png",
+                           slot_index=0, slot_desc="位置一", is_selected=True))
+        s.add(ArticleImage(article_id=article.id, prompt="p2", image_url="https://img.example/2.png",
+                           slot_index=1, slot_desc="位置二", is_selected=False))
+        s.commit()
+        aid = article.id
+
+    # 删掉第一个标记，只剩第二个 → 原 slot_index=1 应重排为 0
+    new_body = "正文A正文B\n[插图：位置二]"
+    r = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={"body": new_body},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.id)).all()
+        assert len(imgs) == 1
+        assert imgs[0].slot_index == 0
+        assert imgs[0].slot_desc == "位置二"
+
+
+def test_edit_body_rejects_empty_body(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(topic_id=topic.id, campaign_id=campaign.id, title="T", body="原正文", status="待审核")
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+    r = owner_client.post(f"/writing/articles/{aid}/edit-body", data={"body": "  "})
+    assert r.status_code == 400
+
+
+def test_edit_body_rejects_when_status_not_editable(owner_client, fresh_db):
+    """只有待审核可以编辑正文，其他状态（含待配图）都拒绝。"""
+    for status in ("已发布", "待配图", "写作中", "已排期"):
+        with Session(fresh_db) as s:
+            _brand, campaign, topic = _seed_topic(s)
+            article = Article(topic_id=topic.id, campaign_id=campaign.id, title="T", body="原正文", status=status)
+            s.add(article); s.commit(); s.refresh(article)
+            aid = article.id
+        r = owner_client.post(f"/writing/articles/{aid}/edit-body", data={"body": "新正文"})
+        assert r.status_code == 400, f"状态 {status} 应拒绝编辑"
+
+
+def test_insert_placeholder_at_cursor_position(owner_client, fresh_db):
+    """光标位置插入占位：insert_position 指定字符偏移量，在正文中间拆分段落插入。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段正文\n\n第二段正文",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+
+    # insert_position=3 → 在"第一段"之后（偏移量 3 = "段"字后的位置）插入
+    r = owner_client.post(
+        f"/writing/articles/{aid}/insert-placeholder",
+        data={"insert_position": "3", "anchor_text": ""},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert "[插图：待选择]" in a.body
+        # 标记在"第一段"之后，"正文"之前（光标位置拆分段落）
+        assert a.body.index("第一段") < a.body.index("[插图：待选择]")
+        assert a.body.index("[插图：待选择]") < a.body.index("正文")
+        # 第二段在标记后
+        assert a.body.index("[插图：待选择]") < a.body.index("第二段正文")
+
+
+def test_insert_placeholder_at_paragraph_end(owner_client, fresh_db):
+    """无光标位置时，用 anchor_text 在段落后插入占位符。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段正文\n\n第二段正文",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+
+    r = owner_client.post(
+        f"/writing/articles/{aid}/insert-placeholder",
+        data={"anchor_text": "第一段正文"},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    assert "editing: true" in r.text
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert "[插图：待选择]" in a.body
+        assert a.body.index("第一段正文") < a.body.index("[插图：待选择]")
+        assert a.body.index("[插图：待选择]") < a.body.index("第二段正文")
+        imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(imgs) == 0
+
+
+def test_insert_placeholder_preserves_edited_body(owner_client, fresh_db):
+    """编辑模式下用户改了正文但没点保存就插占位：提交的 body 必须被保存。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="原标题",
+            body="旧的第一段\n\n旧的第二段",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+
+    edited_body = "用户改过的第一段\n\n用户改过的第二段"
+    r = owner_client.post(
+        f"/writing/articles/{aid}/insert-placeholder",
+        data={
+            "anchor_text": "用户改过的第一段",
+            "body": edited_body,
+            "title": "用户改过的标题",
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert "用户改过的第一段" in a.body
+        assert "用户改过的第二段" in a.body
+        assert "旧的第一段" not in a.body
+        assert a.title == "用户改过的标题"
+        assert "[插图：待选择]" in a.body
+
+
+def test_upload_to_placeholder_updates_marker_and_creates_image(owner_client, fresh_db):
+    """占位符选图后：标记从"待选择"改为"手动上传"，新建选中候选图。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段\n[插图：待选择]\n第二段",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+
+    r = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/upload",
+        files={"file": ("up.png", io.BytesIO(b"img"), "image/png")},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    assert "editing: true" in r.text
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        # 标记从"待选择"改为"手动上传"
+        assert "[插图：手动上传]" in a.body
+        assert "[插图：待选择]" not in a.body
+        imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(imgs) == 1
+        assert imgs[0].prompt == "手动上传"
+        assert imgs[0].is_selected is True
+        assert imgs[0].slot_desc == "待选择"  # slot_desc 保持原值
+        assert a.image_url == imgs[0].image_url
+
+
+def test_insert_placeholder_between_existing_slots_reindexes(owner_client, fresh_db):
+    """已有 2 个 AI slot，在第一段后插占位 → 新占位成为 slot 0，原 slot 顺移。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段\n[插图：位置一]\n第二段\n[插图：位置二]",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        for slot_idx, desc in ((0, "位置一"), (1, "位置二")):
+            s.add(ArticleImage(article_id=article.id, prompt=f"ai{desc}",
+                               image_url=f"https://img.example/ai{desc}.png",
+                               slot_index=slot_idx, slot_desc=desc, is_selected=True))
+        s.commit()
+        aid = article.id
+
+    r = owner_client.post(
+        f"/writing/articles/{aid}/insert-placeholder",
+        data={"anchor_text": "第一段"},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        # body 中标记顺序：待选择 在前，位置一、位置二在后
+        assert a.body.index("[插图：待选择]") < a.body.index("[插图：位置一]")
+        imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.slot_index, ArticleImage.id)).all()
+        # slot 0 = 原"位置一"（被重排），slot 1 = 原"位置二"
+        # 占位符无候选图，不影响已有图的 slot_index 重排
+        assert imgs[0].slot_index == 1 and imgs[0].slot_desc == "位置一"
+        assert imgs[1].slot_index == 2 and imgs[1].slot_desc == "位置二"
+
+
+def test_delete_slot_removes_marker_and_images(owner_client, fresh_db):
+    """删除插图位置：移除正文标记 + 删除该 slot 所有候选图 + 重排剩余 slot。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段\n[插图：位置一]\n第二段\n[插图：位置二]\n第三段",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        for slot_idx, desc in ((0, "位置一"), (1, "位置二")):
+            s.add(ArticleImage(article_id=article.id, prompt=f"ai{desc}",
+                               image_url=f"https://img.example/ai{desc}.png",
+                               slot_index=slot_idx, slot_desc=desc, is_selected=True))
+        s.commit()
+        aid = article.id
+
+    # 删除 slot 0（位置一）
+    r = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/delete",
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        # 标记被移除
+        assert "[插图：位置一]" not in a.body
+        assert "[插图：位置二]" in a.body
+        # 剩余图重排：原 slot 1 → slot 0
+        imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.slot_index)).all()
+        assert len(imgs) == 1
+        assert imgs[0].slot_index == 0
+        assert imgs[0].slot_desc == "位置二"
+
+
+def test_edit_body_preserves_manual_upload_selected(owner_client, fresh_db):
+    """编辑正文保存后，手动上传 slot 的 is_selected 保持不变（不丢选中状态）。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段\n[插图：手动上传]\n第二段",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        s.add(ArticleImage(article_id=article.id, prompt="手动上传",
+                           image_url="https://img.example/up.png",
+                           slot_index=0, slot_desc="手动上传", is_selected=True))
+        s.commit()
+        aid = article.id
+
+    # 编辑正文（标记不变，只改文字）
+    new_body = "改过的第一段\n[插图：手动上传]\n改过的第二段"
+    r = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={"body": new_body},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    # 保存后退出编辑模式
+    assert "editing: false" in r.text
+    with Session(fresh_db) as s:
+        imgs = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(imgs) == 1
+        assert imgs[0].prompt == "手动上传"
+        assert imgs[0].is_selected is True  # 选中状态保持
+        assert imgs[0].slot_index == 0
+
+
+def test_detail_page_shows_edit_button_when_pending_review(owner_client, fresh_db):
+    """待审核状态详情页渲染编辑正文按钮 + 段落间插图按钮。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段\n[插图：位置一]\n第二段",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        s.add(ArticleImage(article_id=article.id, prompt="ai", image_url="https://img.example/ai.png",
+                           slot_index=0, slot_desc="位置一", is_selected=True))
+        s.commit()
+        aid = article.id
+
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "编辑正文" in html
+    assert "/edit-body" in html
+    assert "/insert-placeholder" in html
+    assert "图片占位" in html
+    assert 'data-seg' in html
+
+
+def test_detail_page_manual_upload_slot_shows_single_image(owner_client, fresh_db):
+    """手动上传 slot 详情页只显示单图，不显示候选网格/重生按钮/张数。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="第一段\n[插图：手动上传]\n第二段",
+            status="待审核",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        s.add(ArticleImage(article_id=article.id, prompt="手动上传",
+                           image_url="https://img.example/up.png",
+                           slot_index=0, slot_desc="手动上传", is_selected=True))
+        s.commit()
+        aid = article.id
+
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "用户上传" in html          # 标签
+    assert "重新上传" in html          # 按钮文案
+    assert "🔄 重生本位置" not in html  # 无重生按钮（带 emoji 区分提示文案）
+    assert "/4 张" not in html        # 无候选张数
+
+
+def test_detail_page_no_edit_button_when_published(owner_client, fresh_db):
+    """已发布状态不显示编辑入口。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="T",
+            body="正文", status="已发布", image_url="https://img.example/a.png",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "编辑正文" not in html
+    # 按钮文案只在待审核 + level>=1 时渲染
+    assert "图片占位" not in html
+    assert "点击选择图片" not in html

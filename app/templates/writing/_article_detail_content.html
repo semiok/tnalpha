@@ -4,23 +4,65 @@
 
 <div id="detail-content"
      class="space-y-4"
-     x-data="{lightboxSrc: null}"
-     {% if (article.status in ("辩论中", "写作中", "重写中", "待配图") or (article.status == "待审核" and has_pending_images)) and not article.error_message %}
-     hx-get="/writing/articles/{{ article.id }}/detail-status"
-     hx-trigger="every 2s"
-     hx-target="this"
-     hx-swap="outerHTML"
-     {% endif %}>
+     x-data="{
+       lightboxSrc: null,
+       editing: {{ 'true' if force_editing else 'false' }},
+       articleId: {{ article.id }},
+       shouldPoll: {{ 'true' if (not force_editing and article.status in ('辩论中', '写作中', '重写中', '待配图') and not article.error_message) else 'false' }},
+       pollTimer: null,
+       savedRange: null,
+       saveSelection() { const sel = window.getSelection(); if (sel.rangeCount > 0) { const r = sel.getRangeAt(0); if (this.$refs.bodyArea && this.$refs.bodyArea.contains(r.commonAncestorContainer)) { this.savedRange = r.cloneRange(); } } },
+       currentRange() { const sel = window.getSelection(); if (sel.rangeCount > 0) { const r = sel.getRangeAt(0); if (this.$refs.bodyArea && this.$refs.bodyArea.contains(r.commonAncestorContainer)) return r; } return this.savedRange; },
+       segText(s) { const r = document.createRange(); r.selectNodeContents(s); return r.toString().trim(); },
+       bodyOffsetOfCursor() { const r = this.currentRange(); if (!r) return -1; const segs = [...this.$refs.bodyArea.querySelectorAll('[data-seg]')]; let off = 0; for (const s of segs) { const t = s.dataset.type; const txt = t === 'text' ? this.segText(s) : '[插图：' + s.dataset.desc + ']'; if (t === 'text' && !txt) continue; if (s.contains(r.startContainer) || r.startContainer === s) { let intra = 0; if (t === 'text') { const p = document.createRange(); p.selectNodeContents(s); try { p.setEnd(r.startContainer, r.startOffset); } catch(e) { p.setEnd(s, 0); } const raw = p.toString(); intra = Math.max(0, Math.min(raw.length, txt.length)); } else { intra = txt.length; } return off + intra; } off += txt.length + 2; } return -1; },
+       collectBody() { const segs = this.$refs.bodyArea.querySelectorAll('[data-seg]'); let parts = []; segs.forEach(el => { const t = el.dataset.type; if (t === 'text') { const txt = this.segText(el); if (txt) parts.push(txt); } else if (t === 'slot') { parts.push('[插图：' + el.dataset.desc + ']'); } }); return parts.join('\n\n'); },
+       replaceFragment(html) { const tmp = document.createElement('div'); tmp.innerHTML = html.trim(); const newEl = tmp.firstElementChild; if (!newEl) { alert('返回内容异常'); return; } document.getElementById('detail-content').replaceWith(newEl); },
+       saveBody() { const body = this.collectBody(); const title = this.$refs.titleArea ? this.$refs.titleArea.innerText.trim() : ''; const fd = new FormData(); fd.append('body', body); fd.append('title', title); fetch('/writing/articles/' + this.articleId + '/edit-body', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('保存失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('保存失败：' + e.message); }); },
+       insertPlaceholder(anchorText) { const pos = this.bodyOffsetOfCursor(); const fd = new FormData(); if (pos >= 0) { fd.append('insert_position', String(pos)); } else { fd.append('anchor_text', anchorText); } fd.append('body', this.collectBody()); fd.append('title', this.$refs.titleArea ? this.$refs.titleArea.innerText.trim() : ''); fetch('/writing/articles/' + this.articleId + '/insert-placeholder', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('插入占位失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('插入占位失败：' + e.message); }); },
+       deleteSlot(slotIndex) { if (!confirm('删除此插图位置？')) return; const fd = new FormData(); fetch('/writing/articles/' + this.articleId + '/slots/' + slotIndex + '/delete', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('删除失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('删除失败：' + e.message); }); },
+       uploadToSlot(slotIndex) { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { if (!input.files[0]) return; const fd = new FormData(); fd.append('file', input.files[0]); fetch('/writing/articles/' + this.articleId + '/slots/' + slotIndex + '/upload', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('上传失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('上传失败：' + e.message); }); }; input.click(); },
+       exitEditing() { this.editing = false; htmx.ajax('GET', '/writing/articles/' + this.articleId + '/detail-status', {target: '#detail-content', swap: 'outerHTML'}); },
+       startPolling() {
+         if (!this.shouldPoll) return;
+         this.pollTimer = setInterval(() => {
+           if (this.editing) return;
+           if (!document.body.contains(this.$el)) { clearInterval(this.pollTimer); return; }
+           htmx.ajax('GET', '/writing/articles/' + this.articleId + '/detail-status', {target: '#detail-content', swap: 'outerHTML'});
+         }, 2000);
+       }
+     }"
+     x-init="startPolling()"
+     x-effect="if (editing && pollTimer) { clearInterval(pollTimer); pollTimer = null; } else if (!editing && shouldPoll && !pollTimer) { startPolling(); }">
   {# 顶部标题栏 #}
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div class="min-w-0 flex-1">
-      <h1 class="text-lg font-semibold text-slate-800">{{ article.title }}</h1>
+      <h1 x-ref="titleArea"
+          class="text-lg font-semibold text-slate-800 outline-none rounded {{ 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' if false else '' }}"
+          {% if article.status == "待审核" and level >= 1 %}
+          :contenteditable="editing"
+          :class="editing ? 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' : ''"
+          {% endif %}>{{ article.title }}</h1>
       <div class="mt-0.5 text-xs text-slate-400">
         {{ campaign_name }} · 来源选题：{{ topic.title }}
       </div>
     </div>
     <div class="flex items-center gap-2 shrink-0">
       {{ chip(article.status, "rose" if article.status == "已删除" else ("amber" if article.status in ("辩论中", "写作中", "重写中", "待配图") else "emerald")) }}
+      {% if article.status == "待审核" and level >= 1 %}
+        {# 编辑正文 / 保存 / 取消 #}
+        <button type="button" x-show="!editing" @click="editing = true"
+                class="px-2 py-0.5 rounded text-xs font-medium border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 hover:text-brand-600 transition">
+          ✏️ 编辑正文
+        </button>
+        <button type="button" x-show="editing" x-cloak @click="saveBody()"
+                class="px-2 py-0.5 rounded text-xs font-medium border border-emerald-400 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition">
+          💾 保存
+        </button>
+        <button type="button" x-show="editing" x-cloak @click="exitEditing()"
+                class="px-2 py-0.5 rounded text-xs font-medium border border-slate-300 text-slate-500 bg-white hover:bg-slate-50 transition">
+          取消
+        </button>
+      {% endif %}
       {% if article.status != "已删除" and level >= 1 %}
         <form method="post" action="/writing/articles/{{ article.id }}/delete"
               onsubmit="return confirm('删除文章「{{ article.title }}」？');" class="inline">
@@ -52,7 +94,7 @@
     {% endif %}
   </div>
 
-  {% if article.error_message %}
+  {% if article.error_message and article.status in ("辩论中", "写作中", "重写中", "待配图") %}
     <div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ article.error_message }}</div>
   {% endif %}
 
@@ -121,43 +163,117 @@
 
     {# 图文混排正文：按段落切分，遇到插图位置就嵌入候选图组 #}
     <div class="space-y-3">
-      <div class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-4">
+      {% if article.status == "待审核" and level >= 1 %}
+      {# 编辑模式提示 #}
+      <div x-show="editing" x-cloak class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+        💡 编辑模式下可点击段落后的「＋ 图片占位」插入图片位置，然后点击占位符选择图片。也可直接编辑正文把 <code class="bg-amber-100 px-1 rounded">[插图：待选择]</code> 标记移到段落中间。
+      </div>
+      {% endif %}
+      <div x-ref="bodyArea" @focusout="saveSelection()" class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-4">
+        {% set ns = namespace(text_idx=0) %}
         {% for seg in body_segments %}
           {% if seg.type == "text" %}
-            <div class="whitespace-pre-wrap text-sm leading-7 text-slate-700">{{ seg.text }}</div>
+            {# text 段按空行切成子段落，每个子段落独立可编辑 + 后跟插图按钮 #}
+            {% for para in seg.text.split("\n\n") %}
+              {% set para = para.strip() %}
+              {% if para %}
+            <div data-seg data-type="text"
+                 class="whitespace-pre-wrap text-sm leading-7 text-slate-700 outline-none rounded"
+                 {% if article.status == "待审核" and level >= 1 %}
+                 :contenteditable="editing"
+                 :class="editing ? 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' : ''"
+                 {% endif %}>{{ para }}</div>
+            {# 编辑模式下：段落后「＋ 图片占位」按钮 #}
+            {% if article.status == "待审核" and level >= 1 %}
+            <div x-show="editing" x-cloak class="-mt-1 mb-1">
+              <button type="button" data-anchor="{{ para }}" @mousedown.prevent="saveSelection()" @click="insertPlaceholder($el.dataset.anchor)"
+                      class="inline-flex items-center gap-1 text-xs text-amber-500 hover:text-brand-600 transition py-0.5">
+                ＋ 图片占位
+              </button>
+            </div>
+            {% endif %}
+              {% endif %}
+            {% endfor %}
           {% elif seg.type == "slot" %}
+            {% set slot_imgs = slots.get(seg.slot_index, []) %}
+            {% set is_placeholder = seg.desc == "待选择" and (slot_imgs | length) == 0 %}
+            {% if is_placeholder %}
+            {# 占位符：可点击选图 + 可删除（编辑模式下 data-seg 用于收集） #}
+            <div data-seg data-type="slot" data-desc="{{ seg.desc }}"
+                 class="my-2 rounded-lg border-2 border-dashed border-amber-300 bg-amber-50/50 p-4 text-center">
+              <button type="button" @click="uploadToSlot({{ seg.slot_index }})"
+                      class="inline-flex flex-col items-center gap-1 text-amber-600 hover:text-brand-600 transition">
+                <span class="text-2xl">📷</span>
+                <span class="text-sm font-medium">点击选择图片</span>
+                <span class="text-xs text-slate-400">插图位置 {{ seg.slot_index + 1 }}</span>
+              </button>
+              {% if article.status == "待审核" and level >= 1 %}
+              <div x-show="editing" x-cloak class="mt-2">
+                <button type="button" @click="deleteSlot({{ seg.slot_index }})"
+                        class="text-xs text-rose-500 hover:text-rose-700 transition">
+                  × 删除占位
+                </button>
+              </div>
+              {% endif %}
+            </div>
+            {% else %}
+            {# 编辑模式：只显示标记占位（用于保存时收集） #}
+            <div x-show="editing" x-cloak
+                 data-seg data-type="slot" data-desc="{{ seg.desc }}"
+                 class="my-2 px-3 py-2 rounded border border-dashed border-amber-300 bg-amber-50/50 text-xs text-amber-700 text-center">
+              📷 [插图：{{ seg.desc }}]（编辑模式下图片位置不可拖动，保存后可在该位置换选/上传）
+              <button type="button" @click="deleteSlot({{ seg.slot_index }})"
+                      class="ml-2 text-rose-500 hover:text-rose-700 transition">
+                × 删除
+              </button>
+            </div>
+            {# 非编辑模式：原来的候选图渲染 #}
+            <div x-show="!editing" x-cloak>
             {% set imgs = slots.get(seg.slot_index, []) %}
-            {% set ns = namespace(selected=None) %}
+            {% set is_manual = (imgs | length) > 0 and (imgs | rejectattr('prompt', 'equalto', '手动上传') | list | length) == 0 %}
+            {% set sel_ns = namespace(selected=None) %}
             {% for img in imgs %}
-              {% if img.is_selected and ns.selected is none %}
-                {% set ns.selected = img %}
+              {% if img.is_selected and sel_ns.selected is none %}
+                {% set sel_ns.selected = img %}
               {% endif %}
             {% endfor %}
             {% set slot_key = 'slot_view_' ~ article.id ~ '_' ~ seg.slot_index %}
             <div class="my-3 rounded-lg border border-slate-100 bg-slate-50/60 p-3"
                  x-data="{
-                   showGrid: (localStorage.getItem('{{ slot_key }}') === 'grid') || (localStorage.getItem('{{ slot_key }}') === null && {{ 'true' if not ns.selected else 'false' }}),
-                   selectedSrc: '{{ ns.selected.image_url if ns.selected else '' }}',
+                   showGrid: (localStorage.getItem('{{ slot_key }}') === 'grid') || (localStorage.getItem('{{ slot_key }}') === null && {{ 'true' if not sel_ns.selected else 'false' }}),
+                   selectedSrc: '{{ sel_ns.selected.image_url if sel_ns.selected else '' }}',
                    saveView(v) { localStorage.setItem('{{ slot_key }}', v ? 'grid' : 'single'); }
                  }"
                  x-init="$watch('showGrid', v => saveView(v))">
               <div class="flex items-center gap-2 mb-2 flex-wrap">
                 <span class="text-xs font-medium text-slate-500">📷 插图位置 {{ seg.slot_index + 1 }}</span>
                 <span class="text-xs text-slate-400 flex-1 min-w-0 truncate">{{ seg.desc }}</span>
-                <span class="text-xs text-slate-400">{{ imgs | length }}/4 张{{ ' 生成中…' if has_pending_images and (imgs | length) < 4 else '' }}</span>
-                {% if level >= 1 %}
-                  <button type="button"
-                          hx-post="/writing/articles/{{ article.id }}/slots/{{ seg.slot_index }}/regenerate"
-                          hx-target="#detail-content"
-                          hx-swap="outerHTML"
-                          hx-confirm="重新生成插图位置 {{ seg.slot_index + 1 }} 的候选图？现有候选图会被替换。"
-                          class="px-2 py-0.5 rounded text-xs font-medium border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 hover:text-brand-600 transition">
-                    🔄 重生本位置
-                  </button>
+                {% if is_manual %}
+                  <span class="text-xs text-emerald-600 font-medium">🖼 用户上传</span>
+                {% else %}
+                  <span class="text-xs text-slate-400">{{ imgs | length }}/4 张{{ ' 生成中…' if has_pending_images and (imgs | length) < 4 else '' }}</span>
+                  {% if level >= 1 %}
+                    <button type="button"
+                            hx-post="/writing/articles/{{ article.id }}/slots/{{ seg.slot_index }}/regenerate"
+                            hx-target="#detail-content"
+                            hx-swap="outerHTML"
+                            hx-confirm="重新生成插图位置 {{ seg.slot_index + 1 }} 的候选图？现有候选图会被替换。"
+                            class="px-2 py-0.5 rounded text-xs font-medium border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 hover:text-brand-600 transition">
+                      🔄 重生本位置
+                    </button>
+                  {% endif %}
                 {% endif %}
               </div>
               {% if imgs %}
-                {# 单图展示：已选图时只显示这一张，右上角返回按钮可重新选图 #}
+                {% if is_manual %}
+                  {# 手动上传：只显示这一张最终图，无网格/切换 #}
+                  <div class="relative">
+                    <img src="{{ (sel_ns.selected or imgs[0]).image_url }}" alt=""
+                         @dblclick.prevent.stop="lightboxSrc = '{{ (sel_ns.selected or imgs[0]).image_url }}'"
+                         class="w-full max-h-[520px] rounded-md object-contain cursor-zoom-in">
+                  </div>
+                {% else %}
+                {# AI 候选：单图/网格切换 #}
                 <div x-show="!showGrid" x-cloak class="relative">
                   <img :src="selectedSrc" alt=""
                        @dblclick.prevent.stop="lightboxSrc = selectedSrc"
@@ -204,6 +320,7 @@
                     {% endfor %}
                   {% endif %}
                 </div>
+                {% endif %}
               {% else %}
                 {# 一张都还没生成：显示 4 个占位符 #}
                 {% if has_pending_images %}
@@ -239,11 +356,13 @@
                          class="block text-xs text-slate-500 file:mr-2 file:rounded file:border-0 file:bg-white file:px-2 file:py-1 file:text-xs file:font-medium file:text-slate-600">
                   <button type="submit"
                           class="px-2 py-1 rounded text-xs font-medium border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 hover:text-brand-600 transition">
-                    上传替换本位置
+                    {{ '🔄 重新上传' if is_manual else '上传替换本位置' }}
                   </button>
                 </form>
               {% endif %}
             </div>
+            </div>
+            {% endif %}{# is_placeholder #}
           {% endif %}
         {% endfor %}
       </div>
