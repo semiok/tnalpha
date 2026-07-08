@@ -33,6 +33,30 @@ _THINK_TAGS = [
 _CONTENT_MARKERS = ["标题：", "# ", "正文：", "名称：", "作为"]
 
 
+def knowledge_context_block(ctx: KnowledgeContext, writing_experience: str = "") -> str:
+    """写作链路共用的知识/经验上下文块。
+
+    ②的活动简报负责方向，资料包负责事实细节，经验包负责结构/钩子/风险规避。
+    """
+    pool_materials = "；".join(ctx.pool_materials) if ctx.pool_materials else "（无）"
+    pool_experiences = "；".join(ctx.pool_experiences) if ctx.pool_experiences else "（无）"
+    return f"""【知识库上下文】
+1. 品牌约束（怎么写）
+- 品牌调性：{ctx.brand_prompt or "（未设置）"}
+- 内容要求：{ctx.content_notes or "（未设置）"}
+- 品牌资料综合：{ctx.doc_digest or "（无）"}
+
+2. 活动内容（写什么 / 什么时候 / 用什么素材）
+- 活动简报：{ctx.campaign_digest or "（品牌常青）"}
+
+3. 资料包（事实细节 / 可引用素材）
+{pool_materials}
+
+4. 经验包（结构 / 钩子 / 取舍 / 风险规避）
+- 知识库经验：{pool_experiences}
+- 发布后写作经验包：{writing_experience or "（本次未引用）"}"""
+
+
 def clean_llm_output(text: str) -> str:
     """剥离模型思考段 + 代码围栏。routes.py 也复用此函数。"""
     t = (text or "").strip()
@@ -72,7 +96,8 @@ def _format_debate_history(records: list[DebateRecord], phase: str, up_to_round:
 
 
 def _debate_prompt(role_key: str, role_name: str, role_stance: str,
-                   topic: Topic, ctx: KnowledgeContext, history: str) -> str:
+                   topic: Topic, ctx: KnowledgeContext, history: str,
+                   writing_experience: str = "") -> str:
     return f"""{role_stance}
 
 【选题】标题：{topic.title}
@@ -81,8 +106,7 @@ def _debate_prompt(role_key: str, role_name: str, role_stance: str,
 受众：{topic.audience}
 素材：{topic.materials}
 
-【品牌调性】{ctx.brand_prompt or "（未设置）"}
-【活动简报】{ctx.campaign_digest or "（品牌常青）"}
+{knowledge_context_block(ctx, writing_experience)}
 
 【前序辩论记录】
 {history}
@@ -92,7 +116,8 @@ def _debate_prompt(role_key: str, role_name: str, role_stance: str,
 
 
 def run_debate(session: Session, article_id: int, rounds: int,
-               topic: Topic, ctx: KnowledgeContext) -> str:
+               topic: Topic, ctx: KnowledgeContext,
+               writing_experience: str = "") -> str:
     """执行 N 轮辩论，每轮 4 角色依次发言，返回综合写作简报。
 
     所有发言逐条落库（用户可查看）。
@@ -105,7 +130,7 @@ def run_debate(session: Session, article_id: int, rounds: int,
         ).all()) if rnd > 1 else []
         history = _format_debate_history(records, "debate", rnd)
         for role_key, role_name, role_stance in ROLES:
-            prompt = _debate_prompt(role_key, role_name, role_stance, topic, ctx, history)
+            prompt = _debate_prompt(role_key, role_name, role_stance, topic, ctx, history, writing_experience)
             try:
                 content = clean_llm_output(llm.generate_text(
                     prompt, task="debate", module="writing", fallback=False))
@@ -130,10 +155,11 @@ def run_debate(session: Session, article_id: int, rounds: int,
             DebateRecord.article_id == article_id, DebateRecord.phase == "debate"
         ).order_by(DebateRecord.round_num, DebateRecord.id)
     ).all()
-    return _synthesize_debate(all_records, topic, ctx)
+    return _synthesize_debate(all_records, topic, ctx, writing_experience)
 
 
-def _synthesize_debate(records: list[DebateRecord], topic: Topic, ctx: KnowledgeContext) -> str:
+def _synthesize_debate(records: list[DebateRecord], topic: Topic, ctx: KnowledgeContext,
+                       writing_experience: str = "") -> str:
     """综合辩论记录 → 写作简报。"""
     history = "\n".join(
         f"第{r.round_num}轮 {dict((k, v) for k, v, _ in ROLES).get(r.role, r.role)}：{r.content}"
@@ -142,7 +168,7 @@ def _synthesize_debate(records: list[DebateRecord], topic: Topic, ctx: Knowledge
     prompt = f"""你是写作总监。基于以下多角色辩论记录，综合出一份写作简报。
 
 【选题】{topic.title}
-【品牌调性】{ctx.brand_prompt or "（未设置）"}
+{knowledge_context_block(ctx, writing_experience)}
 
 【辩论记录】
 {history}
@@ -239,7 +265,8 @@ def _synthesize_review(records: list[DebateRecord], article: Article) -> str:
 
 
 def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
-                   ctx: KnowledgeContext, style_text: str) -> str:
+                   ctx: KnowledgeContext, style_text: str,
+                   writing_experience: str = "") -> str:
     """按评审建议重写文章的 prompt。"""
     return f"""你是主笔。请基于评审综合建议，重写这篇文章。
 
@@ -247,9 +274,7 @@ def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
 纲要：{topic.outline}
 受众：{topic.audience}
 
-【品牌调性】{ctx.brand_prompt or "（未设置）"}
-【内容要求】{ctx.content_notes or "（未设置）"}
-【活动简报】{ctx.campaign_digest or "（品牌常青）"}
+{knowledge_context_block(ctx, writing_experience)}
 
 【写作风格】{style_text}
 

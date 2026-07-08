@@ -18,7 +18,7 @@ from app.modules.feedback.experience import experience_pack_text
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
-from app.modules.writing.debate import clean_llm_output, rewrite_prompt, run_debate, run_review
+from app.modules.writing.debate import clean_llm_output, knowledge_context_block, rewrite_prompt, run_debate, run_review
 from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, _now
 
 router = APIRouter()
@@ -564,7 +564,7 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
 
             # ── 辩论阶段 ──
             if debate_rounds > 0:
-                brief = run_debate(s, article_id, debate_rounds, topic, ctx)
+                brief = run_debate(s, article_id, debate_rounds, topic, ctx, writing_experience)
                 article.debate_brief = brief
                 article.updated_at = _now()
                 s.add(article)
@@ -600,7 +600,7 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
                 s.add(article)
                 s.commit()
                 # 按评审建议重写
-                rewrite_p = rewrite_prompt(article, review_summary, topic, ctx, style_text)
+                rewrite_p = rewrite_prompt(article, review_summary, topic, ctx, style_text, writing_experience)
                 new_body = llm.generate_text(rewrite_p, task="writing_rewrite", module="writing", fallback=False)
                 new_body = clean_llm_output(new_body)
                 if new_body:
@@ -1572,16 +1572,7 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 时效：{topic.timeliness}
 发布时间：{topic.publish_window}
 
-【知识库】
-品牌调性：{ctx.brand_prompt}
-内容要求：{ctx.content_notes}
-品牌资料综合：{ctx.doc_digest}
-活动简报：{ctx.campaign_digest}
-数据池资料：{"；".join(ctx.pool_materials)}
-经验包：{"；".join(ctx.pool_experiences)}
-
-【发布后写作经验包】
-{writing_experience or "（本次未引用）"}
+{knowledge_context_block(ctx, writing_experience)}
 
 【写作风格】
 {style_text}
@@ -1618,16 +1609,7 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 时效：{topic.timeliness}
 发布时间：{topic.publish_window}
 
-【知识库】
-品牌调性：{ctx.brand_prompt}
-内容要求：{ctx.content_notes}
-品牌资料综合：{ctx.doc_digest}
-活动简报：{ctx.campaign_digest}
-数据池资料：{"；".join(ctx.pool_materials)}
-经验包：{"；".join(ctx.pool_experiences)}
-
-【发布后写作经验包】
-{writing_experience or "（本次未引用）"}
+{knowledge_context_block(ctx, writing_experience)}
 
 【写作风格】
 {style_text}

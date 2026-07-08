@@ -367,6 +367,47 @@ def test_generate_with_review_rewrites_article(owner_client, fresh_db, monkeypat
         assert len(review_records) == 4  # 1 轮 × 4 角色
 
 
+def test_writing_experience_flows_into_debate_article_and_rewrite(owner_client, fresh_db, monkeypatch):
+    """写作经验包应贯穿辩论、正文生成和评审后重写。"""
+    _patch_threading(monkeypatch)
+    experience = "高表现经验：开头先抛强问题，结尾留下可评论的问题。"
+    prompts: dict[str, list[str]] = {}
+
+    monkeypatch.setattr(wroutes, "experience_pack_text", lambda *a, **k: experience)
+
+    def fake_text(prompt, task="default", module="default", **k):
+        prompts.setdefault(task, []).append(prompt)
+        if task == "debate":
+            return "辩论发言：应放大强问题。"
+        if task == "debate_brief":
+            return "写作简报：用问题开场。"
+        if task == "review":
+            return "评审意见：结尾互动不足。"
+        if task == "review_summary":
+            return "评审摘要：补强结尾互动。"
+        if task == "writing_rewrite":
+            return "标题：重写标题\n\n正文：重写正文。\n[插图：手动上传]"
+        return "标题：初稿标题\n\n正文：初稿正文。\n[插图：手动上传]"
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    with Session(fresh_db) as s:
+        _brand, _campaign, topic = _seed_topic(s)
+        tid = topic.id
+
+    r = owner_client.post(
+        f"/writing/topics/{tid}/generate",
+        data={"debate_rounds": "1", "review_rounds": "1", "use_experience": "true"},
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    assert experience in prompts["debate"][0]
+    assert experience in prompts["debate_brief"][0]
+    assert experience in prompts["writing_article"][0]
+    assert experience in prompts["writing_rewrite"][0]
+    assert "【知识库上下文】" in prompts["writing_article"][0]
+
+
 def test_generate_with_debate_and_review_full_flow(owner_client, fresh_db, monkeypatch):
     """辩论 1 轮 + 评审 1 轮 → 完整流程。"""
     _patch_threading(monkeypatch)
