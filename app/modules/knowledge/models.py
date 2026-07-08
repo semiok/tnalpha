@@ -84,6 +84,7 @@ class PoolTopic(SQLModel, table=True):
     kind: str                        # '资料包' | '经验包'
     web_access: bool = True          # 触网 / 不触网
     source: str = "upload"           # 'upload' | 'feedback'(来自⑤) | 'shared'
+    source_campaign_id: int | None = Field(default=None, foreign_key="campaign.id", index=True)
     brand_tag: str | None = None     # 来源品牌 tag（可空 = 通用）
     content: str = ""                # 解析结果 / 经验摘要（上传文件时=抽出的正文）
     file_path: str = ""              # 上传原文件路径（可空；追加列，②⑤ 只读 content 不受影响）

@@ -55,6 +55,14 @@ def _wait_for_article(fresh_db, article_id, timeout=5):
         return s.get(Article, article_id)
 
 
+def test_public_image_url_normalizes_local_data_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(wroutes.config, "DATA_DIR", str(tmp_path))
+    local = tmp_path / "images" / "generated.png"
+
+    assert wroutes._public_image_url(str(local)) == "/writing/uploads/images/generated.png"
+    assert wroutes._public_image_url("https://img.example/generated.png") == "https://img.example/generated.png"
+
+
 # ── seed 数据 ──
 
 def _seed_topic(session: Session, status: str = "采纳") -> tuple[Brand, Campaign, Topic]:

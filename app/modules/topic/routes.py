@@ -16,7 +16,7 @@ from app.core import auth, sources
 from app.core.db import get_session
 from app.core.llm.errors import ModelRateLimited
 from app.modules.knowledge.models import Brand, Campaign
-from app.modules.topic.generate import generate_topics
+from app.modules.topic.generate import create_manual_topics, generate_topics
 from app.modules.topic.models import TOPIC_STATUSES, Topic
 
 router = APIRouter()
@@ -133,7 +133,6 @@ def topics_home(request: Request, status: str = "", scope: str = "all",
 @router.post("/topics/generate")
 def generate(request: Request, campaign_id: str = Form(""), count: int = Form(5),
              source: list[str] = Form([]), hot_query: str = Form(""),
-             use_rejection_experience: bool = Form(False),
              session: Session = Depends(get_session)):
     """生成候选选题。campaign_id 空=品牌常青；source=勾选的搜索源；hot_query=热点关键词。"""
     auth.require_level(request, 1)
@@ -145,7 +144,7 @@ def generate(request: Request, campaign_id: str = Form(""), count: int = Form(5)
     try:
         generate_topics(session, brand.id, cid, count=min(max(count, 1), 10),
                         sources_used=valid, hot_query=hot_query,
-                        use_rejection_experience=use_rejection_experience)
+                        use_rejection_experience=True)
     except ModelRateLimited:
         target_scope = "brand" if cid is None else f"campaign:{cid}"
         params = urlencode({"status": "候选", "scope": target_scope, "modal_error": "当前模型已限流"})
@@ -155,6 +154,25 @@ def generate(request: Request, campaign_id: str = Form(""), count: int = Form(5)
         params = urlencode({"status": "候选", "scope": target_scope, "error": f"生成失败：{exc}"})
         return RedirectResponse(f"/topics?{params}", status_code=303)
     target_scope = "brand" if cid is None else f"campaign:{cid}"
+    return RedirectResponse(_topic_url("候选", target_scope), status_code=303)
+
+
+@router.post("/topics/manual")
+def manual_topics(request: Request, campaign_id: str = Form(""),
+                  title: list[str] = Form([]),
+                  session: Session = Depends(get_session)):
+    """手动上传选题标题；标题原样保留，AI 只补全纲要/受众等字段。"""
+    auth.require_level(request, 1)
+    brand = _brand_or_404(session)
+    cid = int(campaign_id) if campaign_id.strip() else None
+    if cid is not None and session.get(Campaign, cid) is None:
+        raise HTTPException(404, "活动不存在")
+    target_scope = "brand" if cid is None else f"campaign:{cid}"
+    try:
+        create_manual_topics(session, brand.id, cid, title)
+    except ValueError as exc:
+        params = urlencode({"status": "候选", "scope": target_scope, "error": f"手动上传失败：{exc}"})
+        return RedirectResponse(f"/topics?{params}", status_code=303)
     return RedirectResponse(_topic_url("候选", target_scope), status_code=303)
 
 

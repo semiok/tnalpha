@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from app.core import auth, config, db, llm, sources, storage
 from app.core.db import get_session
+from app.modules.feedback.experience import experience_pack_text
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
@@ -438,7 +439,7 @@ def extract_style(campaign_id: int, request: Request, url: str = Form(...),
 def generate_article(topic_id: int, request: Request,
                       debate_rounds: int = Form(2), review_rounds: int = Form(2),
                       platform: str = Form(""), word_count: int = Form(0),
-                      ai_images: str = Form(""),
+                      ai_images: str = Form(""), use_experience: str = Form(""),
                       session: Session = Depends(get_session)):
     """生成图文（异步后台）：辩论 → 生成文本 → 多插图候选 → 评审 → 重写 → 待审核。
 
@@ -457,6 +458,7 @@ def generate_article(topic_id: int, request: Request,
     wc = max(0, min(word_count, 10000))
     # checkbox 勾选才发送 ai_images=true，未勾选时字段缺失（Form("") 兜底）→ False
     ai_images_flag = ai_images.strip().lower() in ("true", "1", "yes", "on")
+    use_experience_flag = use_experience.strip().lower() in ("true", "1", "yes", "on")
     article = session.exec(
         _active_article_query().where(Article.topic_id == topic.id).order_by(Article.updated_at.desc())
     ).first()
@@ -512,7 +514,7 @@ def generate_article(topic_id: int, request: Request,
     # 后台线程跑完整流程
     t = threading.Thread(
         target=_run_generation_worker,
-        args=(article.id, topic.id, dr, rr, pf, wc, ai_images_flag),
+        args=(article.id, topic.id, dr, rr, pf, wc, ai_images_flag, use_experience_flag),
         daemon=True,
     )
     t.start()
@@ -538,7 +540,8 @@ def generate_article(topic_id: int, request: Request,
 
 
 def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, review_rounds: int,
-                           platform: str = "", word_count: int = 0, ai_images: bool = True) -> None:
+                           platform: str = "", word_count: int = 0, ai_images: bool = True,
+                           use_experience: bool = False) -> None:
     """后台线程：辩论 → 生成文本 → 评审 → 重写 → 待配图（提交正文，可阅读）。
 
     文本完成后立即把状态置为「待配图」并启动配图子线程，不阻塞用户阅读正文。
@@ -554,6 +557,10 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
             ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
             style = _default_style(s, topic.campaign_id)
             style_text = style.summary if style else "无默认风格，使用品牌内容要求。"
+            writing_experience = (
+                experience_pack_text(s, topic.brand_id, topic.campaign_id, "写作经验", platform)
+                if use_experience else ""
+            )
 
             # ── 辩论阶段 ──
             if debate_rounds > 0:
@@ -562,9 +569,10 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
                 article.updated_at = _now()
                 s.add(article)
                 s.commit()
-                prompt = _article_prompt_with_brief(topic, ctx, style, brief, platform, word_count)
+                prompt = _article_prompt_with_brief(
+                    topic, ctx, style, brief, platform, word_count, writing_experience)
             else:
-                prompt = _article_prompt(topic, ctx, style, platform, word_count)
+                prompt = _article_prompt(topic, ctx, style, platform, word_count, writing_experience)
 
             # ── 生成文本 ──
             article.status = "写作中"
@@ -694,7 +702,7 @@ def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
                         else:
                             is_sel = (candidate_idx == 0)
                         s.add(ArticleImage(
-                            article_id=article_id, prompt=img_p, image_url=url,
+                            article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
                             slot_index=slot_idx, slot_desc=slot_desc,
                             is_selected=is_sel,
                         ))
@@ -767,7 +775,7 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
                 for candidate_idx, url in enumerate(urls):
                     # 默认选中第 0 张：AI 给默认选择，用户不换 = 默认认可
                     s.add(ArticleImage(
-                        article_id=article_id, prompt=img_p, image_url=url,
+                        article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
                         slot_index=slot_index, slot_desc=slot_desc,
                         is_selected=(candidate_idx == 0),
                     ))
@@ -1322,7 +1330,8 @@ def _image_slot_directive(platform: str) -> str:
 
 
 def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
-                    platform: str = "", word_count: int = 0) -> str:
+                    platform: str = "", word_count: int = 0,
+                    writing_experience: str = "") -> str:
     style_text = _resolve_style_text(style, platform)
     platform_dir = _platform_directive(platform, word_count)
     img_slot_dir = _image_slot_directive(platform)
@@ -1346,6 +1355,9 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 数据池资料：{"；".join(ctx.pool_materials)}
 经验包：{"；".join(ctx.pool_experiences)}
 
+【发布后写作经验包】
+{writing_experience or "（本次未引用）"}
+
 【写作风格】
 {style_text}
 
@@ -1363,7 +1375,8 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 
 
 def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style | None,
-                               brief: str, platform: str = "", word_count: int = 0) -> str:
+                               brief: str, platform: str = "", word_count: int = 0,
+                               writing_experience: str = "") -> str:
     """带辩论简报的文章生成 prompt。"""
     style_text = _resolve_style_text(style, platform)
     platform_dir = _platform_directive(platform, word_count)
@@ -1387,6 +1400,9 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 活动简报：{ctx.campaign_digest}
 数据池资料：{"；".join(ctx.pool_materials)}
 经验包：{"；".join(ctx.pool_experiences)}
+
+【发布后写作经验包】
+{writing_experience or "（本次未引用）"}
 
 【写作风格】
 {style_text}
@@ -1427,6 +1443,20 @@ def _storage_url(path: str) -> str:
     """把 DATA_DIR 下的本地文件路径转成写作模块可访问 URL。"""
     rel = os.path.relpath(os.path.realpath(path), os.path.realpath(config.DATA_DIR))
     return f"/writing/uploads/{quote(rel, safe='/')}"
+
+
+def _public_image_url(url_or_path: str) -> str:
+    """把本地生成图片路径规范化为浏览器可访问 URL，远程 URL 原样保留。"""
+    value = (url_or_path or "").strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://", "data:", "/writing/uploads/", "/static/")):
+        return value
+    real = os.path.realpath(value)
+    data_root = os.path.realpath(config.DATA_DIR)
+    if real == data_root or real.startswith(data_root + os.sep):
+        return _storage_url(real)
+    return value
 
 
 def _slot_desc(article: Article, slot_index: int, session: Session) -> str:

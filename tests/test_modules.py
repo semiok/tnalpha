@@ -2,8 +2,7 @@
 import pytest
 
 _PLACEHOLDERS = [
-    # ②选题库(/topics)、③写作引擎(/writing)、④排期版(/schedule) 已实现，不再是占位
-    ("/feedback", "数据反馈"),
+    # ②选题库(/topics)、③写作引擎(/writing)、④排期版(/schedule)、⑤数据反馈(/feedback) 已实现，不再是占位
     ("/permissions", "权限"),
 ]
 
@@ -40,6 +39,17 @@ def test_schedule_page_ok(owner_client):
 
 def test_schedule_requires_login(anon_client):
     r = anon_client.get("/schedule", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("/login")
+
+
+def test_feedback_page_ok(owner_client):
+    r = owner_client.get("/feedback")
+    assert r.status_code == 200
+    assert "数据反馈" in r.text and "暂无发布数据" in r.text
+
+
+def test_feedback_requires_login(anon_client):
+    r = anon_client.get("/feedback", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("/login")
 
 

@@ -16,6 +16,9 @@ from app import __version__
 from app.core import auth, docparse, llm, runtime, storage
 from app.core.db import get_session
 from app.modules.knowledge import analysis
+from app.modules.knowledge.experience_pool import (
+    campaign_experience_pack_options, sync_all_campaign_experience_packs,
+)
 from app.modules.knowledge.models import (
     Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, PoolTopic,
 )
@@ -57,8 +60,13 @@ def home(request: Request, session: Session = Depends(get_session)):
     campaigns = session.exec(
         select(Campaign).where(Campaign.brand_id == brand.id)
         .order_by(Campaign.is_default.desc(), Campaign.id)).all()
+    experience_pack_options = campaign_experience_pack_options(session, brand.id)
     return templates.TemplateResponse(
-        request, "knowledge/home.html", {"brand": brand, "campaigns": campaigns})
+        request, "knowledge/home.html", {
+            "brand": brand,
+            "campaigns": campaigns,
+            "experience_pack_options": experience_pack_options,
+        })
 
 
 @router.post("/brands")
@@ -187,6 +195,7 @@ def toggle_deep_read(brand_id: int, doc_id: int, request: Request,
 def create_campaign(request: Request,
                     brand_id: int = Form(...), name: str = Form(...),
                     start_date: str = Form(""), end_date: str = Form(""),
+                    experience_pack_id: list[int] = Form([]),
                     session: Session = Depends(get_session)):
     auth.require_level(request, 2)
     if not session.get(Brand, brand_id):
@@ -197,6 +206,13 @@ def create_campaign(request: Request,
     session.add(campaign)
     session.commit()
     session.refresh(campaign)
+    for pool_topic_id in dict.fromkeys(experience_pack_id):
+        topic = session.get(PoolTopic, pool_topic_id)
+        if topic is None or topic.kind != "经验包":
+            continue
+        session.add(CampaignPoolRef(campaign_id=campaign.id, pool_topic_id=pool_topic_id))
+    if experience_pack_id:
+        session.commit()
     return RedirectResponse(f"/campaigns/{campaign.id}", status_code=303)
 
 
@@ -360,8 +376,15 @@ def delete_campaign(campaign_id: int, request: Request,
 def pool_list(request: Request, session: Session = Depends(get_session)):
     if not runtime.knowledge_writable():                     # 只读：并入静态框架单页
         return RedirectResponse("/", status_code=303)
-    topics = session.exec(select(PoolTopic).order_by(PoolTopic.id.desc())).all()
-    return templates.TemplateResponse(request, "knowledge/pool.html", {"topics": topics})
+    brand = _default_brand(session)
+    campaign_packs = sync_all_campaign_experience_packs(session, brand.id)
+    material_topics = session.exec(
+        select(PoolTopic).where(PoolTopic.kind == "资料包").order_by(PoolTopic.id.desc())
+    ).all()
+    return templates.TemplateResponse(request, "knowledge/pool.html", {
+        "material_topics": material_topics,
+        "campaign_packs": campaign_packs,
+    })
 
 
 @router.post("/pool")

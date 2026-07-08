@@ -13,7 +13,6 @@ import logging
 from app.core.sources.base import SourceAdapter
 from app.core.sources.gemini import GoogleAdapter
 from app.core.sources.sogou import SogouAdapter
-from app.core.sources.sonar import SonarAdapter
 from app.core.sources.stub import StubAdapter
 
 _stub = StubAdapter()
@@ -33,7 +32,7 @@ class _NotReady(SourceAdapter):
         raise NotImplementedError(f"搜索源 '{self.name}' 尚未接入")
 
 
-# 注册顺序 = UI 勾选框顺序：Google(默认勾) → 搜狗公众号 → 深度热点(付费) → 小红书(占位)
+# 注册顺序 = UI 勾选框顺序：Google(默认勾) → 搜狗公众号(微信搜狗) → 小红书(占位)
 _REGISTRY: dict[str, SourceAdapter] = {}
 
 
@@ -46,7 +45,6 @@ for _a in (
     _stub,
     GoogleAdapter(),
     SogouAdapter(),
-    SonarAdapter(),
     _NotReady("xhs", "小红书", "📕"),
 ):
     register(_a)

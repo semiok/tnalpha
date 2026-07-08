@@ -25,12 +25,27 @@
         {% if can_edit %}<button type="button" @click="adding=!adding" class="text-sm text-brand-600 hover:text-brand-700">＋ 新增 campaign</button>{% endif %}
       </div>
       {% if can_edit %}
-      <form method="post" action="/campaigns" x-show="adding" x-cloak class="flex flex-wrap items-end gap-2 mb-3 p-3 bg-slate-50 rounded-lg">
+      <form method="post" action="/campaigns" x-show="adding" x-cloak class="space-y-3 mb-3 p-3 bg-slate-50 rounded-lg">
         <input type="hidden" name="brand_id" value="{{ brand.id }}">
-        {{ text_input("name", placeholder="活动名称", required=True) }}
-        {{ text_input("start_date", type="date") }}
-        {{ text_input("end_date", type="date") }}
-        {{ button("新建", variant="primary", type="submit") }}
+        <div class="flex flex-wrap items-end gap-2">
+          {{ text_input("name", placeholder="活动名称", required=True) }}
+          {{ text_input("start_date", type="date") }}
+          {{ text_input("end_date", type="date") }}
+          {{ button("新建", variant="primary", type="submit") }}
+        </div>
+        {% if experience_pack_options %}
+        <div>
+          <div class="text-xs font-semibold text-slate-500 mb-2">继承历史经验包</div>
+          <div class="flex flex-wrap gap-2">
+            {% for pack in experience_pack_options %}
+            <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 hover:border-brand-200">
+              <input type="checkbox" name="experience_pack_id" value="{{ pack.id }}" class="rounded border-slate-300 text-brand-600">
+              <span>{{ pack.title.replace("经验包｜", "") }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
       </form>
       {% endif %}
       <div class="space-y-2">

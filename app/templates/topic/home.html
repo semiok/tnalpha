@@ -20,7 +20,14 @@
   {% endif %}
 
   {% if can_edit %}
+  <div x-data="{manualOpen:false, manualRows:5, manualLoading:false}">
   {{ card_open("生成候选选题") }}
+    <div class="flex justify-end mb-3">
+      <button type="button" @click="manualOpen=true"
+              class="px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200">
+        手动上传选题
+      </button>
+    </div>
     <form method="post" action="/topics/generate" class="space-y-3"
           x-data="topicGen()" @submit="loading=true">
       <div class="flex flex-wrap items-end gap-2">
@@ -36,12 +43,6 @@
           <input type="number" name="count" value="5" min="1" max="10"
                  class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm">
         </label>
-        <label class="inline-flex items-center gap-1.5 pb-2 text-sm text-slate-600">
-          <input type="checkbox" name="use_rejection_experience" value="true"
-                 checked
-                 class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
-          <span>参考选题经验包</span>
-        </label>
         {# 同步生成约 30–60s：提交即禁用+转文案，防重复点击（Alpine，配色同 primary 宏）#}
         <button type="submit" :disabled="loading"
                 class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700"
@@ -52,7 +53,7 @@
       </div>
 
       <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5">
-        <div class="text-xs text-slate-500 mb-2">🔎 联网蹭热点（可选，不勾=只用知识库）</div>
+        <div class="text-xs text-slate-500 mb-2">🔎 联网蹭热点（可选，不勾=只用知识库；搜狗公众号固定搜索 weixin.sogou.com 的微信内容）</div>
         <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
           <label class="block">
             <input type="text" name="hot_query" placeholder="时事/热点角度，如「敦煌 出圈」（空=品牌/活动名）"
@@ -60,7 +61,7 @@
           </label>
           {% for s in catalog %}
           <label class="inline-flex items-center gap-1.5 text-sm {{ 'text-slate-400' if not s.enabled else 'text-slate-600' }}"
-                 {% if not s.enabled %}title="未配置/未开发，暂不可用"{% endif %}>
+                 title="{% if s.name == 'mp' %}指定搜索 https://weixin.sogou.com/ 的微信公众号内容{% elif not s.enabled %}未配置/未开发，暂不可用{% endif %}">
             <input type="checkbox" name="source" value="{{ s.name }}"
                    data-default-on="{{ '1' if s.default_on else '0' }}"
                    {% if not s.enabled %}disabled{% endif %}
@@ -73,8 +74,52 @@
         </div>
       </div>
     </form>
-    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效，简报已够全 → <b>默认不联网</b>）；品牌常青=只读品牌层（<b>默认勾 Google</b> 找外部灵感）。「选题经验包」来自同范围回收站里的不采纳原因。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
+    <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效，简报已够全 → <b>默认不联网</b>）；品牌常青=只读品牌层（<b>默认勾 Google</b> 找外部灵感）。回收站里的不采纳原因默认作为选题经验参考；发布复盘经验只读取①知识库中当前范围已关联的经验包。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
   {{ card_close() }}
+  <div x-show="manualOpen" x-cloak class="fixed inset-0 z-40 bg-black/30 grid place-items-center p-4" @click.self="manualOpen=false">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl p-5">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <div class="font-semibold text-slate-800">手动上传选题</div>
+          <div class="text-xs text-slate-400 mt-1">只改补充字段，不改你输入的题目。</div>
+        </div>
+        <button type="button" @click="manualOpen=false" class="text-slate-400 hover:text-slate-600">✕</button>
+      </div>
+      <form method="post" action="/topics/manual" class="space-y-3" @submit="manualLoading=true">
+        <label class="block">
+          <span class="block text-xs text-slate-500 mb-1">范围</span>
+          <select name="campaign_id" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+            <option value="">品牌常青（不限活动）</option>
+            {% for c in campaigns %}<option value="{{ c.id }}">活动：{{ c.name }}</option>{% endfor %}
+          </select>
+        </label>
+        <div class="space-y-2 max-h-80 overflow-auto pr-1">
+          <template x-for="i in manualRows" :key="i">
+            <div class="flex items-center gap-2">
+              <span class="w-6 text-right text-xs text-slate-400" x-text="i"></span>
+              <input type="text" name="title" placeholder="输入选题标题"
+                     class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+            </div>
+          </template>
+        </div>
+        <div class="flex items-center justify-between pt-2">
+          <button type="button" @click="manualRows++" :disabled="manualLoading"
+                  class="px-3 py-1.5 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">＋ 增加一行</button>
+          <div class="flex items-center gap-2">
+            <button type="button" @click="manualOpen=false" :disabled="manualLoading"
+                    class="px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200">取消</button>
+            <button type="submit" :disabled="manualLoading"
+                    class="px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700"
+                    :class="manualLoading ? 'opacity-60 pointer-events-none' : ''">
+              <span x-show="!manualLoading">确认上传</span>
+              <span x-show="manualLoading" x-cloak>选题生成中</span>
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  </div>
   <script>
     // 生成表单：范围联动搜索源默认勾选（活动模式=简报已全→全不勾；品牌常青=勾 default_on 源）
     function topicGen() {
@@ -116,7 +161,7 @@
   {% if active_tab in ("已创作", "已发布") %}
   <p class="text-xs text-slate-400 -mt-2 mb-3">「已创作/已发布」状态来自③写作库（lindong），③接入后在此显示；当前未接入为空。</p>
   {% elif active_tab == "回收站" %}
-  <p class="text-xs text-slate-400 -mt-2 mb-3">删除的选题会进入回收站并保留不采纳原因，后续生成时可勾选「参考选题经验包」。</p>
+  <p class="text-xs text-slate-400 -mt-2 mb-3">删除的选题会进入回收站并保留不采纳原因，后续生成会默认参考这些选题经验。</p>
   {% endif %}
 
   {{ card_open("选题（" ~ topics|length ~ "）") }}

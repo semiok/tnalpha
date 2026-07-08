@@ -15,6 +15,10 @@ from app.core.config import DATABASE_URL
 # ── 导入所有模块 models，注册到 SQLModel.metadata（autogenerate 依赖）──
 import app.core.settings  # noqa: F401  LLMSetting（模型配置）
 import app.modules.knowledge.models  # noqa: F401
+import app.modules.topic.models  # noqa: F401
+import app.modules.writing.models  # noqa: F401
+import app.modules.schedule.models  # noqa: F401
+import app.modules.feedback.models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)

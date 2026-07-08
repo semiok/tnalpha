@@ -5,7 +5,7 @@
 import pytest
 
 from app.core import config, sources
-from app.core.sources import gemini, sogou, sonar
+from app.core.sources import gemini, sogou
 
 
 # ---------- catalog（UI 自描述）----------
@@ -14,7 +14,7 @@ def test_catalog_hides_stub_and_lists_sources(fresh_db):
     cat = sources.catalog()
     names = [c["name"] for c in cat]
     assert "stub" not in names                      # stub 不进 UI
-    assert names == ["google", "mp", "sonar", "xhs"]  # 顺序=勾选框顺序
+    assert names == ["google", "mp", "xhs"]           # 顺序=勾选框顺序
     for c in cat:
         assert set(c) >= {"name", "label", "emoji", "paid", "default_on", "enabled"}
 
@@ -22,7 +22,8 @@ def test_catalog_hides_stub_and_lists_sources(fresh_db):
 def test_catalog_metadata_flags(fresh_db):
     cat = {c["name"]: c for c in sources.catalog()}
     assert cat["google"]["default_on"] is True and cat["google"]["paid"] is False
-    assert cat["sonar"]["paid"] is True and cat["sonar"]["default_on"] is False
+    assert "sonar" not in cat
+    assert cat["mp"]["label"] == "搜狗公众号"
     assert cat["xhs"]["enabled"] is False           # 占位灰掉
 
 
@@ -53,25 +54,6 @@ def test_google_search_without_key_raises(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "GEMINI_API_KEY", "")
     with pytest.raises(NotImplementedError):
         gemini.GoogleAdapter().search("x")
-
-
-# ---------- sonar（perplexity）----------
-
-def test_sonar_paid_and_parse(fresh_db, monkeypatch):
-    a = sonar.SonarAdapter()
-    assert a.paid is True
-    monkeypatch.setattr(config, "PERPLEXITY_API_KEY", "k")
-    fake = {"choices": [{"message": {"content": "实时热点内容"}}],
-            "citations": ["https://a", "https://b"]}
-    monkeypatch.setattr(sonar._http, "post_json", lambda *a, **k: fake)
-    hits = a.search("敦煌")
-    assert hits[0]["summary"] == "实时热点内容" and hits[0]["source"] == "sonar"
-    assert hits[0]["url"] == "https://a"
-
-
-def test_sonar_disabled_without_key(fresh_db, monkeypatch):
-    monkeypatch.setattr(config, "PERPLEXITY_API_KEY", "")
-    assert sonar.SonarAdapter().is_available() is False
 
 
 # ---------- 搜狗公众号（抓取解析）----------
@@ -107,14 +89,13 @@ def test_sogou_available_no_key():
 
 def test_gather_merges_and_skips_failures(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "GEMINI_API_KEY", "k")
-    monkeypatch.setattr(config, "PERPLEXITY_API_KEY", "")   # sonar 不可用 → 跳过
     monkeypatch.setattr(gemini._http, "post_json", lambda *a, **k: {
         "candidates": [{"content": {"parts": [{"text": "答案"}]}, "groundingMetadata": {}}]})
     # 搜狗抓取抛错 → gather 应吞掉
     monkeypatch.setattr(sogou, "_fetch", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("反爬")))
     hits = sources.gather(["google", "mp", "sonar", "xhs"], "敦煌", per_source=3)
     assert any(h["source"] == "google" for h in hits)       # google 命中
-    assert all(h["source"] != "sonar" for h in hits)        # sonar 无 key 被跳过
+    assert all(h["source"] != "sonar" for h in hits)        # sonar 未注册，被跳过
 
 
 def test_gather_empty_query_returns_empty():

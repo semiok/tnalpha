@@ -14,6 +14,7 @@ from app.core.db import init_db
 from app.modules.feedback import routes as feedback_routes
 from app.modules.knowledge import routes as knowledge_routes
 from app.modules.permissions import routes as permissions_routes
+from app.modules.prompts import routes as prompts_routes
 from app.modules.schedule import routes as schedule_routes
 from app.modules.topic import routes as topic_routes
 from app.modules.writing import routes as writing_routes
@@ -50,6 +51,7 @@ app.include_router(writing_routes.router)
 app.include_router(schedule_routes.router)
 app.include_router(feedback_routes.router)
 app.include_router(permissions_routes.router)
+app.include_router(prompts_routes.router)
 
 
 @app.get("/health")

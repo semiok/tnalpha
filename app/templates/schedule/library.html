@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, notice, empty_state, chip %}
+{% block content %}
+  {{ page_header("④模块", "排期库", [("首页", "/"), ("排期版", "/schedule")]) }}
+
+  {% if not brand %}
+    {{ notice("还没有品牌。先到①知识库创建品牌，再排期。", "amber") }}
+    {{ empty_state("暂无可排期内容") }}
+  {% else %}
+    <div class="mb-4 space-y-2">
+      <div class="flex flex-wrap items-center gap-2">
+        {% for key, label, href, count in status_links %}
+        <a href="{{ href }}"
+           class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-brand-600 text-white' if active_status == key else 'bg-slate-100 text-slate-600 hover:bg-slate-200' }}">
+          {{ label }} <span class="opacity-70">{{ count }}</span>
+        </a>
+        {% endfor %}
+        <a href="/schedule" class="ml-auto px-3 py-1.5 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">返回排期表</a>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        {% for key, label, href, count in scope_links %}
+        <a href="{{ href }}"
+           class="px-3 py-1.5 rounded-lg text-sm {{ 'bg-white border border-brand-200 text-brand-700 shadow-sm' if selected_campaign == key else 'bg-white border border-slate-200 text-slate-500 hover:border-slate-300' }}">
+          {{ label }} <span class="opacity-70">{{ count }}</span>
+        </a>
+      {% endfor %}
+    </div>
+    </div>
+
+    <section class="bg-white rounded-xl border border-slate-200 p-5">
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <div class="text-sm font-semibold text-slate-700">排期库文章</div>
+          <div class="text-xs text-slate-400 mt-1">点击文章标题查看详情；可排期文章可指定到发布周。</div>
+        </div>
+      </div>
+
+      {% if articles %}
+        <div class="space-y-2">
+          {% for article in articles %}
+            {% set slot = active_slots.get(article.id) %}
+            {% set topic = article_topics.get(article.topic_id) %}
+
+            <div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button"
+                            hx-get="/schedule/articles/{{ article.id }}/preview"
+                            hx-target="#modal-slot"
+                            hx-swap="innerHTML"
+                            class="min-w-0 text-left text-sm font-semibold text-brand-700 hover:underline">
+                      {{ article.title }}
+                    </button>
+                    {% if slot %}
+                      {{ chip(slot.status, "emerald" if slot.status == "已发布" else "brand") }}
+                    {% else %}
+                      {{ chip("可排期", "slate") }}
+                    {% endif %}
+                  </div>
+                  <div class="text-xs text-slate-400 mt-1">
+                    {{ campaign_name.get(article.campaign_id, "品牌常青") }} · 推荐平台：{{ article.platform or "未设" }}{% if article.word_count %} · {{ article.word_count }}字{% endif %}
+                  </div>
+                  {% if topic %}
+                    <div class="text-xs text-slate-500 mt-1 line-clamp-2">来源选题：{{ topic.title }}</div>
+                  {% endif %}
+                </div>
+
+                <div class="w-full md:w-64 shrink-0 md:text-right">
+                  {% if slot %}
+                    <div class="inline-flex w-full md:w-auto items-center justify-center rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-700">
+                      {{ "已发布于" if slot.status == "已发布" else "已指定到" }}
+                      {{ slot.publish_date.strftime('%Y.%m.%d') }}{% if slot.publish_time %} {{ slot.publish_time }}{% endif %}
+                    </div>
+                  {% elif level >= 1 %}
+                    {% if weeks %}
+                      <button type="button"
+                              hx-get="/schedule/articles/{{ article.id }}/assign-modal?return_to={{ ('/schedule/library?status=' ~ active_status ~ '&campaign_id=' ~ selected_campaign)|urlencode }}"
+                              hx-target="#modal-slot"
+                              hx-swap="innerHTML"
+                              class="w-full md:w-auto px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700">指定发布周</button>
+                    {% else %}
+                      <div class="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-700">该范围还没有 week。先回排期表新增 week。</div>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        {{ empty_state("这个筛选下暂无文章。") }}
+      {% endif %}
+    </section>
+  {% endif %}
+{% endblock %}
