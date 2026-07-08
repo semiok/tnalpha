@@ -1,4 +1,4 @@
-"""④排期版：已生成文章 → 发布周排期 → 发布回填。"""
+"""④排期版：待审核文章 → 发布周排期 → 发布回填。"""
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException

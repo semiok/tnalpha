@@ -9,6 +9,7 @@ from app.modules.topic.models import Topic
 from app.modules.writing.models import Article
 
 ACTIVE_SLOT_STATUSES = ("已排期", "已发布")
+SCHEDULABLE_ARTICLE_STATUSES = ("待审核", "已生成")
 RECOMMEND_TIMES = ("09:30", "12:30", "18:30")
 
 
@@ -72,8 +73,12 @@ def active_slot_for_article(session: Session, article_id: int) -> ScheduleSlot |
     ).first()
 
 
+def _is_schedulable_article(article: Article) -> bool:
+    return article.status in SCHEDULABLE_ARTICLE_STATUSES and article.deleted_at is None
+
+
 def schedulable_articles(session: Session, brand_id: int, campaign_id: int | None = None) -> list[Article]:
-    q = select(Article).where(Article.status == "已生成", Article.deleted_at == None)
+    q = select(Article).where(Article.status.in_(SCHEDULABLE_ARTICLE_STATUSES), Article.deleted_at == None)
     if campaign_id is None:
         q = q.where(Article.campaign_id == None)
     else:
@@ -93,7 +98,7 @@ def schedulable_articles(session: Session, brand_id: int, campaign_id: int | Non
 def all_schedulable_articles(session: Session, brand_id: int) -> list[Article]:
     rows = session.exec(
         select(Article)
-        .where(Article.status == "已生成", Article.deleted_at == None)
+        .where(Article.status.in_(SCHEDULABLE_ARTICLE_STATUSES), Article.deleted_at == None)
         .order_by(Article.generated_at.desc(), Article.updated_at.desc(), Article.id.desc())
     ).all()
     out: list[Article] = []
@@ -116,8 +121,8 @@ def add_slot(session: Session, week_id: int, article_id: int,
     article = session.get(Article, article_id)
     if article is None:
         raise ValueError("文章不存在")
-    if article.status != "已生成" or article.deleted_at is not None:
-        raise ValueError("只有已生成文章可以排期")
+    if not _is_schedulable_article(article):
+        raise ValueError("只有待审核文章可以排期")
     if active_slot_for_article(session, article_id):
         raise ValueError("文章已在排期表中")
     topic = session.get(Topic, article.topic_id)
@@ -181,7 +186,7 @@ def recommend_slots(session: Session, brand_id: int,
             day,
             time_value,
             article.platform,
-            "AI 推荐排期：按已生成文章顺序与周内空闲时段自动放入。",
+            "AI 推荐排期：按待审核文章顺序与周内空闲时段自动放入。",
         ))
     return created
 
