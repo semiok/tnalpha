@@ -18,7 +18,7 @@ def generate_text(prompt: str, base_url: str, api_key: str,
             "messages": [{"role": "user", "content": prompt}]}
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(5):
         parts: list[str] = []
         try:
             with httpx.stream("POST", url, headers=headers, json=body, timeout=timeout) as resp:
@@ -42,11 +42,11 @@ def generate_text(prompt: str, base_url: str, api_key: str,
             return text
         except httpx.HTTPStatusError as exc:
             last_error = exc
-            if exc.response.status_code < 500 or attempt == 2:
+            if exc.response.status_code < 500 or attempt == 4:
                 raise
         except (httpx.TimeoutException, httpx.NetworkError, RuntimeError) as exc:
             last_error = exc
-            if attempt == 2:
+            if attempt == 4:
                 raise
         time.sleep(0.8 * (attempt + 1))
     raise RuntimeError(f"openai 兼容 provider 调用失败：{last_error}")

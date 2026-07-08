@@ -1,6 +1,8 @@
 {# 文章库简洁列表项：标题（新窗口看详情）+ 状态 + 操作。正在生成的带 HTMX 轮询刷新状态。#}
 {% from "components/ui.html" import chip, button %}
-{% set is_running = article.status in ("辩论中", "写作中", "重写中", "待配图", "待选图") and not article.error_message %}
+{% set is_running = article.status in ("辩论中", "写作中", "重写中", "待配图") and not article.error_message %}
+{% set display_status = "生成中" if article.status in ("辩论中", "写作中", "重写中", "待配图") else article.status %}
+{% set chip_color = "rose" if article.status == "已删除" else ("amber" if display_status == "生成中" else "emerald") %}
 <article id="article-row-{{ article.id }}"
          class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 flex flex-wrap items-center justify-between gap-3{% if is_running %} border-brand-200 bg-brand-50/30{% endif %}"
          {% if oob %}hx-swap-oob="beforeend:#article-list"{% endif %}
@@ -20,11 +22,13 @@
     </a>
     <div class="mt-0.5 text-xs text-slate-400 truncate pl-4">
       {{ campaign_name }} · 来源选题：{{ topic.title }}
+      {% set t = article.generated_at or article.updated_at %}
+      {% if t %} · {{ t.strftime('%Y-%m-%d %H:%M') }}{% endif %}
       {% if is_running %} · <span class="text-brand-600">点击标题查看实时辩论过程</span>{% endif %}
     </div>
   </div>
   <div class="flex items-center gap-2 shrink-0">
-    {{ chip(article.status, "rose" if article.status == "已删除" else ("amber" if article.status in ("辩论中", "写作中", "重写中", "待配图", "待选图") else "emerald")) }}
+    {{ chip(display_status, chip_color) }}
     {% if article.status == "已删除" %}
       <form method="post" action="/writing/articles/{{ article.id }}/restore"
             hx-post="/writing/articles/{{ article.id }}/restore"
