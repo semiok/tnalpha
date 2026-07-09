@@ -40,10 +40,20 @@
     </div>
     {% if can_edit %}
     <form method="post" action="/campaigns/{{ campaign.id }}/docs" enctype="multipart/form-data"
-          class="flex flex-wrap items-center gap-2">
+          class="flex flex-wrap items-center gap-2"
+          x-data="{ uploading:false }" @submit="uploading=true">
       {{ file_input("file", required=True) }}
       {{ text_input("note", placeholder="备注（开幕/中期/闭幕）") }}
-      {{ button("上传资料", variant="secondary", type="submit") }}
+      <button type="submit"
+              class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-60 disabled:cursor-wait"
+              :disabled="uploading">
+        <span x-show="!uploading">上传资料</span>
+        <span x-show="uploading" x-cloak class="inline-flex items-center gap-2">
+          <span class="w-3.5 h-3.5 rounded-full border-2 border-slate-300 border-t-brand-600 animate-spin"></span>
+          上传中
+        </span>
+      </button>
+      <span x-show="uploading" x-cloak class="text-xs text-slate-400">正在上传并解析文件，请稍候…</span>
     </form>
     {% endif %}
   {{ card_close() }}

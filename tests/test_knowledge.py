@@ -71,6 +71,18 @@ def test_upload_campaign_doc(owner_client):
     assert "plan.txt" in page and "开幕" in page
 
 
+def test_upload_forms_show_loading_state(owner_client):
+    brand_id = _create_brand(owner_client)
+    cid = _create_campaign(owner_client, brand_id)
+    brand_page = owner_client.get(f"/brands/{brand_id}").text
+    campaign_page = owner_client.get(f"/campaigns/{cid}").text
+    pool_page = owner_client.get("/pool").text
+    for html in (brand_page, campaign_page, pool_page):
+        assert 'x-data="{ uploading:false }"' in html
+        assert '@submit="uploading=true"' in html
+        assert "上传中" in html
+
+
 # ── AI 解析：后台 analyze 路由 + run_analysis 逻辑（照 tngen）──
 
 def test_analyze_route_sets_running(owner_client, fresh_db, monkeypatch):

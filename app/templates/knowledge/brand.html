@@ -36,9 +36,20 @@
     {# ── 右：资料文档 + AI 解析 ── #}
     {{ card_open("资料文档") }}
       {% if can_edit %}
-      <form method="post" action="/brands/{{ brand.id }}/docs" enctype="multipart/form-data" class="flex items-center gap-2 mb-2">
+      <form method="post" action="/brands/{{ brand.id }}/docs" enctype="multipart/form-data"
+            class="flex flex-wrap items-center gap-2 mb-2"
+            x-data="{ uploading:false }" @submit="uploading=true">
         {{ file_input("file", required=True) }}
-        {{ button("上传", variant="secondary", type="submit") }}
+        <button type="submit"
+                class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-60 disabled:cursor-wait"
+                :disabled="uploading">
+          <span x-show="!uploading">上传</span>
+          <span x-show="uploading" x-cloak class="inline-flex items-center gap-2">
+            <span class="w-3.5 h-3.5 rounded-full border-2 border-slate-300 border-t-brand-600 animate-spin"></span>
+            上传中
+          </span>
+        </button>
+        <span x-show="uploading" x-cloak class="text-xs text-slate-400">正在上传并解析文件，请稍候…</span>
       </form>
       {# AI 解析按钮 / 解析中轮询 #}
       {% if brand.analysis_status == "running" %}

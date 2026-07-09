@@ -50,7 +50,8 @@
 
   {% if can_edit %}
   {{ card_open("新增资料包") }}
-    <form method="post" action="/pool" enctype="multipart/form-data" class="space-y-3">
+    <form method="post" action="/pool" enctype="multipart/form-data" class="space-y-3"
+          x-data="{ uploading:false }" @submit="uploading=true">
       {{ text_input("title", placeholder="标题", required=True, extra="w-full") }}
       <input type="hidden" name="kind" value="资料包">
       <div class="flex flex-wrap items-center gap-3 text-sm">
@@ -65,7 +66,18 @@
         <span class="text-xs text-slate-400">上传资料文件（自动抽正文入下框；留空则手填）</span>
       </div>
       {{ textarea("content", placeholder="内容摘要 / 解析结果（上传文件会自动填；也可手填覆盖）") }}
-      {{ button("＋ 添加到数据池", variant="primary", type="submit") }}
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="submit"
+                class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-60 disabled:cursor-wait"
+                :disabled="uploading">
+          <span x-show="!uploading">＋ 添加到数据池</span>
+          <span x-show="uploading" x-cloak class="inline-flex items-center gap-2">
+            <span class="w-3.5 h-3.5 rounded-full border-2 border-white/50 border-t-white animate-spin"></span>
+            上传中
+          </span>
+        </button>
+        <span x-show="uploading" x-cloak class="text-xs text-slate-400">正在保存资料包并抽取内容，请稍候…</span>
+      </div>
     </form>
   {{ card_close() }}
   {% endif %}
