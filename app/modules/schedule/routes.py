@@ -4,12 +4,12 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.requests import Request
 
 from app.core import auth
 from app.core.db import get_session
+from app.core.templates import create_templates
 from app.modules.knowledge.models import Campaign
 from app.modules.schedule import schedule
 from app.modules.schedule.models import ScheduleSlot, ScheduleWeek
@@ -17,7 +17,7 @@ from app.modules.topic.models import Topic
 from app.modules.writing.models import Article
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 LIBRARY_TABS = [
     ("all", "全部", None),

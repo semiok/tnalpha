@@ -23,7 +23,7 @@
     <div class="mt-0.5 text-xs text-slate-400 truncate pl-4">
       {{ campaign_name }} · 来源选题：{{ topic.title }}
       {% set t = article.generated_at or article.updated_at %}
-      {% if t %} · {{ t.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+      {% if t %} · {{ t|cn_time('%Y-%m-%d %H:%M') }}{% endif %}
       {% if is_running %} · <span class="text-brand-600">点击标题查看实时辩论过程</span>{% endif %}
     </div>
   </div>

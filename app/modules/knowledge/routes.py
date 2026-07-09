@@ -8,13 +8,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from sqlmodel import Session, select
 
 from app import __version__
 from app.core import auth, docparse, llm, runtime, storage
 from app.core.db import get_session
+from app.core.templates import create_templates
 from app.modules.knowledge import analysis
 from app.modules.knowledge.experience_pool import (
     campaign_experience_pack_options, sync_all_campaign_experience_packs,
@@ -24,7 +24,7 @@ from app.modules.knowledge.models import (
 )
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 _DEMO_HTML = Path("app/templates/demo.html")  # 只读演示壳（原型全貌，纯静态）
 
 _ANALYZE_CHARS = 12000  # AI 解析喂给 LLM 的最大字符数（防超长）

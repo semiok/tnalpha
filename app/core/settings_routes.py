@@ -4,16 +4,16 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form
 from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session
 from starlette.requests import Request
 
 from app.core import auth, config, runtime
 from app.core.db import get_session
 from app.core.settings import get_llm_settings
+from app.core.templates import create_templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 _MASK = "••••••"  # api_key 打码占位；POST 收到此值/空 → 不覆盖原 key
 MINIMAX_M3_BASE_URL = "https://api.minimax.chat/v1"

@@ -178,7 +178,7 @@
               {% else %}{{ chip("品牌常青", "slate") }}{% endif %}
               {% if t.timeliness %}{{ chip("时效" ~ t.timeliness, "brand") }}{% endif %}
             </div>
-            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 {{ t.created_at.strftime("%Y-%m-%d %H:00") }}</div>
+            <div class="text-xs text-slate-400 mt-0.5">🕐 生成于 {{ t.created_at|cn_time("%Y-%m-%d %H:00") }}</div>
             {% if t.outline %}<div class="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{{ t.outline }}</div>{% endif %}
             {% if t.status == "回收站" and t.rejection_reason %}
             <div class="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-md px-2 py-1.5 mt-2">

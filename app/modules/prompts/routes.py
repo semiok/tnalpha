@@ -4,11 +4,11 @@ from datetime import date, datetime
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.requests import Request
 
 from app.core.db import get_session
+from app.core.templates import create_templates
 from app.core.llm import prompts as knowledge_prompts
 from app.modules.feedback.experience import (
     PublishedSample,
@@ -27,7 +27,7 @@ from app.modules.writing.debate import ROLES, _debate_prompt, _review_prompt, re
 from app.modules.writing.models import Article, Style
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 
 @dataclass

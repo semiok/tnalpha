@@ -8,6 +8,7 @@ from app.modules.knowledge.models import Brand
 from app.modules.schedule.models import ScheduleMetric, ScheduleSetting, ScheduleSlot, ScheduleWeek, _now
 from app.modules.topic.models import Topic
 from app.modules.writing.models import Article
+from app.core.timezone import china_today
 
 ACTIVE_SLOT_STATUSES = ("已排期", "已发布")
 SCHEDULABLE_ARTICLE_STATUSES = ("已审核",)
@@ -15,7 +16,7 @@ RECOMMEND_TIMES = ("09:30", "12:30", "18:30")
 
 
 def current_week(today: date | None = None) -> tuple[date, date]:
-    today = today or date.today()
+    today = today or china_today()
     start = today - timedelta(days=today.weekday())
     return start, start + timedelta(days=6)
 
@@ -81,7 +82,7 @@ def active_slots_for_articles(session: Session, article_ids: list[int]) -> dict[
 
 
 def _month_range(today: date | None = None) -> tuple[date, date]:
-    today = today or date.today()
+    today = today or china_today()
     start = today.replace(day=1)
     if start.month == 12:
         end = start.replace(year=start.year + 1, month=1)

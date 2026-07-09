@@ -10,6 +10,10 @@ SECRET_KEY = os.environ.get("TNALPHA_SECRET_KEY", "tnalpha-dev-secret-change-me"
 # 文件上传根目录
 DATA_DIR = os.environ.get("TNALPHA_DATA_DIR", "data")
 
+# 展示时区：服务器在美国时间，但产品面向中国使用，系统自动时间展示统一换算为中国时间。
+SERVER_TIMEZONE = os.environ.get("TNALPHA_SERVER_TZ", "America/New_York")
+DISPLAY_TIMEZONE = os.environ.get("TNALPHA_DISPLAY_TZ", "Asia/Shanghai")
+
 # 知识库/全站模式开关的【初始默认值】。运行时真实状态存 DB（AppSetting，见 core/settings.py）。
 #   True  = 开发模式：GET / 是动态知识库（能新建品牌/上传/AI解析）
 #   False = 演示模式：GET / 是原型六模块只读演示壳

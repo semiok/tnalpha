@@ -1,12 +1,12 @@
 """⑥权限——展示当前账号矩阵。"""
 from fastapi import APIRouter
-from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from app.core import auth
+from app.core.templates import create_templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 
 @router.get("/permissions")

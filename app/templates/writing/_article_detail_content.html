@@ -70,20 +70,20 @@
   <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
     <span class="inline-flex items-center gap-1">
       <span class="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
-      创建 {{ article.created_at.strftime('%Y-%m-%d %H:%M') }}
+      创建 {{ article.created_at|cn_time('%Y-%m-%d %H:%M') }}
     </span>
     {% if article.generated_at %}
       <span class="text-slate-300">→</span>
       <span class="inline-flex items-center gap-1">
         <span class="w-1.5 h-1.5 rounded-full bg-brand-400"></span>
-        文本生成 {{ article.generated_at.strftime('%Y-%m-%d %H:%M') }}
+        文本生成 {{ article.generated_at|cn_time('%Y-%m-%d %H:%M') }}
       </span>
     {% endif %}
     {% if article.status in ("待审核", "已排期", "已发布") and article.updated_at != article.generated_at %}
       <span class="text-slate-300">→</span>
       <span class="inline-flex items-center gap-1">
         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-        更新 {{ article.updated_at.strftime('%Y-%m-%d %H:%M') }}
+        更新 {{ article.updated_at|cn_time('%Y-%m-%d %H:%M') }}
       </span>
     {% endif %}
   </div>
@@ -618,7 +618,7 @@
           <span class="text-base">✅</span>
           <span>审核通过</span>
           {% if article.reviewed_at %}
-            <span class="ml-auto text-xs text-emerald-500 font-normal">{{ article.reviewed_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            <span class="ml-auto text-xs text-emerald-500 font-normal">{{ article.reviewed_at|cn_time('%Y-%m-%d %H:%M') }}</span>
           {% endif %}
         </div>
         {% if article.review_note %}
@@ -644,7 +644,7 @@
           <span class="text-base">❌</span>
           <span>审核未通过</span>
           {% if article.reviewed_at %}
-            <span class="ml-auto text-xs text-rose-400 font-normal">{{ article.reviewed_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            <span class="ml-auto text-xs text-rose-400 font-normal">{{ article.reviewed_at|cn_time('%Y-%m-%d %H:%M') }}</span>
           {% endif %}
         </div>
         {% if article.review_note %}

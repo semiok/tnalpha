@@ -4,6 +4,7 @@ LLM 走 stub（conftest 强制），故 generate 用 monkeypatch 把 llm.generat
 可解析的纯文本样例——测的是"读 KnowledgeContext→组 prompt→parse→落库"这条链，非真模型输出。
 """
 import pytest
+from datetime import datetime
 from urllib.parse import unquote
 from sqlmodel import Session, select
 
@@ -374,12 +375,13 @@ def test_topics_scope_filter_by_brand_and_campaign(owner_client, fresh_db):
 def test_topics_show_id_and_gen_time(owner_client, fresh_db):
     with Session(fresh_db) as s:
         bid, _ = _seed_brand(s)
-        t = Topic(brand_id=bid, title="带编号的选题")
+        t = Topic(brand_id=bid, title="带编号的选题", created_at=datetime(2026, 7, 8, 12, 30))
         s.add(t); s.commit(); s.refresh(t)
         tid = t.id
     html = owner_client.get("/topics").text
     assert f"#{tid}" in html          # 编号
     assert "生成于" in html            # 生成时间（到小时）
+    assert "2026-07-09 00:00" in html # 服务器美国时间 → 中国时间展示
 
 
 def test_topics_catalog_checkboxes_render(owner_client, fresh_db):

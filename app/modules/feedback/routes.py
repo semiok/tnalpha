@@ -3,18 +3,18 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.requests import Request
 
 from app.core import auth
 from app.core.db import get_session
+from app.core.templates import create_templates
 from app.modules.feedback import experience
 from app.modules.feedback.models import EXPERIENCE_PLATFORMS, EXPERIENCE_TYPES, FeedbackExperience
 from app.modules.knowledge.models import Brand, Campaign
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 FEEDBACK_TABS = [
     ("all", "全部"),

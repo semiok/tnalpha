@@ -9,12 +9,12 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.requests import Request
 
 from app.core import auth, config, db, llm, sources, storage
 from app.core.db import get_session
+from app.core.templates import create_templates
 from app.modules.feedback.experience import campaign_experience_context, upsert_review_rejection_experience
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
@@ -23,7 +23,7 @@ from app.modules.writing.debate import clean_llm_output, knowledge_context_block
 from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, _now
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 
 def _strip_markdown(text: str) -> str:

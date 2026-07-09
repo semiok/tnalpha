@@ -39,7 +39,7 @@
         <td>{{ chip("触网", "emerald") if t.web_access else chip("不触网", "amber") }}</td>
         <td class="text-slate-500">{{ t.source }}</td>
         <td class="text-slate-500">{{ t.brand_tag or "通用" }}</td>
-        <td class="text-xs text-slate-400">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
+        <td class="text-xs text-slate-400">{{ t.created_at|cn_time('%Y-%m-%d') }}</td>
       </tr>
       {% endfor %}
     {{ table_close() }}

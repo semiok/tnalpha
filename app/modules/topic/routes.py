@@ -8,19 +8,19 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.requests import Request
 
 from app.core import auth, sources
 from app.core.db import get_session
 from app.core.llm.errors import ModelRateLimited
+from app.core.templates import create_templates
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.generate import create_manual_topics, generate_topics
 from app.modules.topic.models import TOPIC_STATUSES, Topic
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 # 分类 tab：(key, 显示名, 匹配的 status 集合)。None=全部；已创作/已发布等③写作引擎产出后才有数据。
 TABS = [

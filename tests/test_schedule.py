@@ -1,5 +1,5 @@
 """④排期版：文章池、排期状态和发布回填。"""
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlmodel import Session, select
 
@@ -8,6 +8,11 @@ from app.modules.schedule import schedule
 from app.modules.schedule.models import ScheduleMetric, ScheduleSetting, ScheduleSlot, ScheduleWeek
 from app.modules.topic.models import Topic
 from app.modules.writing.models import Article
+
+
+def test_current_week_uses_china_today_by_default(monkeypatch):
+    monkeypatch.setattr(schedule, "china_today", lambda: date(2026, 7, 13))
+    assert schedule.current_week() == (date(2026, 7, 13), date(2026, 7, 19))
 
 
 def _seed(session: Session) -> dict[str, int]:

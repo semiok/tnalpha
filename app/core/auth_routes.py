@@ -1,13 +1,13 @@
 """登录/登出路由。"""
 from fastapi import APIRouter, Form
 from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from app.core import auth
+from app.core.templates import create_templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+templates = create_templates()
 
 
 @router.get("/login")

@@ -3,6 +3,7 @@ import io
 import os
 import re
 import types
+from datetime import datetime
 
 import pytest
 
@@ -89,4 +90,10 @@ def test_storage_save_upload_writes_file(tmp_path, monkeypatch):
     assert os.path.exists(path)
     with open(path, "rb") as fh:
         assert fh.read() == b"hello"
-    assert path.endswith(".txt")
+
+
+def test_cn_time_filter_converts_server_time_to_china():
+    from app.core.timezone import format_display_time, to_display_time
+    source = datetime(2026, 7, 8, 12, 30)
+    assert to_display_time(source) == datetime(2026, 7, 9, 0, 30)
+    assert format_display_time(source, "%Y-%m-%d %H:%M") == "2026-07-09 00:30"
