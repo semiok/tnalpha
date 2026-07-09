@@ -21,7 +21,7 @@
         <div class="mt-3 space-y-3">
           <div class="text-xs text-slate-400">新建 campaign 时可以继承这个经验包；被引用后会进入②选题库和③写作引擎的经验参考。</div>
           {% for article in pack.articles %}
-          <details class="rounded-lg border border-slate-100 bg-white px-3 py-3" {{ 'open' if loop.first else '' }}>
+          <details class="rounded-lg border border-slate-100 bg-white px-3 py-3">
             <summary class="cursor-pointer select-none">
               <span class="font-medium text-sm text-slate-700">{{ article.title }}</span>
               <span class="ml-2">{{ chip(article.platform, "slate") }}</span>
