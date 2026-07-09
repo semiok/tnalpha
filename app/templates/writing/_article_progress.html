@@ -18,7 +18,6 @@
 {% set total_rounds = article.debate_rounds if is_debate else (article.review_rounds if (is_review or is_rewrite) else 0) %}
 {% set phase_records = records | selectattr('phase', 'equalto', 'debate' if is_debate else 'review') | list %}
 {% set current_round = phase_records | map(attribute='round_num') | max | default(0) %}
-{% set current_round_display = current_round + 1 if current_round < total_rounds else current_round %}
 
 <div class="space-y-1">
   <div class="flex items-center gap-2 mb-3 px-1">
@@ -49,6 +48,7 @@
 
     {% set ns = namespace(prev_phase='') %}
     {% for r in records %}
+      {% if r.phase == 'debate' or r.phase == 'review' %}
       {% set style = role_styles.get(r.role, ('❓', r.role, 'bg-slate-50 border-slate-100', 'bg-slate-400', 'text-slate-600')) %}
 
       {% if r.phase != ns.prev_phase %}
@@ -72,6 +72,7 @@
           <div class="rounded-lg {{ style[2] }} border px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap break-words">{{ r.content }}</div>
         </div>
       </div>
+      {% endif %}
     {% endfor %}
 
     {# 正在发言 / 正在处理指示器 #}

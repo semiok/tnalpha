@@ -10,15 +10,9 @@
        articleId: {{ article.id }},
        shouldPoll: {{ 'true' if (not force_editing and article.status in ('辩论中', '写作中', '重写中', '待配图') and not article.error_message) else 'false' }},
        pollTimer: null,
-       savedRange: null,
-       saveSelection() { const sel = window.getSelection(); if (sel.rangeCount > 0) { const r = sel.getRangeAt(0); if (this.$refs.bodyArea && this.$refs.bodyArea.contains(r.commonAncestorContainer)) { this.savedRange = r.cloneRange(); } } },
-       currentRange() { const sel = window.getSelection(); if (sel.rangeCount > 0) { const r = sel.getRangeAt(0); if (this.$refs.bodyArea && this.$refs.bodyArea.contains(r.commonAncestorContainer)) return r; } return this.savedRange; },
-       segText(s) { const r = document.createRange(); r.selectNodeContents(s); return r.toString().trim(); },
-       bodyOffsetOfCursor() { const r = this.currentRange(); if (!r) return -1; const segs = [...this.$refs.bodyArea.querySelectorAll('[data-seg]')]; let off = 0; for (const s of segs) { const t = s.dataset.type; const txt = t === 'text' ? this.segText(s) : '[插图：' + s.dataset.desc + ']'; if (t === 'text' && !txt) continue; if (s.contains(r.startContainer) || r.startContainer === s) { let intra = 0; if (t === 'text') { const p = document.createRange(); p.selectNodeContents(s); try { p.setEnd(r.startContainer, r.startOffset); } catch(e) { p.setEnd(s, 0); } const raw = p.toString(); intra = Math.max(0, Math.min(raw.length, txt.length)); } else { intra = txt.length; } return off + intra; } off += txt.length + 2; } return -1; },
-       collectBody() { const segs = this.$refs.bodyArea.querySelectorAll('[data-seg]'); let parts = []; segs.forEach(el => { const t = el.dataset.type; if (t === 'text') { const txt = this.segText(el); if (txt) parts.push(txt); } else if (t === 'slot') { parts.push('[插图：' + el.dataset.desc + ']'); } }); return parts.join('\n\n'); },
        replaceFragment(html) { const tmp = document.createElement('div'); tmp.innerHTML = html.trim(); const newEl = tmp.firstElementChild; if (!newEl) { alert('返回内容异常'); return; } document.getElementById('detail-content').replaceWith(newEl); },
+       collectBody() { const segs = this.$refs.bodyArea.querySelectorAll('[data-seg]'); let parts = []; segs.forEach(el => { const t = el.dataset.type; if (t === 'text') { const txt = el.innerText; if (txt) parts.push(txt); } else if (t === 'slot') { parts.push('[插图：' + el.dataset.desc + ']'); } }); return parts.join('\n\n'); },
        saveBody() { const body = this.collectBody(); const title = this.$refs.titleArea ? this.$refs.titleArea.innerText.trim() : ''; const fd = new FormData(); fd.append('body', body); fd.append('title', title); fetch('/writing/articles/' + this.articleId + '/edit-body', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('保存失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('保存失败：' + e.message); }); },
-       insertPlaceholder(anchorText) { const pos = this.bodyOffsetOfCursor(); const fd = new FormData(); if (pos >= 0) { fd.append('insert_position', String(pos)); } else { fd.append('anchor_text', anchorText); } fd.append('body', this.collectBody()); fd.append('title', this.$refs.titleArea ? this.$refs.titleArea.innerText.trim() : ''); fetch('/writing/articles/' + this.articleId + '/insert-placeholder', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('插入占位失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('插入占位失败：' + e.message); }); },
        deleteSlot(slotIndex) { if (!confirm('删除此插图位置？')) return; const fd = new FormData(); fetch('/writing/articles/' + this.articleId + '/slots/' + slotIndex + '/delete', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('删除失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('删除失败：' + e.message); }); },
        uploadToSlot(slotIndex) { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { if (!input.files[0]) return; const fd = new FormData(); fd.append('file', input.files[0]); fetch('/writing/articles/' + this.articleId + '/slots/' + slotIndex + '/upload', { method: 'POST', headers: {'HX-Request': 'true'}, body: fd }).then(r => { if (!r.ok) throw new Error('上传失败：' + r.status); return r.text(); }).then(html => this.replaceFragment(html)).catch(e => { alert('上传失败：' + e.message); }); }; input.click(); },
        exitEditing() { this.editing = false; htmx.ajax('GET', '/writing/articles/' + this.articleId + '/detail-status', {target: '#detail-content', swap: 'outerHTML'}); },
@@ -94,14 +88,113 @@
     {% endif %}
   </div>
 
-  {% if article.error_message and article.status in ("辩论中", "写作中", "重写中", "待配图") %}
+  {% if article.error_message and article.status in ("辩论中", "写作中", "重写中", "待配图", "AI审核中") %}
     <div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ article.error_message }}</div>
   {% endif %}
 
-  {# ── 正在生成：展示实时辩论过程 ── #}
+  {# ── 正在生成：展示实时辩论/写作/评审过程 ── #}
   {% if article.status in ("辩论中", "写作中", "重写中") and not article.error_message %}
     <div class="rounded-xl border border-brand-100 bg-brand-50/30 p-3">
       {{ progress_bubbles(article, records, display_phase) }}
+    </div>
+  {% endif %}
+
+  {# ── AI 审核中：独立展示审核过程（不复用辩论进度气泡） ── #}
+  {% if article.status == "AI审核中" and not article.error_message %}
+    {% set ai_review_colors = [
+      ('bg-rose-50 border-rose-100', 'bg-rose-500', 'text-rose-700'),
+      ('bg-cyan-50 border-cyan-100', 'bg-cyan-500', 'text-cyan-700'),
+      ('bg-indigo-50 border-indigo-100', 'bg-indigo-500', 'text-indigo-700'),
+      ('bg-teal-50 border-teal-100', 'bg-teal-500', 'text-teal-700'),
+      ('bg-orange-50 border-orange-100', 'bg-orange-500', 'text-orange-700'),
+    ] %}
+    {% set ai_records = records | selectattr('phase', 'equalto', 'ai_review') | list %}
+    {% set intros = ai_records | selectattr('round_num', 'equalto', 0) | list %}
+    {% set reviews = ai_records | selectattr('round_num', 'ge', 1) | list %}
+    {# 角色颜色映射 #}
+    {% set ns = namespace(role_colors={}) %}
+    {% for r in intros %}
+      {% set ns.role_colors = ns.role_colors | combine({r.role: ai_review_colors[loop.index0 % 5]}) %}
+    {% endfor %}
+
+    {# 被审核的图文正文（只读） #}
+    {% if body_segments %}
+      <div class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-3 mb-4">
+        <div class="text-xs font-medium text-slate-400 mb-1">📋 被审核的图文内容</div>
+        {% for seg in body_segments %}
+          {% if seg.type == "text" %}
+            <div class="whitespace-pre-wrap text-sm leading-7 text-slate-700">{{ seg.text }}</div>
+          {% elif seg.type == "slot" %}
+            {% set imgs = slots.get(seg.slot_index, []) %}
+            {% if imgs %}
+              <div class="my-2 space-y-2">
+                {% for img in imgs %}
+                  <img src="{{ img.image_url }}" alt=""
+                       @dblclick="lightboxSrc = '{{ img.image_url }}'"
+                       class="w-full max-h-[520px] rounded-lg border border-slate-100 object-contain cursor-zoom-in hover:opacity-90 transition">
+                {% endfor %}
+              </div>
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {# AI 审核过程 #}
+    <div class="rounded-xl border border-violet-100 bg-violet-50/30 p-3">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <span class="text-lg">🤖</span>
+        <span class="text-sm font-semibold text-slate-700">AI 审核进行中</span>
+        <span class="ml-auto inline-block w-2 h-2 rounded-full bg-violet-500 animate-pulse"></span>
+      </div>
+
+      <div class="max-h-[500px] overflow-y-auto pr-1"
+           x-data="{}"
+           x-init="$nextTick(() => $el.scrollTop = $el.scrollHeight)">
+        {# 角色介绍 #}
+        {% if intros %}
+          <div class="text-xs text-slate-400 font-medium ml-12 mb-2">📋 审核角色</div>
+          {% for r in intros %}
+            {% set c = ns.role_colors[r.role] %}
+            <div class="flex gap-2 mb-2">
+              <div class="shrink-0 w-8 h-8 rounded-full {{ c[1] }} flex items-center justify-center text-sm">🤖</div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-medium {{ c[2] }} mb-0.5">{{ r.role }} <span class="text-slate-400 font-normal">· 审核角色</span></div>
+                <div class="rounded-lg {{ c[0] }} border px-3 py-2 text-xs text-slate-600">关注点：{{ r.content }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        {% endif %}
+
+        {# 审核发言 #}
+        {% if reviews %}
+          <div class="text-xs text-slate-400 font-medium ml-12 mb-2 mt-3">🔍 审核发言</div>
+          {% for r in reviews %}
+            {% set c = ns.role_colors[r.role] or ai_review_colors[0] %}
+            <div class="flex gap-2 mb-2">
+              <div class="shrink-0 w-8 h-8 rounded-full {{ c[1] }} flex items-center justify-center text-sm">🤖</div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-medium {{ c[2] }} mb-0.5">{{ r.role }}</div>
+                <div class="rounded-lg {{ c[0] }} border px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap break-words">{{ r.content }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        {% endif %}
+
+        {# 正在处理指示器 #}
+        <div class="flex gap-2 mb-2 opacity-60">
+          <div class="shrink-0 w-8 h-8 rounded-full bg-violet-500 flex items-center justify-center text-sm">🤖</div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-medium text-violet-700 mb-0.5">总审核员 AI</div>
+            <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2 text-sm text-slate-500 flex items-center gap-1">
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce"></span>
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.15s"></span>
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.3s"></span>
+              <span class="ml-1">{% if not reviews %}正在生成审核角色并审核…{% else %}正在综合各方意见…{% endif %}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   {% endif %}
 
@@ -148,13 +241,13 @@
           {% if article.debate_brief %}
             <div>
               <div class="text-xs text-slate-400 mb-1">辩论综合简报（{{ article.debate_rounds }} 轮 × 4 角色）</div>
-              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.debate_brief }}</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.debate_brief | strip_markdown }}</div>
             </div>
           {% endif %}
           {% if article.review_summary %}
             <div>
               <div class="text-xs text-slate-400 mb-1">评审综合建议（{{ article.review_rounds }} 轮 × 4 角色）</div>
-              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.review_summary }}</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.review_summary | strip_markdown }}</div>
             </div>
           {% endif %}
         </div>
@@ -163,13 +256,7 @@
 
     {# 图文混排正文：按段落切分，遇到插图位置就嵌入候选图组 #}
     <div class="space-y-3">
-      {% if article.status == "待审核" and level >= 1 %}
-      {# 编辑模式提示 #}
-      <div x-show="editing" x-cloak class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-        💡 编辑模式下可点击段落后的「＋ 图片占位」插入图片位置，然后点击占位符选择图片。也可直接编辑正文把 <code class="bg-amber-100 px-1 rounded">[插图：待选择]</code> 标记移到段落中间。
-      </div>
-      {% endif %}
-      <div x-ref="bodyArea" @focusout="saveSelection()" class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-4">
+      <div x-ref="bodyArea" class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-4">
         {% set ns = namespace(text_idx=0) %}
         {% for seg in body_segments %}
           {% if seg.type == "text" %}
@@ -183,15 +270,6 @@
                  :contenteditable="editing"
                  :class="editing ? 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' : ''"
                  {% endif %}>{{ para }}</div>
-            {# 编辑模式下：段落后「＋ 图片占位」按钮 #}
-            {% if article.status == "待审核" and level >= 1 %}
-            <div x-show="editing" x-cloak class="-mt-1 mb-1">
-              <button type="button" data-anchor="{{ para }}" @mousedown.prevent="saveSelection()" @click="insertPlaceholder($el.dataset.anchor)"
-                      class="inline-flex items-center gap-1 text-xs text-amber-500 hover:text-brand-600 transition py-0.5">
-                ＋ 图片占位
-              </button>
-            </div>
-            {% endif %}
               {% endif %}
             {% endfor %}
           {% elif seg.type == "slot" %}
@@ -367,10 +445,68 @@
         {% endfor %}
       </div>
     </div>
-  {% endif %}
 
-  {# ── 已排期/已发布：展示最终文章（只读） ── #}
-  {% if article.status in ("已排期", "已发布") %}
+    {# 浮动图片占位工具：独立 x-data 作用域，不依赖主组件方法，保持轻量。
+       复制标记：navigator.clipboard 一键复制 [插图：待选择]
+       插入占位：Selection API 在光标处插入，无选区时在正文末尾追加。
+       不自动保存——用户可连续插入多个占位后点「💾 保存」一次性提交。 #}
+    {% if article.status == "待审核" and level >= 1 %}
+    <div x-data="{copied: false}"
+         x-show="editing" x-cloak
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 translate-y-2"
+         x-transition:enter-end="opacity-100 translate-y-0"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 translate-y-0"
+         x-transition:leave-end="opacity-0 translate-y-2"
+         class="fixed right-4 bottom-24 z-40 flex flex-col items-end gap-2">
+      <div class="flex items-center gap-2 rounded-lg border border-amber-200 bg-white/95 backdrop-blur px-3 py-2 shadow-lg">
+        <span class="text-xs text-slate-500">标记：</span>
+        <code class="rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-xs text-amber-700 select-all">[插图：待选择]</code>
+        <button type="button"
+                @click="navigator.clipboard.writeText('[插图：待选择]').then(() => { copied = true; setTimeout(() => copied = false, 1500); }).catch(() => { const ta = document.createElement('textarea'); ta.value = '[插图：待选择]'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); copied = true; setTimeout(() => copied = false, 1500); })"
+                class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition"
+                :class="copied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'">
+          <span x-show="!copied">📋 复制</span>
+          <span x-show="copied" x-cloak>✓ 已复制</span>
+        </button>
+      </div>
+      <button type="button"
+              @click="(() => {
+                const sel = window.getSelection();
+                const bodyArea = document.querySelector('[x-ref=bodyArea]');
+                if (!bodyArea) return;
+                const marker = '[插图：待选择]';
+                let inserted = false;
+                if (sel && sel.rangeCount > 0 && bodyArea.contains(sel.anchorNode)) {
+                  const range = sel.getRangeAt(0);
+                  range.deleteContents();
+                  range.insertNode(document.createTextNode(marker));
+                  range.collapse(false);
+                  sel.removeAllRanges();
+                  sel.addRange(range);
+                  inserted = true;
+                }
+                if (!inserted) {
+                  bodyArea.appendChild(document.createElement('br'));
+                  bodyArea.appendChild(document.createTextNode(marker));
+                  bodyArea.scrollTop = bodyArea.scrollHeight;
+                }
+              })()"
+              title="在当前光标位置插入 [插图：待选择] 标记"
+              class="group inline-flex items-center gap-2 rounded-full bg-amber-500 text-white px-4 py-3 shadow-lg hover:bg-amber-600 active:scale-95 transition">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+          <path d="M21 15l-5-5L5 21"/>
+        </svg>
+        <span class="text-sm font-medium">📷 在光标处插图</span>
+      </button>
+      <p class="text-[10px] text-slate-400 max-w-[180px] text-right leading-tight">把光标放到要插图的位置，再点上方按钮；插入后点「💾 保存」生效</p>
+    </div>
+    {% endif %}
+  {% endif %}
+  {% if article.status in ("已审核", "审核未通过", "已排期", "已发布") %}
     {% if article.debate_brief or article.review_summary %}
       <details id="debate-records" hx-preserve class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" open>
         <summary class="text-xs font-medium text-slate-500 cursor-pointer">AI 辩论/评审记录</summary>
@@ -378,13 +514,13 @@
           {% if article.debate_brief %}
             <div>
               <div class="text-xs text-slate-400 mb-1">辩论综合简报（{{ article.debate_rounds }} 轮 × 4 角色）</div>
-              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.debate_brief }}</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.debate_brief | strip_markdown }}</div>
             </div>
           {% endif %}
           {% if article.review_summary %}
             <div>
               <div class="text-xs text-slate-400 mb-1">评审综合建议（{{ article.review_rounds }} 轮 × 4 角色）</div>
-              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.review_summary }}</div>
+              <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.review_summary | strip_markdown }}</div>
             </div>
           {% endif %}
           {% if records %}
@@ -456,6 +592,205 @@
           {% endif %}
         {% endif %}
       {% endfor %}
+    </div>
+
+    {# ── 审核结果展示（已审核/审核未通过）── #}
+    {% if article.status == "已审核" %}
+      <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm">
+        <div class="flex items-center gap-2 text-emerald-700 font-medium">
+          <span class="text-base">✅</span>
+          <span>审核通过</span>
+          {% if article.reviewed_at %}
+            <span class="ml-auto text-xs text-emerald-500 font-normal">{{ article.reviewed_at.strftime('%Y-%m-%d %H:%M') }}</span>
+          {% endif %}
+        </div>
+        {% if article.review_note %}
+          <div class="mt-2 text-xs text-emerald-600 whitespace-pre-wrap">{{ article.review_note }}</div>
+        {% endif %}
+        {% if level >= 1 %}
+          <form method="post" action="/writing/articles/{{ article.id }}/resubmit-review"
+                hx-post="/writing/articles/{{ article.id }}/resubmit-review"
+                hx-target="#detail-content"
+                hx-swap="outerHTML"
+                hx-confirm="撤回审核结果，重新进入待审核状态？"
+                class="mt-3">
+            <button type="submit"
+                    class="px-2 py-0.5 rounded text-xs font-medium border border-slate-300 text-slate-500 bg-white hover:bg-slate-50 transition">
+              ↩ 撤回，重新审核
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    {% elif article.status == "审核未通过" %}
+      <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm">
+        <div class="flex items-center gap-2 text-rose-700 font-medium">
+          <span class="text-base">❌</span>
+          <span>审核未通过</span>
+          {% if article.reviewed_at %}
+            <span class="ml-auto text-xs text-rose-400 font-normal">{{ article.reviewed_at.strftime('%Y-%m-%d %H:%M') }}</span>
+          {% endif %}
+        </div>
+        {% if article.review_note %}
+          <div class="mt-2">
+            <div class="text-xs text-rose-400 mb-1">未通过原因：</div>
+            <div class="text-xs text-rose-700 whitespace-pre-wrap bg-white/60 rounded px-3 py-2 border border-rose-100">{{ article.review_note }}</div>
+          </div>
+        {% endif %}
+        {% if level >= 1 %}
+          {# 可编辑正文（修改后重新提交审核）#}
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button type="button"
+                    onclick="window.location.href='/writing/articles/{{ article.id }}?edit=1'"
+                    class="px-3 py-1 rounded text-xs font-medium border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 transition">
+              ✏️ 修改正文后重新提交
+            </button>
+            <form method="post" action="/writing/articles/{{ article.id }}/resubmit-review"
+                  hx-post="/writing/articles/{{ article.id }}/resubmit-review"
+                  hx-target="#detail-content"
+                  hx-swap="outerHTML"
+                  hx-confirm="直接重新提交审核（不改正文）？">
+              <button type="submit"
+                      class="px-3 py-1 rounded text-xs font-medium border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 transition">
+                ↻ 不改正文，重新提交
+              </button>
+            </form>
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}
+  {% endif %}
+
+  {# ── 待审核：AI 审核综合意见 + 审核过程回顾 ── #}
+  {% if article.status == "待审核" and article.ai_review_summary %}
+    {% set ai_review_colors = [
+      ('bg-rose-50 border-rose-100', 'bg-rose-500', 'text-rose-700'),
+      ('bg-cyan-50 border-cyan-100', 'bg-cyan-500', 'text-cyan-700'),
+      ('bg-indigo-50 border-indigo-100', 'bg-indigo-500', 'text-indigo-700'),
+      ('bg-teal-50 border-teal-100', 'bg-teal-500', 'text-teal-700'),
+      ('bg-orange-50 border-orange-100', 'bg-orange-500', 'text-orange-700'),
+    ] %}
+    {% set ai_records = records | selectattr('phase', 'equalto', 'ai_review') | list %}
+    {% set intros = ai_records | selectattr('round_num', 'equalto', 0) | list %}
+    {% set ai_reviews = ai_records | selectattr('round_num', 'ge', 1) | list %}
+    {% set ns = namespace(role_colors={}) %}
+    {% for r in intros %}
+      {% set ns.role_colors = ns.role_colors | combine({r.role: ai_review_colors[loop.index0 % 5]}) %}
+    {% endfor %}
+
+    <details class="rounded-lg border border-violet-200 bg-violet-50/50 px-4 py-3" open>
+      <summary class="text-sm font-medium text-violet-700 cursor-pointer flex items-center gap-2">
+        <span class="text-base">🤖</span>
+        <span>AI 审核综合意见</span>
+        <span class="ml-auto text-xs text-violet-400 font-normal">仅供参考，最终决定由人工审核</span>
+      </summary>
+      <div class="mt-2 text-sm text-slate-700 whitespace-pre-wrap bg-white/60 rounded px-3 py-2 border border-violet-100">{{ article.ai_review_summary | strip_markdown }}</div>
+    </details>
+
+    {# 审核过程回顾（折叠） #}
+    {% if ai_records %}
+      <details class="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+        <summary class="text-sm font-medium text-slate-600 cursor-pointer flex items-center gap-2">
+          <span>📋</span>
+          <span>查看 AI 审核过程</span>
+          <span class="ml-auto text-xs text-slate-400 font-normal">{{ intros | length }} 个角色 · {{ ai_reviews | length }} 条发言</span>
+        </summary>
+        <div class="mt-3 space-y-2 max-h-[500px] overflow-y-auto pr-1">
+          {# 角色介绍 #}
+          {% if intros %}
+            <div class="text-xs text-slate-400 font-medium ml-12 mb-1">📋 审核角色</div>
+            {% for r in intros %}
+              {% set c = ns.role_colors[r.role] %}
+              <div class="flex gap-2 mb-2">
+                <div class="shrink-0 w-8 h-8 rounded-full {{ c[1] }} flex items-center justify-center text-sm">🤖</div>
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-medium {{ c[2] }} mb-0.5">{{ r.role }} <span class="text-slate-400 font-normal">· 审核角色</span></div>
+                  <div class="rounded-lg {{ c[0] }} border px-3 py-2 text-xs text-slate-600">关注点：{{ r.content }}</div>
+                </div>
+              </div>
+            {% endfor %}
+          {% endif %}
+          {# 审核发言 #}
+          {% if ai_reviews %}
+            <div class="text-xs text-slate-400 font-medium ml-12 mb-1 mt-3">🔍 审核发言</div>
+            {% for r in ai_reviews %}
+              {% set c = ns.role_colors[r.role] or ai_review_colors[0] %}
+              <div class="flex gap-2 mb-2">
+                <div class="shrink-0 w-8 h-8 rounded-full {{ c[1] }} flex items-center justify-center text-sm">🤖</div>
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-medium {{ c[2] }} mb-0.5">{{ r.role }}</div>
+                  <div class="rounded-lg {{ c[0] }} border px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap break-words">{{ r.content }}</div>
+                </div>
+              </div>
+            {% endfor %}
+          {% endif %}
+        </div>
+      </details>
+    {% endif %}
+  {% endif %}
+
+  {# ── 待审核：底部审核操作区 ── #}
+  {% if article.status == "待审核" and level >= 1 %}
+    <div x-data="{showReject: false, rejectNote: ''}"
+         class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="text-sm font-medium text-slate-700">📝 文章审核</div>
+        <div class="text-xs text-slate-400">审核通过 → 已审核；未通过需填写原因</div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {# 审核通过：直接提交 #}
+        <form method="post" action="/writing/articles/{{ article.id }}/review"
+              hx-post="/writing/articles/{{ article.id }}/review"
+              hx-target="#detail-content"
+              hx-swap="outerHTML"
+              hx-confirm="确认审核通过？"
+              class="inline">
+          <input type="hidden" name="decision" value="approve">
+          <button type="submit"
+                  class="px-4 py-2 rounded text-sm font-medium border border-emerald-400 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition">
+            ✅ 审核通过
+          </button>
+        </form>
+        {# 审核未通过：展开原因输入 #}
+        <button type="button"
+                @click="showReject = !showReject"
+                class="px-4 py-2 rounded text-sm font-medium border border-rose-300 text-rose-700 bg-rose-50 hover:bg-rose-100 transition">
+          ❌ 审核未通过
+        </button>
+        {# AI 审核：动态生成审核角色 → 单轮审核 → 总审核员汇总 #}
+        <form method="post" action="/writing/articles/{{ article.id }}/ai-review"
+              hx-post="/writing/articles/{{ article.id }}/ai-review"
+              hx-target="#detail-content"
+              hx-swap="outerHTML"
+              hx-confirm="启动 AI 审核？AI 会根据图文内容动态生成审核角色，各角色从自身领域视角审核后，由总审核员汇总意见并决定是否通过。"
+              class="inline">
+          <button type="submit"
+                  class="px-4 py-2 rounded text-sm font-medium border border-violet-300 text-violet-700 bg-violet-50 hover:bg-violet-100 transition">
+            🤖 AI 审核
+          </button>
+        </form>
+      </div>
+      {# 未通过原因输入区 #}
+      <div x-show="showReject" x-cloak x-transition
+           class="space-y-2">
+        <label class="block text-xs font-medium text-slate-600">未通过原因 <span class="text-rose-500">*</span></label>
+        <form method="post" action="/writing/articles/{{ article.id }}/review"
+              hx-post="/writing/articles/{{ article.id }}/review"
+              hx-target="#detail-content"
+              hx-swap="outerHTML"
+              @submit.prevent="if (!rejectNote.trim()) { alert('请填写未通过的原因'); return; } $el.querySelector('input[name=note]').value = rejectNote; htmx.trigger($el, 'submit');"
+              class="space-y-2">
+          <input type="hidden" name="decision" value="reject">
+          <input type="hidden" name="note" value="">
+          <textarea x-model="rejectNote"
+                    placeholder="请说明未通过的原因，作者修改后会看到这条备注..."
+                    rows="3"
+                    class="block w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-rose-400 focus:ring-1 focus:ring-rose-200 outline-none"></textarea>
+          <button type="submit"
+                  class="px-4 py-2 rounded text-sm font-medium border border-rose-400 text-white bg-rose-500 hover:bg-rose-600 transition">
+            确认未通过
+          </button>
+        </form>
+      </div>
     </div>
   {% endif %}
 

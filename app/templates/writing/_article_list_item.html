@@ -1,8 +1,8 @@
 {# 文章库简洁列表项：标题（新窗口看详情）+ 状态 + 操作。正在生成的带 HTMX 轮询刷新状态。#}
 {% from "components/ui.html" import chip, button %}
-{% set is_running = article.status in ("辩论中", "写作中", "重写中", "待配图") and not article.error_message %}
-{% set display_status = "生成中" if article.status in ("辩论中", "写作中", "重写中", "待配图") else article.status %}
-{% set chip_color = "rose" if article.status == "已删除" else ("amber" if display_status == "生成中" else "emerald") %}
+{% set is_running = article.status in ("辩论中", "写作中", "重写中", "待配图", "AI审核中") and not article.error_message %}
+{% set display_status = "生成中" if article.status in ("辩论中", "写作中", "重写中", "待配图", "AI审核中") else article.status %}
+{% set chip_color = "rose" if article.status in ("已删除", "审核未通过") else ("amber" if display_status == "生成中" else "emerald") %}
 <article id="article-row-{{ article.id }}"
          class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 flex flex-wrap items-center justify-between gap-3{% if is_running %} border-brand-200 bg-brand-50/30{% endif %}"
          {% if oob %}hx-swap-oob="beforeend:#article-list"{% endif %}

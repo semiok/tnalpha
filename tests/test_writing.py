@@ -1322,8 +1322,9 @@ def test_detail_page_shows_edit_button_when_pending_review(owner_client, fresh_d
     html = owner_client.get(f"/writing/articles/{aid}").text
     assert "编辑正文" in html
     assert "/edit-body" in html
-    assert "/insert-placeholder" in html
-    assert "图片占位" in html
+    # 浮动图片占位工具：独立 x-data 轻量实现
+    assert "[插图：待选择]" in html
+    assert "在光标处插图" in html
     assert 'data-seg' in html
 
 
@@ -1362,6 +1363,392 @@ def test_detail_page_no_edit_button_when_published(owner_client, fresh_db):
         aid = article.id
     html = owner_client.get(f"/writing/articles/{aid}").text
     assert "编辑正文" not in html
-    # 按钮文案只在待审核 + level>=1 时渲染
-    assert "图片占位" not in html
+    # 浮动插入按钮文案只在待审核 + level>=1 时渲染（JS 里的 alert 提示文字属合理存在，不在此断言）
+    assert ">图片占位<" not in html
     assert "点击选择图片" not in html
+
+
+# ── 审核流程测试 ──
+
+def _seed_pending_review_article(session: Session) -> tuple[int, int]:
+    """创建一篇待审核文章，返回 (article_id, campaign_id)。"""
+    _brand, campaign, topic = _seed_topic(session)
+    article = Article(
+        topic_id=topic.id, campaign_id=campaign.id, title="待审核稿件",
+        body="正文内容\n\n[插图：头图]\n\n结尾段", status="待审核",
+        image_url="https://img.example/a.png", platform="小红书",
+    )
+    session.add(article)
+    session.commit()
+    session.refresh(article)
+    return article.id, campaign.id
+
+
+def test_review_approve_changes_status_to_approved(owner_client, fresh_db):
+    """审核通过：待审核 → 已审核，reviewed_at 记录审核时间。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    r = owner_client.post(f"/writing/articles/{aid}/review",
+                           data={"decision": "approve"}, follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "已审核"
+        assert a.reviewed_at is not None
+        assert a.review_note == ""
+
+
+def test_review_reject_requires_note(owner_client, fresh_db):
+    """审核未通过但未填原因：返回 400，状态不变。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    r = owner_client.post(f"/writing/articles/{aid}/review",
+                          data={"decision": "reject", "note": ""},
+                          follow_redirects=False)
+    assert r.status_code == 400
+    with Session(fresh_db) as s:
+        assert s.get(Article, aid).status == "待审核"
+
+
+def test_review_reject_changes_status_and_records_note(owner_client, fresh_db):
+    """审核未通过 + 填原因：待审核 → 审核未通过，review_note 记录原因。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    r = owner_client.post(f"/writing/articles/{aid}/review",
+                           data={"decision": "reject", "note": "标题不够吸引人，需要重写"},
+                           follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "审核未通过"
+        assert a.review_note == "标题不够吸引人，需要重写"
+        assert a.reviewed_at is not None
+
+
+def test_review_only_allowed_when_pending(owner_client, fresh_db):
+    """只有待审核状态可以审核。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="已审核",
+            body="正文", status="已审核", image_url="https://img.example/a.png",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+    r = owner_client.post(f"/writing/articles/{aid}/review",
+                          data={"decision": "approve"}, follow_redirects=False)
+    assert r.status_code == 400
+
+
+def test_resubmit_review_returns_to_pending(owner_client, fresh_db):
+    """重新提交审核：审核未通过 → 待审核，清空 review_note。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="退回稿件",
+            body="正文", status="审核未通过", image_url="https://img.example/a.png",
+            review_note="标题不行",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+    r = owner_client.post(f"/writing/articles/{aid}/resubmit-review",
+                          follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "待审核"
+        assert a.review_note == ""
+
+
+def test_review_page_shows_review_buttons_when_pending(owner_client, fresh_db):
+    """待审核详情页底部显示审核按钮区。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "文章审核" in html
+    assert "审核通过" in html
+    assert "审核未通过" in html
+
+
+def test_review_page_shows_rejection_note_when_rejected(owner_client, fresh_db):
+    """审核未通过状态详情页显示未通过原因。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="被退回",
+            body="正文", status="审核未通过", image_url="https://img.example/a.png",
+            review_note="内容深度不足，建议补充案例",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "审核未通过" in html
+    assert "内容深度不足，建议补充案例" in html
+    assert "未通过原因" in html
+
+
+def test_review_requires_editor_level(publisher_client, fresh_db):
+    """publisher(0) 无审核权限：返回 403。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    r = publisher_client.post(f"/writing/articles/{aid}/review",
+                              data={"decision": "approve"}, follow_redirects=False)
+    assert r.status_code == 403
+
+
+# ── AI 审核流程测试 ──
+
+_AI_REVIEW_ROLES_TEXT = """角色名：合规审核员
+关注点：法律法规、广告法、平台内容规范
+
+角色名：事实核查员
+关注点：数据、引用、史料、时间线准确性
+
+角色名：版权审核员
+关注点：原创性、引用规范、图片来源
+"""
+
+
+def _patch_ai_review_llm(monkeypatch, *, roles_text=_AI_REVIEW_ROLES_TEXT, fail_summary=False):
+    """Mock LLM：ai_review_roles / ai_review / ai_review_summary 三个 task。"""
+    from app.modules.writing import debate as wdebate
+
+    def fake_text(prompt, task="default", module="default", **k):
+        if task == "ai_review_roles":
+            if isinstance(roles_text, Exception):
+                raise RuntimeError("roles gen failed")
+            return roles_text
+        if task == "ai_review":
+            return "【审核结论】通过\n【理由】内容合规，未发现明显问题。\n【具体问题】未发现问题"
+        if task == "ai_review_summary":
+            if fail_summary:
+                raise RuntimeError("summary gen failed")
+            return "## 总体结论\n通过\n\n## 通过理由\n内容合规，无广告法违规\n\n## 不通过原因\n无\n\n## 各角色发现的问题\n合规审核员：无问题（低）\n\n## 修改建议\n无需修改\n\n## 风险评估\n合规风险：低"
+        return "默认输出"
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    # debate.py 引用的是同一 app.core.llm 模块，但保险起见也 patch debate 模块的引用
+    monkeypatch.setattr(wdebate.llm, "generate_text", fake_text)
+
+
+def test_ai_review_starts_and_completes(owner_client, fresh_db, monkeypatch):
+    """AI审核：待审核 → AI审核中 →（完成）→ 待审核 + ai_review_summary。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    r = owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "待审核"
+        assert a.ai_review_summary != ""
+        assert "总体结论" in a.ai_review_summary
+        assert "通过理由" in a.ai_review_summary
+
+
+def test_ai_review_persists_role_intros(owner_client, fresh_db, monkeypatch):
+    """AI审核生成角色后持久化角色介绍（round_num=0），用户可看到角色身份和关注点。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        intros = s.exec(
+            select(DebateRecord).where(
+                DebateRecord.article_id == aid, DebateRecord.phase == "ai_review",
+                DebateRecord.round_num == 0,
+            ).order_by(DebateRecord.id)
+        ).all()
+        assert len(intros) == 3  # 3 个角色介绍
+        # 角色介绍内容是关注点
+        assert "法律法规" in intros[0].content
+        assert "数据" in intros[1].content
+        assert "原创性" in intros[2].content
+
+
+def test_ai_review_creates_dynamic_role_records(owner_client, fresh_db, monkeypatch):
+    """AI审核单轮 → 3 角色 → 3 条角色介绍 + 3 条审核发言 = 6 条记录。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        records = s.exec(
+            select(DebateRecord).where(
+                DebateRecord.article_id == aid, DebateRecord.phase == "ai_review"
+            ).order_by(DebateRecord.id)
+        ).all()
+        assert len(records) == 6  # 3 介绍 + 3 发言
+        # 角色名来自 LLM 生成（动态，非固定 key）
+        role_names = {r.role for r in records}
+        assert "合规审核员" in role_names
+        assert "事实核查员" in role_names
+        # 审核发言包含结构化结论
+        review_records = [r for r in records if r.round_num >= 1]
+        assert all("审核结论" in r.content for r in review_records)
+        # 单轮：所有发言 round_num == 1
+        assert all(r.round_num == 1 for r in review_records)
+
+
+def test_ai_review_only_allowed_when_pending(owner_client, fresh_db):
+    """非待审核状态启动 AI审核 返回 400。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="已审核",
+            body="正文", status="已审核", image_url="https://img.example/a.png",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+    r = owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    assert r.status_code == 400
+
+
+def test_ai_review_requires_editor_level(publisher_client, fresh_db):
+    """publisher(0) 无 AI审核权限：返回 403。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    r = publisher_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    assert r.status_code == 403
+
+
+def test_ai_review_llm_failure_degrades_gracefully(owner_client, fresh_db, monkeypatch):
+    """所有 LLM 调用失败 → 仍优雅完成：回退内置角色 + [审核失败] + 回退综合意见。"""
+    _patch_threading(monkeypatch)
+    from app.modules.writing import debate as wdebate
+
+    def fake_text(prompt, task="default", module="default", **k):
+        raise RuntimeError("LLM unavailable")
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    monkeypatch.setattr(wdebate.llm, "generate_text", fake_text)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        # 优雅降级：状态回到待审核，无 error_message（设计如此——不中断整体）
+        assert a.status == "待审核"
+        assert a.error_message == ""
+        # 综合意见为回退文案
+        assert "AI 审核综合失败" in a.ai_review_summary
+        # 审核记录：3 介绍（回退内置角色，含关注点）+ 3 发言失败
+        records = s.exec(
+            select(DebateRecord).where(
+                DebateRecord.article_id == aid, DebateRecord.phase == "ai_review"
+            ).order_by(DebateRecord.id)
+        ).all()
+        assert len(records) == 6  # 3 介绍 + 3 发言
+        intros = [r for r in records if r.round_num == 0]
+        reviews = [r for r in records if r.round_num >= 1]
+        assert len(intros) == 3
+        assert len(reviews) == 3
+        # 介绍记录有关注点文本
+        assert all(r.content for r in intros)
+        # 发言记录全部失败
+        assert all(r.content == "[审核失败]" for r in reviews)
+
+
+def test_ai_review_falls_back_to_builtin_roles_on_failure(owner_client, fresh_db, monkeypatch):
+    """角色生成失败 → 回退内置 3 角色，审核正常进行。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch, roles_text=RuntimeError("roles failed"))
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        records = s.exec(
+            select(DebateRecord).where(
+                DebateRecord.article_id == aid, DebateRecord.phase == "ai_review"
+            )
+        ).all()
+        assert len(records) == 6  # 3 介绍 + 3 发言（回退内置 3 角色）
+        role_names = {r.role for r in records}
+        assert "合规审核员" in role_names  # 内置角色
+
+
+def test_ai_review_clears_old_records_on_rerun(owner_client, fresh_db, monkeypatch):
+    """重新 AI审核 → 清理旧 ai_review 记录，不残留。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    # 第一次审核
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        first_count = len(s.exec(
+            select(DebateRecord).where(
+                DebateRecord.article_id == aid, DebateRecord.phase == "ai_review"
+            )
+        ).all())
+    assert first_count == 6  # 3 介绍 + 3 发言
+    # 第二次审核（重新审核）
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        second_count = len(s.exec(
+            select(DebateRecord).where(
+                DebateRecord.article_id == aid, DebateRecord.phase == "ai_review"
+            )
+        ).all())
+    assert second_count == 6  # 旧记录被清理，仍为 6 条
+
+
+def test_ai_review_page_shows_summary_when_completed(owner_client, fresh_db):
+    """待审核 + ai_review_summary → 详情页显示 AI 审核综合意见（含通过/不通过原因）。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="已AI审核",
+            body="正文", status="待审核", image_url="https://img.example/a.png",
+            ai_review_summary="## 总体结论\n通过\n\n## 通过理由\n内容合规\n\n## 不通过原因\n无",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "AI 审核综合意见" in html
+    assert "总体结论" in html  # strip_markdown 去掉 ## 后保留文本
+    assert "通过理由" in html
+    assert "不通过原因" in html
+
+
+def test_ai_review_page_shows_reviewing_state(owner_client, fresh_db):
+    """AI审核中状态详情页展示审核过程：角色介绍 + 审核发言。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="审核中",
+            body="正文内容", status="AI审核中", image_url="https://img.example/a.png",
+        )
+        s.add(article); s.commit(); s.refresh(article)
+        aid = article.id
+        # 角色介绍（round_num=0）
+        s.add(DebateRecord(
+            article_id=aid, phase="ai_review", round_num=0,
+            role="合规审核员", content="法律法规、广告法、平台内容规范",
+        ))
+        # 审核发言（round_num=1）
+        s.add(DebateRecord(
+            article_id=aid, phase="ai_review", round_num=1,
+            role="合规审核员", content="【审核结论】通过\n【理由】内容合规。",
+        ))
+        s.commit()
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "AI 审核进行中" in html
+    assert "合规审核员" in html
+    # 角色介绍展示
+    assert "审核角色" in html
+    assert "关注点" in html
+    assert "法律法规" in html
+    # 审核发言展示
+    assert "审核结论" in html
+
+
+def test_ai_review_button_shown_when_pending(owner_client, fresh_db):
+    """待审核详情页底部显示 AI审核按钮。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "AI 审核" in html or "AI审核" in html

@@ -12,7 +12,7 @@ def _now() -> datetime:
     return datetime.now()
 
 
-ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图", "待审核", "已排期", "已发布", "已删除")
+ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图", "待审核", "AI审核中", "已审核", "审核未通过", "已排期", "已发布", "已删除")
 
 # 发布平台选项
 PLATFORMS = ("小红书", "微信公众号")
@@ -63,6 +63,10 @@ class Article(SQLModel, table=True):
     # 发布平台 & 目标字数
     platform: str = ""           # "小红书" | "微信公众号" | ""
     word_count: int = 0          # 目标字数（0=不限）
+    # 审核
+    review_note: str = ""        # 审核备注（审核未通过时填写原因；通过时可选备注）
+    reviewed_at: datetime | None = None  # 审核时间（首次审核时记录，不覆盖）
+    ai_review_summary: str = ""  # AI 审核综合意见（动态角色审核完成后生成）
 
 
 class DebateRecord(SQLModel, table=True):

@@ -58,7 +58,7 @@ def knowledge_context_block(ctx: KnowledgeContext, writing_experience: str = "")
 
 
 def clean_llm_output(text: str) -> str:
-    """剥离模型思考段 + 代码围栏。routes.py 也复用此函数。"""
+    """剥离模型思考段 + 代码围栏 + 常见 Markdown 标记。routes.py 也复用此函数。"""
     t = (text or "").strip()
     changed = True
     while changed:
@@ -81,7 +81,32 @@ def clean_llm_output(text: str) -> str:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         t = "\n".join(lines).strip()
-    return t
+    # 清理常见 Markdown 标记（LLM 习惯性输出，纯文本渲染时显示为乱码）
+    import re
+    # 统一换行：\r\n → \n
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    # 加粗/斜体：**text** / __text__ / *text* / _text_ → text
+    t = re.sub(r'\*\*(.+?)\*\*', r'\1', t)
+    t = re.sub(r'__(.+?)__', r'\1', t)
+    t = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'\1', t)
+    t = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', t)
+    # 行级标题：## 标题 / ### 标题 → 标题
+    t = re.sub(r'(?m)^#{1,6}\s+', '', t)
+    # 水平分隔线：--- / *** / ___（独占一行）→ 移除
+    t = re.sub(r'(?m)^[-*_]{3,}\s*$', '', t)
+    # 行内代码：`code` → code
+    t = re.sub(r'`([^`]+)`', r'\1', t)
+    # 引用：> text → text
+    t = re.sub(r'(?m)^>\s?', '', t)
+    # 无序列表标记：- / * / + 开头 → 移除标记
+    t = re.sub(r'(?m)^[\s]*[-*+]\s+', '', t)
+    # 有序列表标记：1. 2. → 移除数字
+    t = re.sub(r'(?m)^[\s]*\d+\.\s+', '', t)
+    # 链接：[text](url) → text
+    t = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', t)
+    # 清理多余空行（3+ 连续换行 → 2 个）
+    t = re.sub(r'\n{3,}', '\n\n', t)
+    return t.strip()
 
 
 def _format_debate_history(records: list[DebateRecord], phase: str, up_to_round: int) -> str:
@@ -289,4 +314,222 @@ def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
 标题：...
 
 正文：...
+
+【输出格式硬约束】
+1. 纯文本输出，禁止任何 Markdown 标记：不要用 **加粗**、## 标题、--- 分隔线、`代码块`、> 引用 等。
+2. 用中文标点和空行分段，不要用 Markdown 语法制造视觉层次。
+3. 换行用单个 \\n，段落之间空一行；不要用 \\r\\n。
+4. [插图：...] 标记只能放在完整段落之间，禁止插到句子中间或段落内部。
+5. 直接输出正文，不要输出「正文：」之外的解释性文字。
 """
+
+
+# ── AI 审核：动态角色 + 合规/真实性审核 ──
+
+_AI_REVIEW_ROLE_RE = None  # 延迟编译
+
+
+def _parse_ai_review_roles(text: str) -> list[tuple[str, str]]:
+    """解析 LLM 输出为 [(角色名, 关注点), ...]。"""
+    import re
+    global _AI_REVIEW_ROLE_RE
+    if _AI_REVIEW_ROLE_RE is None:
+        _AI_REVIEW_ROLE_RE = re.compile(r"角色名[：:](.+?)[\n。；;]")
+    lines = (text or "").splitlines()
+    roles: list[tuple[str, str]] = []
+    # 找所有「角色名：」行
+    for i, ln in enumerate(lines):
+        ln_s = ln.strip()
+        if not ln_s.startswith(("角色名：", "角色名:")):
+            continue
+        name = ln_s.split("：", 1)[-1].split(":", 1)[-1].strip()
+        if not name:
+            continue
+        # 往后找「关注点：」行
+        focus_lines: list[str] = []
+        for nxt in lines[i + 1:]:
+            nxt_s = nxt.strip()
+            if nxt_s.startswith(("角色名：", "角色名:")):
+                break
+            if nxt_s.startswith(("关注点：", "关注点:")):
+                focus_lines.append(nxt_s.split("：", 1)[-1].split(":", 1)[-1].strip())
+            elif focus_lines and nxt_s:
+                focus_lines.append(nxt_s)
+        focus = "；".join(f for f in focus_lines if f) if focus_lines else "合规性与事实准确性"
+        if name:
+            roles.append((name[:40], focus[:200]))
+    return roles
+
+
+def _generate_ai_review_roles(article: Article) -> list[tuple[str, str]]:
+    """调用 LLM 根据文章内容生成 3-5 个动态审核角色。
+
+    角色主要针对合规性、真实性等客观事实的不同方面。
+    每次生成的角色不固定（temperature 由模型决定）。
+    """
+    body_preview = (article.body or "")[:3000]
+    prompt = f"""你是审核角色生成器。请基于以下文章内容，生成 3-5 个差异化的审核角色，每个角色专注于合规性和真实性等客观事实的不同方面。
+
+【文章标题】{article.title}
+【发布平台】{article.platform or "未指定"}
+【文章正文】
+{body_preview}
+
+请生成 3-5 个审核角色，可从以下方向选择（也可根据文章内容特点新增其他客观事实方向）：
+- 合规审核（法律法规、广告法、平台规范）
+- 事实核查（数据、引用、史料、时间线准确性）
+- 版权审核（原创性、引用规范、图片来源）
+- 敏感内容审核（政治敏感、社会敏感、价值观）
+- 平台规范审核（符合发布平台的内容规范，如小红书/公众号）
+- 逻辑一致性审核（前后矛盾、因果谬误）
+
+严格按以下格式输出，每个角色之间用空行分隔，不要输出思考过程或其他内容：
+角色名：用一个短语概括这个角色
+关注点：这个角色主要审核什么（30-60字）
+"""
+    try:
+        raw = llm.generate_text(prompt, task="ai_review_roles", module="writing", fallback=False)
+    except RuntimeError:
+        # 回退：内置 3 个基础审核角色
+        return [
+            ("合规审核员", "法律法规、广告法、平台内容规范"),
+            ("事实核查员", "数据、引用、史料、时间线准确性"),
+            ("版权审核员", "原创性、引用规范、图片来源"),
+        ]
+    roles = _parse_ai_review_roles(raw)
+    if not roles:
+        return [
+            ("合规审核员", "法律法规、广告法、平台内容规范"),
+            ("事实核查员", "数据、引用、史料、时间线准确性"),
+        ]
+    return roles[:5]  # 最多 5 个角色
+
+
+def _ai_review_role_prompt(role_name: str, role_focus: str, article: Article) -> str:
+    body_preview = (article.body or "")[:3000]
+    platform_hint = ""
+    if article.platform == "小红书":
+        platform_hint = "本文面向小红书平台，需符合小红书内容规范（无医疗/金融违规、无虚假种草、无诱导分享）。"
+    elif article.platform == "微信公众号":
+        platform_hint = "本文面向微信公众号，需符合公众号内容规范（无违规推广、无不实信息、符合互联网新闻信息服务规定）。"
+    return f"""你是{role_name}。{role_focus}
+
+【文章标题】{article.title}
+【发布平台】{article.platform or "未指定"}
+{platform_hint}
+
+【文章正文】
+{body_preview}
+
+请从你的角色立场审核这篇文章，针对合规性和真实性等客观事实提出具体问题。
+
+严格按以下格式输出，不要输出思考过程或其他内容：
+【审核结论】通过 / 有条件通过 / 不通过
+【理由】说明你给出此结论的原因（50-150字）
+【具体问题】列出发现的具体问题（如无问题写"未发现问题"）
+
+全部回复{_DEBATE_CHARS}字以内。"""
+
+
+def run_ai_review(session: Session, article_id: int, article: Article) -> str:
+    """执行 AI 审核：动态生成审核角色 → 角色介绍 → 单轮审核 → 总审核员汇总。
+
+    每次生成的角色不固定，主要针对合规性和真实性等客观事实。
+    所有发言逐条落库（phase="ai_review"），用户可查看。
+    - round_num=0：角色介绍（关注点），供用户了解每个角色的身份
+    - round_num=1：各角色从自身领域视角分析图文，发表审核意见
+    最后由总审核员 AI 结合各方意见决定是否通过并给出评价。
+    LLM 失败时该角色发言记为"[审核失败]"，不中断整体。
+    """
+    # 1. 动态生成审核角色
+    roles = _generate_ai_review_roles(article)
+    # 清理该文章之前的 AI 审核记录（重新审核时）
+    old = session.exec(
+        select(DebateRecord).where(
+            DebateRecord.article_id == article_id,
+            DebateRecord.phase == "ai_review",
+        )
+    ).all()
+    for r in old:
+        session.delete(r)
+    session.commit()
+
+    # 2. 持久化角色介绍（round_num=0），让用户看到生成了哪些角色及身份
+    for role_name, role_focus in roles:
+        intro = DebateRecord(
+            article_id=article_id, phase="ai_review",
+            round_num=0, role=role_name, content=role_focus,
+        )
+        session.add(intro)
+    session.commit()
+
+    # 3. 单轮审核：各角色从自身领域视角分析图文，依次发言
+    for role_name, role_focus in roles:
+        prompt = _ai_review_role_prompt(role_name, role_focus, article)
+        try:
+            content = clean_llm_output(llm.generate_text(
+                prompt, task="ai_review", module="writing", fallback=False))
+        except RuntimeError:
+            content = "[审核失败]"
+        rec = DebateRecord(
+            article_id=article_id, phase="ai_review",
+            round_num=1, role=role_name, content=content,
+        )
+        session.add(rec)
+        session.commit()
+        session.refresh(rec)
+
+    # 4. 总审核员 AI 综合各方意见 → 决定是否通过 + 评价
+    all_records = session.exec(
+        select(DebateRecord).where(
+            DebateRecord.article_id == article_id, DebateRecord.phase == "ai_review"
+        ).order_by(DebateRecord.round_num, DebateRecord.id)
+    ).all()
+    return _synthesize_ai_review(all_records, article)
+
+
+def _synthesize_ai_review(records: list[DebateRecord], article: Article) -> str:
+    """综合 AI 审核记录 → 审核意见。"""
+    # 格式化审核历史：round_num=0 是角色介绍，round_num>=1 是审核发言
+    history_lines = []
+    for r in records:
+        if r.round_num == 0:
+            history_lines.append(f"【{r.role}】关注点：{r.content}")
+        else:
+            history_lines.append(f"【{r.role}】{r.content}")
+    history = "\n".join(history_lines)
+    prompt = f"""你是审核总监。基于以下各审核角色的意见，综合出一份审核意见，决定是否通过并给出评价。
+
+【文章标题】{article.title}
+【发布平台】{article.platform or "未指定"}
+【文章正文（前2000字）】
+{(article.body or "")[:2000]}
+
+【AI 审核记录】
+{history}
+
+请综合各角色的审核结论和发现的问题，输出一份结构化的审核意见。
+严格按以下结构输出，每个部分都要有内容，不要输出思考过程：
+
+## 总体结论
+[通过 / 有条件通过 / 不通过]
+
+## 通过理由
+（列出达标的方面，如果没有则写"无"）
+
+## 不通过原因
+（列出不达标、需要修改的方面，如果没有则写"无"）
+
+## 各角色发现的问题
+（按角色分组，标注严重程度：高/中/低）
+
+## 修改建议
+（针对不通过原因和问题给出具体修改建议）
+
+## 风险评估
+（合规风险、事实风险、版权风险等客观风险）"""
+    try:
+        return clean_llm_output(llm.generate_text(
+            prompt, task="ai_review_summary", module="writing", fallback=False))
+    except RuntimeError:
+        return "（AI 审核综合失败，请查看各角色审核记录）"

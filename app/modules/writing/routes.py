@@ -4,6 +4,7 @@
 """
 import threading
 import os
+import re
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -18,12 +19,44 @@ from app.modules.feedback.experience import experience_pack_text
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
-from app.modules.writing.debate import clean_llm_output, knowledge_context_block, rewrite_prompt, run_debate, run_review
+from app.modules.writing.debate import clean_llm_output, knowledge_context_block, rewrite_prompt, run_ai_review, run_debate, run_review
 from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, _now
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
-RUNNING_ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图")
+
+
+def _strip_markdown(text: str) -> str:
+    """Jinja2 过滤器：剥离 Markdown 标记，防止纯文本渲染时显示为乱码。"""
+    import re as _re
+    if not text:
+        return ""
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+    t = _re.sub(r'\*\*(.+?)\*\*', r'\1', t)
+    t = _re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'\1', t)
+    t = _re.sub(r'(?m)^#{1,6}\s+', '', t)
+    t = _re.sub(r'(?m)^[-*_]{3,}\s*$', '', t)
+    t = _re.sub(r'`([^`]+)`', r'\1', t)
+    t = _re.sub(r'(?m)^>\s?', '', t)
+    t = _re.sub(r'(?m)^[\s]*[-*+]\s+', '', t)
+    t = _re.sub(r'(?m)^[\s]*\d+\.\s+', '', t)
+    t = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', t)
+    t = _re.sub(r'\n{3,}', '\n\n', t)
+    return t.strip()
+
+
+templates.env.filters["strip_markdown"] = _strip_markdown
+
+
+def _jinja_combine(base: dict, extra: dict) -> dict:
+    """Jinja2 过滤器：合并两个 dict（后者覆盖前者），用于模板内动态构建角色→颜色映射。"""
+    out = dict(base or {})
+    out.update(extra or {})
+    return out
+
+
+templates.env.filters["combine"] = _jinja_combine
+RUNNING_ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图", "AI审核中")
 
 # 配图子线程互斥锁：防止同一文章并发跑多个 worker（用户双击「补生」等场景）
 _image_worker_locks: dict[int, threading.Lock] = {}
@@ -173,10 +206,12 @@ def _fetch_url_text(url: str, timeout: int = 20) -> str:
 @router.get("/writing")
 def writing_home(request: Request, session: Session = Depends(get_session)):
     status_filter = request.query_params.get("status", "全部")
-    # 筛选栏分组标签：4 个对外展示分组映射到实际 status 值
+    # 筛选栏分组标签：映射到实际 status 值
     STATUS_GROUPS = {
-        "生成中": ("辩论中", "写作中", "重写中", "待配图"),
+        "生成中": ("辩论中", "写作中", "重写中", "待配图", "AI审核中"),
         "待审核": ("待审核",),
+        "审核通过": ("已审核",),
+        "审核未通过": ("审核未通过",),
         "已删除": ("已删除",),
     }
     if status_filter not in (*STATUS_GROUPS, "全部"):
@@ -253,7 +288,7 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         "topic_articles": topic_articles,
         "status_filter": status_filter,
         "article_statuses": ARTICLE_STATUSES,
-        "status_filters": ("全部", "生成中", "待审核", "已删除"),
+        "status_filters": ("全部", "生成中", "待审核", "审核通过", "审核未通过", "已删除"),
         "styles": styles,
         "preset_styles": preset_styles,
         "style_sources": STYLE_SOURCES,
@@ -805,7 +840,7 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
 
 def _display_phase_for_article(article: Article) -> str | None:
     """根据 article 当前持久化状态推导页面应展示的阶段标签。"""
-    if article.status in ("辩论中", "写作中", "重写中"):
+    if article.status in ("辩论中", "写作中", "重写中", "AI审核中"):
         return article.status
     if article.status == "待审核" and article.review_rounds > 0 and not article.review_summary:
         return "评审中"
@@ -883,9 +918,22 @@ def _article_detail_fragment(request: Request, article: Article, topic: Topic,
             .order_by(DebateRecord.round_num, DebateRecord.id)
         ).all()
         ctx["display_phase"] = display_phase
+        # AI审核中：额外装载选中图 + 正文切片，供展示被审核的图文
+        if article.status == "AI审核中":
+            selected_imgs = session.exec(
+                select(ArticleImage).where(
+                    ArticleImage.article_id == article.id,
+                    ArticleImage.is_selected == True,
+                ).order_by(ArticleImage.slot_index)
+            ).all()
+            slots: dict[int, list[ArticleImage]] = {}
+            for img in selected_imgs:
+                slots.setdefault(img.slot_index, []).append(img)
+            ctx["slots"] = slots
+            ctx["body_segments"] = _split_body_by_slots(article.body, slots)
         return templates.TemplateResponse(request, "writing/_article_detail_content.html", ctx)
 
-    # 已排期/已发布：装载辩论/评审记录 + 选中的图用于图文混排展示（只读）
+    # 已审核/审核未通过/已排期/已发布：装载辩论/评审记录 + 选中的图用于图文混排展示（只读）
     ctx["records"] = session.exec(
         select(DebateRecord).where(DebateRecord.article_id == article.id)
         .order_by(DebateRecord.round_num, DebateRecord.id)
@@ -955,6 +1003,19 @@ def article_detail(article_id: int, request: Request, session: Session = Depends
             .order_by(DebateRecord.round_num, DebateRecord.id)
         ).all()
         ctx["display_phase"] = _display_phase_for_article(article)
+        # AI审核中：额外装载选中图 + 正文切片，供展示被审核的图文
+        if article.status == "AI审核中":
+            selected_imgs = session.exec(
+                select(ArticleImage).where(
+                    ArticleImage.article_id == article.id,
+                    ArticleImage.is_selected == True,
+                ).order_by(ArticleImage.slot_index)
+            ).all()
+            slots: dict[int, list[ArticleImage]] = {}
+            for img in selected_imgs:
+                slots.setdefault(img.slot_index, []).append(img)
+            ctx["slots"] = slots
+            ctx["body_segments"] = _split_body_by_slots(article.body, slots)
     else:
         # 已排期/已发布：装载辩论/评审记录 + 选中的图用于图文混排展示（只读）
         ctx["records"] = session.exec(
@@ -1031,6 +1092,131 @@ def delete_article(article_id: int, request: Request, session: Session = Depends
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
         return _article_list_item_fragment(request, article, topic, campaigns)
     return RedirectResponse("/writing", status_code=303)
+
+
+@router.post("/writing/articles/{article_id}/review")
+def review_article(article_id: int, request: Request,
+                   decision: str = Form(...), note: str = Form(""),
+                   session: Session = Depends(get_session)):
+    """审核文章：通过→「已审核」，未通过→「审核未通过」+ 原因。
+
+    decision=approve | reject；reject 时 note 必填。
+    审核时间 reviewed_at 首次审核时记录，不覆盖。
+    """
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "待审核":
+        raise HTTPException(400, "只有待审核状态可以审核")
+    decision = decision.strip().lower()
+    if decision not in ("approve", "reject"):
+        raise HTTPException(400, "审核结果只能是 approve 或 reject")
+    note = note.strip()
+    if decision == "reject" and not note:
+        raise HTTPException(400, "审核未通过时必须填写原因")
+    now = _now()
+    article.status = "已审核" if decision == "approve" else "审核未通过"
+    article.review_note = note
+    article.updated_at = now
+    if article.reviewed_at is None:
+        article.reviewed_at = now
+    session.add(article)
+    session.commit()
+    # HTMX 请求：返回更新后的详情片段
+    if request.headers.get("HX-Request") == "true":
+        topic = session.get(Topic, article.topic_id)
+        campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+        return _article_detail_fragment(request, article, topic, campaigns, session)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+@router.post("/writing/articles/{article_id}/resubmit-review")
+def resubmit_review(article_id: int, request: Request, session: Session = Depends(get_session)):
+    """重新提交审核：审核未通过 → 待审核（作者修改后重新提交）。"""
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "审核未通过":
+        raise HTTPException(400, "只有审核未通过状态可以重新提交审核")
+    article.status = "待审核"
+    article.review_note = ""
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
+    if request.headers.get("HX-Request") == "true":
+        topic = session.get(Topic, article.topic_id)
+        campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+        return _article_detail_fragment(request, article, topic, campaigns, session)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+@router.post("/writing/articles/{article_id}/ai-review")
+def start_ai_review(article_id: int, request: Request,
+                    session: Session = Depends(get_session)):
+    """启动 AI 审核：待审核 → AI审核中 →（完成）→ 待审核 + ai_review_summary。
+
+    后台线程执行：动态生成审核角色 → 单轮审核 → 总审核员汇总。
+    每个角色发言实时持久化，前端 HTMX 轮询展示。
+    """
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "待审核":
+        raise HTTPException(400, "只有待审核状态可以启动 AI 审核")
+    article.status = "AI审核中"
+    article.error_message = ""
+    article.ai_review_summary = ""
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
+    session.refresh(article)
+    # 启动后台线程
+    t = threading.Thread(
+        target=_run_ai_review_worker,
+        args=(article_id,),
+        daemon=True,
+    )
+    t.start()
+    if request.headers.get("HX-Request") == "true":
+        topic = session.get(Topic, article.topic_id)
+        campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
+        return _article_detail_fragment(request, article, topic, campaigns, session)
+    return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
+
+
+def _run_ai_review_worker(article_id: int) -> None:
+    """后台线程：AI 审核 → 综合意见 → 回到待审核。
+
+    独立 Session，失败写 error_message 并回到待审核。
+    """
+    from sqlmodel import Session as SMSession
+    with SMSession(db.engine) as s:
+        try:
+            article = s.get(Article, article_id)
+            if article is None:
+                return
+            summary = run_ai_review(s, article_id, article)
+            article.ai_review_summary = summary
+            article.status = "待审核"
+            article.error_message = ""
+            article.updated_at = _now()
+            s.add(article)
+            s.commit()
+        except Exception as e:
+            # 失败：回到待审核，记录错误
+            try:
+                article = s.get(Article, article_id)
+                if article is not None:
+                    article.status = "待审核"
+                    article.error_message = f"AI 审核失败：{e}"
+                    article.updated_at = _now()
+                    s.add(article)
+                    s.commit()
+            except Exception:
+                pass
 
 
 @router.post("/writing/articles/{article_id}/regenerate-images")
@@ -1587,6 +1773,13 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 标题：...
 
 正文：...
+
+【输出格式硬约束】
+1. 纯文本输出，禁止任何 Markdown 标记：不要用 **加粗**、## 标题、--- 分隔线、`代码块`、> 引用 等。
+2. 用中文标点和空行分段，不要用 Markdown 语法制造视觉层次。
+3. 换行用单个 \\n，段落之间空一行；不要用 \\r\\n。
+4. [插图：...] 标记只能放在完整段落之间，禁止插到句子中间或段落内部。
+5. 直接输出正文，不要输出「正文：」之外的解释性文字。
 """
 
 
@@ -1627,6 +1820,13 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 标题：...
 
 正文：...
+
+【输出格式硬约束】
+1. 纯文本输出，禁止任何 Markdown 标记：不要用 **加粗**、## 标题、--- 分隔线、`代码块`、> 引用 等。
+2. 用中文标点和空行分段，不要用 Markdown 语法制造视觉层次。
+3. 换行用单个 \\n，段落之间空一行；不要用 \\r\\n。
+4. [插图：...] 标记只能放在完整段落之间，禁止插到句子中间或段落内部。
+5. 直接输出正文，不要输出「正文：」之外的解释性文字。
 """
 
 
@@ -1827,8 +2027,11 @@ def _split_body_by_slots(body: str, slots: dict[int, list[ArticleImage]] | None 
     兼容 [插图：...]、[插图位：...]、[插图位置：...] 变体。
     返回 [{"type": "text", "text": "..."}, {"type": "slot", "slot_index": 0, "desc": "..."}] 交替序列。
     slot_index 从 0 递增，对应 ArticleImage.slot_index。
+
+    会修复 LLM 把标记插到句子中间的问题：若标记前的文本不以段落结束符结尾、
+    标记后的文本不以换行开头，视为句中插入，把标记移到该完整句子的末尾，
+    避免正文被切成碎片显示成"乱码"。
     """
-    import re
     pattern = re.compile(r'\[插图(?:位|位置)?[：:](.+?)\]')
     result: list[dict] = []
     last_end = 0
@@ -1852,7 +2055,57 @@ def _split_body_by_slots(body: str, slots: dict[int, list[ArticleImage]] | None 
             imgs = slots.get(idx) or []
             desc = next((img.slot_desc for img in imgs if img.slot_desc), "文章配图")
             result.append({"type": "slot", "slot_index": idx, "desc": desc})
+    # 修复"标记插在句子中间"：把被切断的碎片合并回完整段落，标记移到段落末尾。
+    result = _rejoin_split_sentences(result)
     return result
+
+
+def _rejoin_split_sentences(segs: list[dict]) -> list[dict]:
+    """合并被插图标记从句子中间切断的文本碎片。
+
+    判定"句中插入"：text 段不以段落结束符结尾 + 后续紧跟 slot + slot 后的 text 段
+    不以换行/新句开头。此时把前后 text 合并、slot 移到合并段之后。
+    迭代直到无可合并项。
+    """
+    # 段落结束符：句末标点、换行、省略号等
+    end_re = re.compile(r'[。！？!?…\n…]["」』"』)）]?$')
+    # 新句/新段开头：换行、引号开头、列表标记等
+    start_re = re.compile(r'^[\n"「『（(\-•]')
+
+    def _ends_paragraph(text: str) -> bool:
+        t = text.rstrip()
+        if not t:
+            return True
+        return bool(end_re.search(t[-1:] if len(t) == 1 else t[-2:]))
+
+    def _starts_paragraph(text: str) -> bool:
+        t = text.lstrip()
+        if not t:
+            return True
+        return bool(start_re.search(t[:1]))
+
+    out: list[dict] = list(segs)
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(out) - 2):
+            if out[i]["type"] != "text" or out[i + 1]["type"] != "slot" or out[i + 2]["type"] != "text":
+                continue
+            prev_text = out[i]["text"]
+            slot = out[i + 1]
+            next_text = out[i + 2]["text"]
+            # 标记前的文本以段落结束符结尾 → 标记在段落之间，正常，不合并
+            if _ends_paragraph(prev_text):
+                continue
+            # 标记后的文本以新段落开头 → 标记在段落边界，正常，不合并
+            if _starts_paragraph(next_text):
+                continue
+            # 句中插入：合并 prev + next 为一段，slot 移到合并段之后
+            merged = {"type": "text", "text": prev_text + next_text}
+            out[i:i + 3] = [merged, slot]
+            changed = True
+            break
+    return out
 
 
 def _image_prompt_for_slot(topic: Topic, ctx: KnowledgeContext, style: Style | None,
