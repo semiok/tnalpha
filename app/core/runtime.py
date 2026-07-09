@@ -1,4 +1,4 @@
-"""全站运行时开关——读写 DB(AppSetting)，定义者页面点击切换、持久保存。
+"""全站运行时开关——读写 DB(AppSetting)，通过维护接口切换、持久保存。
 
 `knowledge_writable()` 每次读 DB(动态引用 db.engine，测试可指向测试库)；
 DB 不可用/无表时回退 config 初始默认，保证不崩。

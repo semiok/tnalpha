@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="tnalpha", version=__version__, lifespan=lifespan)
+app = FastAPI(title="TN-Alpha", version=__version__, lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -41,7 +41,7 @@ async def require_login(request: Request, call_next):
     for module in auth.MODULES:
         setattr(request.state, f"can_write_{module}", auth.can_write_module(role, module))
         setattr(request.state, f"can_view_{module}", auth.can_view_module(role, module))
-    request.state.knowledge_writable = runtime.knowledge_writable()  # 开发/演示模式（DB 持久，右上角可切）
+    request.state.knowledge_writable = runtime.knowledge_writable()  # 开发/演示模式（DB 持久）
     request.state.version = __version__
     if request.url.path not in auth.PUBLIC_PATHS and role is None:
         return RedirectResponse("/login", status_code=303)

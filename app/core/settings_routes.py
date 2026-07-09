@@ -27,7 +27,7 @@ def _masked(key: str) -> str:
 
 @router.post("/settings/knowledge-writable")
 def toggle_knowledge_writable(request: Request):
-    """右上角「开发/演示」按钮：切换全站模式并持久到 DB，切完回首页看新模式。"""
+    """维护接口：切换全站开发/演示模式并持久到 DB，切完回首页看新模式。"""
     auth.require_level(request, 2)
     runtime.set_knowledge_writable(not runtime.knowledge_writable())
     return RedirectResponse("/", status_code=303)

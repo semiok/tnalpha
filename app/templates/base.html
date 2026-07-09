@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}tnalpha{% endblock %}</title>
+  <title>{% block title %}TN-Alpha{% endblock %}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     // ── 设计 Token（全站唯一来源，改这里全局生效，见 DESIGN.md）──
@@ -17,18 +17,10 @@
 </head>
 <body class="bg-slate-100 text-slate-800">
   <header class="bg-white border-b border-slate-200 px-5 py-3 flex items-center gap-3 sticky top-0 z-20">
-    <a href="/" class="w-8 h-8 rounded-lg bg-brand-600 text-white grid place-items-center font-bold">t</a>
-    <div class="font-bold">tnalpha <span class="text-slate-400 font-normal text-sm">· 内容生产协作平台</span></div>
+    <a href="/" class="w-8 h-8 rounded-lg bg-brand-600 text-white grid place-items-center font-bold text-xs">TN</a>
+    <div class="font-bold">TN-Alpha <span class="text-slate-400 font-normal text-sm">· AI 内容协作平台</span></div>
     {% if request.state.version is defined %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 font-mono">v{{ request.state.version }}</span>{% endif %}
     <div class="ml-auto flex items-center gap-3 text-xs">
-      {% if request.state.can_write_knowledge is defined and request.state.can_write_knowledge %}
-      <form method="post" action="/settings/knowledge-writable" class="inline">
-        <button type="submit" title="切换 开发/演示 模式（全站，点击即切、持久保存到本环境）"
-          class="px-2 py-1 rounded font-medium {{ 'bg-emerald-100 text-emerald-700' if request.state.knowledge_writable else 'bg-amber-100 text-amber-700' }} hover:opacity-80">
-          {{ '🔓 开发模式' if request.state.knowledge_writable else '👁 演示模式' }} · 点击切换
-        </button>
-      </form>
-      {% endif %}
       {% if request.state.can_model_config is defined and request.state.can_model_config %}
       <a href="/settings/llm" class="text-slate-500 hover:text-brand-600">模型配置</a>
       {% endif %}

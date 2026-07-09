@@ -277,8 +277,11 @@ def test_toggle_requires_owner(editor_client):
     assert editor_client.post("/settings/knowledge-writable").status_code == 403
 
 
-def test_toggle_button_shown_to_owner(owner_client):
-    assert "点击切换" in owner_client.get("/").text            # 顶栏切换按钮（开发模式 base.html）
+def test_toggle_button_hidden_from_owner(owner_client):
+    home = owner_client.get("/").text
+    assert "点击切换" not in home
+    assert "开发模式" not in home
+    assert "演示模式" not in home
 
 
 def test_upload_extracts_text_and_analysis_uses_it(owner_client, fresh_db):
