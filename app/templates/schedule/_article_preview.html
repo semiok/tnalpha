@@ -1,6 +1,6 @@
 {% from "components/ui.html" import chip %}
 <div class="fixed inset-0 z-40 bg-black/30 grid place-items-center" onclick="if(event.target===this)tnCloseModal()">
-  <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[88vh] overflow-hidden m-4 flex flex-col">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[88vh] overflow-hidden m-4 flex flex-col">
     <div class="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-100">
       <div class="min-w-0">
         <div class="font-semibold text-slate-800">{{ article.title }}</div>
@@ -8,9 +8,18 @@
           <div class="text-xs text-slate-400 mt-1 truncate">来源选题：{{ topic.title }}</div>
         {% endif %}
       </div>
-      <button type="button" onclick="tnCloseModal()" class="text-slate-400 hover:text-slate-600">✕</button>
+      <div class="flex shrink-0 items-center gap-2">
+        <button type="button"
+                onclick='navigator.clipboard.writeText({{ copy_text|tojson }}).then(()=>tnToast("全文已复制"))'
+                class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700">复制全文</button>
+        {% if images %}
+        <a href="/schedule/articles/{{ article.id }}/images.zip"
+           class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium hover:bg-slate-200">下载全部图片</a>
+        {% endif %}
+        <button type="button" onclick="tnCloseModal()" class="text-slate-400 hover:text-slate-600">✕</button>
+      </div>
     </div>
-    <div class="overflow-auto px-5 py-4 space-y-3 text-sm">
+    <div class="overflow-auto px-5 py-4 space-y-5 text-sm">
       <div class="flex flex-wrap gap-2">
         {{ chip(article.status, "emerald" if article.status == "已审核" else "slate") }}
         {% if article.platform %}{{ chip(article.platform, "brand") }}{% endif %}
@@ -22,10 +31,27 @@
           <div class="text-slate-600 whitespace-pre-wrap">{{ topic.outline }}</div>
         </div>
       {% endif %}
-      {% if article.body %}
+      {% if images %}
         <div>
-          <div class="text-xs text-slate-400 mb-1">正文</div>
-          <div class="whitespace-pre-wrap leading-6 text-slate-700">{{ article.body }}</div>
+          <div class="text-xs text-slate-400 mb-2">配图</div>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {% for image in images %}
+            <a href="{{ image.url }}" target="_blank" class="group rounded-lg border border-slate-100 bg-slate-50 overflow-hidden">
+              <img src="{{ image.url }}" alt="{{ image.label }}" class="w-full aspect-square object-cover bg-slate-100">
+              <div class="px-2 py-1.5 text-[11px] text-slate-500 truncate group-hover:text-brand-600">{{ image.label }}</div>
+            </a>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+      {% if publish_body %}
+        <div class="rounded-xl border border-slate-100 bg-white px-4 py-4">
+          <div class="text-xs text-slate-400 mb-2">发布正文</div>
+          <article class="prose prose-sm max-w-none text-slate-700">
+            {% for block in publish_body.split('\n\n') %}
+              {% if block.strip() %}<p class="mb-3 leading-7 whitespace-pre-wrap">{{ block.strip() }}</p>{% endif %}
+            {% endfor %}
+          </article>
         </div>
       {% endif %}
       {% if article.image_prompt %}

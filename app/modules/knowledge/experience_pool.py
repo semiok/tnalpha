@@ -14,6 +14,16 @@ class ExperiencePack:
     label: str
     pool_topic: PoolTopic
     article_count: int
+    articles: list["ExperiencePackArticle"]
+
+
+@dataclass
+class ExperiencePackArticle:
+    title: str
+    platform: str
+    performance_level: str
+    metric_line: str
+    entries: list[FeedbackExperience]
 
 
 def _metric_line(slot: ScheduleSlot | None, metric: ScheduleMetric | None) -> str:
@@ -75,6 +85,39 @@ def _active_entries(session: Session, brand_id: int, campaign_id: int | None) ->
         )
         .order_by(FeedbackExperience.source_slot_id.desc(), FeedbackExperience.experience_type)
     ).all()
+
+
+def _pack_articles(session: Session, entries: list[FeedbackExperience]) -> list[ExperiencePackArticle]:
+    grouped: dict[str, list[FeedbackExperience]] = {}
+    for entry in entries:
+        if entry.source_slot_id:
+            key = f"slot:{entry.source_slot_id}"
+        elif entry.article_id:
+            key = f"article:{entry.article_id}"
+        else:
+            key = "manual"
+        grouped.setdefault(key, []).append(entry)
+
+    articles: list[ExperiencePackArticle] = []
+    for key, rows in grouped.items():
+        first = rows[0]
+        slot = session.get(ScheduleSlot, first.source_slot_id) if first.source_slot_id else None
+        metric = session.exec(select(ScheduleMetric).where(ScheduleMetric.slot_id == first.source_slot_id)).first() if first.source_slot_id else None
+        article = None
+        if slot and slot.article_id:
+            article = session.get(Article, slot.article_id)
+        elif first.article_id:
+            article = session.get(Article, first.article_id)
+        title = article.title if article else first.title
+        platform = slot.platform if slot else first.platform
+        articles.append(ExperiencePackArticle(
+            title=title,
+            platform=platform or "通用",
+            performance_level=first.performance_level or "数据不足",
+            metric_line=_metric_line(slot, metric),
+            entries=sorted(rows, key=lambda row: row.experience_type),
+        ))
+    return articles
 
 
 def sync_brand_experience_pack(session: Session, brand_id: int) -> PoolTopic | None:
@@ -173,10 +216,12 @@ def sync_all_campaign_experience_packs(session: Session, brand_id: int | None = 
         if brand_topic is not None and brand_topic.content != "暂无已总结的发布反馈。":
             brand_entries = _active_entries(session, brand_id, None)
             if brand_entries:
+                articles = _pack_articles(session, brand_entries)
                 packs.append(ExperiencePack(
                     label="品牌常青",
                     pool_topic=brand_topic,
-                    article_count=len({entry.source_slot_id or entry.article_id for entry in brand_entries}),
+                    article_count=len(articles),
+                    articles=articles,
                 ))
     for campaign in campaigns:
         topic = sync_campaign_experience_pack(session, campaign.id)
@@ -185,11 +230,12 @@ def sync_all_campaign_experience_packs(session: Session, brand_id: int | None = 
         entries = _active_entries(session, campaign.brand_id, campaign.id)
         if not entries:
             continue
-        article_count = len({entry.source_slot_id or entry.article_id for entry in entries})
+        articles = _pack_articles(session, entries)
         packs.append(ExperiencePack(
             label=campaign.name,
             pool_topic=topic,
-            article_count=article_count,
+            article_count=len(articles),
+            articles=articles,
         ))
     return packs
 

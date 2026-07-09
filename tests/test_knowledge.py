@@ -179,6 +179,20 @@ def test_pool_file_download(owner_client, fresh_db):
     assert r.status_code == 200 and b"hello-pool" in r.content
 
 
+def test_pool_material_delete_removes_topic_and_refs(owner_client, fresh_db):
+    from sqlmodel import Session, select
+    from app.modules.knowledge.models import CampaignPoolRef, PoolTopic
+    brand_id = _create_brand(owner_client)
+    cid = _create_campaign(owner_client, brand_id)
+    tid = _create_pool_topic(owner_client, fresh_db, "可删资料")
+    owner_client.post(f"/campaigns/{cid}/pool-refs", data={"pool_topic_id": tid})
+    r = owner_client.post(f"/pool/{tid}/delete", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/pool"
+    with Session(fresh_db) as s:
+        assert s.get(PoolTopic, tid) is None
+        assert not s.exec(select(CampaignPoolRef).where(CampaignPoolRef.pool_topic_id == tid)).all()
+
+
 # ── 数据池 增查 ──
 
 def test_pool_add_and_list(owner_client):
@@ -519,6 +533,9 @@ def test_campaign_experience_pack_shows_in_pool_and_can_be_inherited(owner_clien
     assert pool_page.status_code == 200
     assert "经验包" in pool_page.text
     assert "丝路有多长" in pool_page.text
+    assert "在边塞练字的人" in pool_page.text
+    assert "正向经验" in pool_page.text and "反向风险" in pool_page.text
+    assert "删除经验包" in pool_page.text
     assert "2条经验" not in pool_page.text
     home = owner_client.get("/")
     assert "继承历史经验包" in home.text
@@ -540,6 +557,14 @@ def test_campaign_experience_pack_shows_in_pool_and_can_be_inherited(owner_clien
         assert ref is not None
         ctx = KnowledgeContext.load(s, brand_id, new_cid)
         assert any("新 campaign 生成选题时优先复用" in item for item in ctx.pool_experiences)
+
+    deleted = owner_client.post(f"/pool/{pack_id}/delete", follow_redirects=False)
+    assert deleted.status_code == 303 and deleted.headers["location"] == "/pool"
+    with Session(fresh_db) as s:
+        assert s.get(PoolTopic, pack_id) is None
+        assert not s.exec(select(CampaignPoolRef).where(CampaignPoolRef.pool_topic_id == pack_id)).all()
+        entries = s.exec(select(FeedbackExperience).where(FeedbackExperience.campaign_id == old_cid)).all()
+        assert entries and all(not entry.is_active for entry in entries)
 
 
 def test_brand_evergreen_experience_pack_shows_in_pool(owner_client, fresh_db):

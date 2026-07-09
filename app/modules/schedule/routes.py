@@ -1,20 +1,25 @@
 """④排期版：审核通过文章 → 发布周排期 → 发布回填。"""
+import io
+import os
+import re
+import urllib.request
+import zipfile
 from datetime import date, datetime
-from urllib.parse import urlencode
+from urllib.parse import quote, unquote, urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlmodel import Session, select
 from starlette.requests import Request
 
-from app.core import auth
+from app.core import auth, config
 from app.core.db import get_session
 from app.core.templates import create_templates
 from app.modules.knowledge.models import Campaign
 from app.modules.schedule import schedule
 from app.modules.schedule.models import ScheduleSlot, ScheduleWeek
 from app.modules.topic.models import Topic
-from app.modules.writing.models import Article
+from app.modules.writing.models import Article, ArticleImage
 
 router = APIRouter()
 templates = create_templates()
@@ -42,6 +47,63 @@ def _scope_from_form(raw: str | None) -> int | None:
     if raw in (None, "", "brand"):
         return None
     return int(raw)
+
+
+def _public_image_url(url_or_path: str) -> str:
+    value = (url_or_path or "").strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://", "data:", "/writing/uploads/", "/static/")):
+        return value
+    real = os.path.realpath(value)
+    data_root = os.path.realpath(config.DATA_DIR)
+    if real == data_root or real.startswith(data_root + os.sep):
+        rel = os.path.relpath(real, data_root)
+        return f"/writing/uploads/{quote(rel, safe='/')}"
+    return value
+
+
+def _article_images(session: Session, article: Article) -> list[dict[str, str]]:
+    rows = session.exec(
+        select(ArticleImage)
+        .where(ArticleImage.article_id == article.id, ArticleImage.is_selected == True)
+        .order_by(ArticleImage.slot_index, ArticleImage.id)
+    ).all()
+    seen: set[str] = set()
+    images: list[dict[str, str]] = []
+    for row in rows:
+        url = _public_image_url(row.image_url)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        images.append({"url": url, "label": row.slot_desc or row.prompt or f"配图 {row.slot_index + 1}"})
+    fallback = _public_image_url(article.image_url)
+    if fallback and fallback not in seen:
+        images.insert(0, {"url": fallback, "label": article.image_prompt or "主图"})
+    return images
+
+
+def _publish_body(body: str) -> str:
+    text = re.sub(r"\n?\[插图(?:位|位置)?[：:].+?\]\n?", "\n\n", body or "")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _download_image_bytes(url: str) -> tuple[bytes, str]:
+    if url.startswith("/writing/uploads/"):
+        rel = unquote(url.removeprefix("/writing/uploads/"))
+        path = os.path.realpath(os.path.join(config.DATA_DIR, rel))
+        data_root = os.path.realpath(config.DATA_DIR)
+        if not (path == data_root or path.startswith(data_root + os.sep)) or not os.path.exists(path):
+            raise FileNotFoundError(url)
+        with open(path, "rb") as fh:
+            return fh.read(), os.path.basename(path)
+    if url.startswith(("http://", "https://")):
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; TN-Alpha/1.0)"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            filename = os.path.basename(resp.url.split("?", 1)[0]) or "image"
+            return resp.read(), filename
+    raise FileNotFoundError(url)
 
 
 def _redirect(campaign_id: str | None = None) -> RedirectResponse:
@@ -442,8 +504,45 @@ def article_preview(article_id: int, request: Request, session: Session = Depend
     if article is None:
         raise HTTPException(404, "文章不存在")
     topic = session.get(Topic, article.topic_id)
+    images = _article_images(session, article)
+    publish_body = _publish_body(article.body)
+    copy_text = "\n\n".join(part for part in [article.title, publish_body] if part)
     return templates.TemplateResponse(request, "schedule/_article_preview.html", {
         "request": request,
         "article": article,
         "topic": topic,
+        "images": images,
+        "publish_body": publish_body,
+        "copy_text": copy_text,
     })
+
+
+@router.get("/schedule/articles/{article_id}/images.zip")
+def download_article_images(article_id: int, session: Session = Depends(get_session)):
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    images = _article_images(session, article)
+    if not images:
+        raise HTTPException(404, "没有可下载图片")
+
+    buffer = io.BytesIO()
+    written = 0
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for idx, image in enumerate(images, start=1):
+            try:
+                data, filename = _download_image_bytes(image["url"])
+            except Exception:
+                continue
+            ext = os.path.splitext(filename)[1] or ".jpg"
+            zf.writestr(f"{idx:02d}{ext}", data)
+            written += 1
+    if written == 0:
+        raise HTTPException(404, "图片文件不可下载")
+    buffer.seek(0)
+    safe_title = re.sub(r"[^A-Za-z0-9._-]+", "-", article.title).strip("-") or f"article-{article_id}"
+    return Response(
+        buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe_title}-images.zip"'},
+    )

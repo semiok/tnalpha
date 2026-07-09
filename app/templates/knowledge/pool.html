@@ -13,14 +13,43 @@
     <div class="space-y-3">
       {% for pack in campaign_packs %}
       <details class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-        <summary class="cursor-pointer select-none">
+        <summary class="cursor-pointer select-none flex flex-wrap items-center gap-2">
           <span class="font-semibold text-sm text-slate-700">{{ pack.label }}</span>
-          <span class="ml-2">{{ chip("经验包", "brand") }}</span>
-          <span>{{ chip(pack.article_count ~ "篇文章", "slate") }}</span>
+          {{ chip("经验包", "brand") }}
+          {{ chip(pack.article_count ~ "篇文章", "slate") }}
+          {% if can_edit %}
+          <form method="post" action="/pool/{{ pack.pool_topic.id }}/delete" class="ml-auto"
+                onsubmit="return confirm('删除这个经验包？对应经验将不再参与后续选题和写作参考。')">
+            <button type="submit" class="text-xs text-rose-500 hover:text-rose-700">删除经验包</button>
+          </form>
+          {% endif %}
         </summary>
-        <div class="mt-3 rounded-lg border border-slate-100 bg-white px-3 py-3">
-          <div class="text-xs text-slate-400 mb-2">新建 campaign 时可以继承这个经验包；被引用后会进入②选题库和③写作引擎的经验参考。</div>
-          <pre class="whitespace-pre-wrap text-xs leading-5 text-slate-600 max-h-72 overflow-auto">{{ pack.pool_topic.content }}</pre>
+        <div class="mt-3 space-y-3">
+          <div class="text-xs text-slate-400">新建 campaign 时可以继承这个经验包；被引用后会进入②选题库和③写作引擎的经验参考。</div>
+          {% for article in pack.articles %}
+          <details class="rounded-lg border border-slate-100 bg-white px-3 py-3" {{ 'open' if loop.first else '' }}>
+            <summary class="cursor-pointer select-none">
+              <span class="font-medium text-sm text-slate-700">{{ article.title }}</span>
+              <span class="ml-2">{{ chip(article.platform, "slate") }}</span>
+              <span>{{ chip(article.performance_level, "emerald" if article.performance_level == "高表现" else "amber") }}</span>
+            </summary>
+            <div class="mt-3 space-y-3 text-xs text-slate-600">
+              <div class="rounded-md bg-slate-50 px-3 py-2">{{ article.metric_line }}</div>
+              {% for entry in article.entries %}
+              <div class="rounded-md border border-slate-100 px-3 py-2">
+                <div class="mb-1 flex flex-wrap items-center gap-2">
+                  {{ chip(entry.experience_type, "brand") }}
+                  <span class="font-medium text-slate-700">{{ entry.title }}</span>
+                </div>
+                {% if entry.summary %}<div><span class="text-slate-400">总结：</span>{{ entry.summary }}</div>{% endif %}
+                {% if entry.positive_notes %}<div><span class="text-slate-400">正向经验：</span>{{ entry.positive_notes }}</div>{% endif %}
+                {% if entry.negative_notes %}<div><span class="text-slate-400">反向风险：</span>{{ entry.negative_notes }}</div>{% endif %}
+                {% if entry.action_advice %}<div><span class="text-slate-400">下次怎么用：</span>{{ entry.action_advice }}</div>{% endif %}
+              </div>
+              {% endfor %}
+            </div>
+          </details>
+          {% endfor %}
         </div>
       </details>
       {% endfor %}
@@ -32,7 +61,7 @@
 
   {{ card_open("资料包") }}
     {% if material_topics %}
-    {{ table_open(["标题", "触网", "来源", "品牌", "时间"]) }}
+    {{ table_open(["标题", "触网", "来源", "品牌", "时间", "操作"]) }}
       {% for t in material_topics %}
       <tr class="border-b border-slate-50">
         <td class="py-2">{{ t.title }}{% if t.file_path %} <a href="/pool/{{ t.id }}/download" class="text-brand-600 hover:text-brand-700 text-xs ml-1">📎 下载</a>{% set ext = t.file_path.lower().rsplit('.', 1)[-1] if '.' in t.file_path else '' %}{% if ext == 'pdf' and can_edit %} <form method="post" action="/pool/{{ t.id }}/deep-read" class="inline ml-2"><label class="text-xs {{ 'text-brand-600' if t.deep_read else 'text-slate-400' }} cursor-pointer"><input type="checkbox" onchange="this.form.submit()" {{ 'checked' if t.deep_read else '' }}> 深度读图</label></form>{% elif ext in ['png','jpg','jpeg','webp','gif'] %} <span class="text-emerald-600 text-xs ml-2">🖼 自动读图</span>{% endif %}{% endif %}</td>
@@ -40,6 +69,15 @@
         <td class="text-slate-500">{{ t.source }}</td>
         <td class="text-slate-500">{{ t.brand_tag or "通用" }}</td>
         <td class="text-xs text-slate-400">{{ t.created_at|cn_time('%Y-%m-%d') }}</td>
+        <td class="text-xs">
+          {% if can_edit %}
+          <form method="post" action="/pool/{{ t.id }}/delete" onsubmit="return confirm('删除这个资料包？已引用它的 campaign 会同步取消引用。')">
+            <button type="submit" class="text-rose-500 hover:text-rose-700">删除</button>
+          </form>
+          {% else %}
+          <span class="text-slate-300">--</span>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     {{ table_close() }}

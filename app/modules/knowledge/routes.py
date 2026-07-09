@@ -12,9 +12,10 @@ from starlette.requests import Request
 from sqlmodel import Session, select
 
 from app import __version__
-from app.core import auth, docparse, llm, runtime, storage
+from app.core import auth, config, docparse, llm, runtime, storage
 from app.core.db import get_session
 from app.core.templates import create_templates
+from app.modules.feedback.models import FeedbackExperience
 from app.modules.knowledge import analysis
 from app.modules.knowledge.experience_pool import (
     campaign_experience_pack_options, sync_all_campaign_experience_packs,
@@ -423,6 +424,49 @@ def download_pool_file(topic_id: int, session: Session = Depends(get_session)):
     if not topic or not topic.file_path or not Path(topic.file_path).exists():
         raise HTTPException(404, "文件不存在")
     return FileResponse(topic.file_path, filename=Path(topic.file_path).name)
+
+
+def _delete_pool_file_if_safe(file_path: str) -> None:
+    if not file_path:
+        return
+    try:
+        path = Path(file_path).resolve()
+        data_root = Path(config.DATA_DIR).resolve()
+        if path.exists() and (path == data_root or data_root in path.parents):
+            path.unlink()
+    except OSError:
+        pass
+
+
+@router.post("/pool/{topic_id}/delete")
+def delete_pool_topic(topic_id: int, request: Request, session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    topic = session.get(PoolTopic, topic_id)
+    if not topic:
+        return RedirectResponse("/pool", status_code=303)
+
+    refs = session.exec(select(CampaignPoolRef).where(CampaignPoolRef.pool_topic_id == topic_id)).all()
+    for ref in refs:
+        session.delete(ref)
+
+    if topic.kind == "经验包" and topic.source == "feedback":
+        brand = _default_brand(session)
+        entries = session.exec(
+            select(FeedbackExperience).where(
+                FeedbackExperience.brand_id == brand.id,
+                FeedbackExperience.campaign_id == topic.source_campaign_id,
+                FeedbackExperience.is_active == True,
+            )
+        ).all()
+        for entry in entries:
+            entry.is_active = False
+            session.add(entry)
+    else:
+        _delete_pool_file_if_safe(topic.file_path)
+
+    session.delete(topic)
+    session.commit()
+    return RedirectResponse("/pool", status_code=303)
 
 
 @router.post("/pool/{topic_id}/deep-read")

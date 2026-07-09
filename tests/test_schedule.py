@@ -7,7 +7,7 @@ from app.modules.knowledge.models import Brand, Campaign
 from app.modules.schedule import schedule
 from app.modules.schedule.models import ScheduleMetric, ScheduleSetting, ScheduleSlot, ScheduleWeek
 from app.modules.topic.models import Topic
-from app.modules.writing.models import Article
+from app.modules.writing.models import Article, ArticleImage
 
 
 def test_current_week_uses_china_today_by_default(monkeypatch):
@@ -113,9 +113,26 @@ def test_week_accepts_articles_from_multiple_campaign_scopes(fresh_db):
 
 
 def test_schedule_page_lists_generated_articles_and_preview(owner_client, fresh_db):
+    import io
+    import zipfile
+    from app.core import config
     with Session(fresh_db) as session:
         ids = _seed(session)
         schedule.add_week(session, ids["brand_id"], ids["campaign_id"])
+        image_path = config.DATA_DIR + "/schedule-preview.png"
+        import os
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        with open(image_path, "wb") as fh:
+            fh.write(b"png-bytes")
+        session.add(ArticleImage(
+            article_id=ids["campaign_article_id"],
+            prompt="活动配图",
+            image_url=image_path,
+            slot_index=0,
+            slot_desc="活动配图",
+            is_selected=True,
+        ))
+        session.commit()
 
     home = owner_client.get("/schedule")
     assert home.status_code == 200
@@ -134,7 +151,17 @@ def test_schedule_page_lists_generated_articles_and_preview(owner_client, fresh_
     preview = owner_client.get(f"/schedule/articles/{ids['campaign_article_id']}/preview")
     assert preview.status_code == 200
     assert "活动正文" in preview.text
+    assert "发布正文" in preview.text
     assert "活动图像提示词" in preview.text
+    assert "复制全文" in preview.text
+    assert "下载全部图片" in preview.text
+    assert "/writing/uploads/schedule-preview.png" in preview.text
+
+    zipped = owner_client.get(f"/schedule/articles/{ids['campaign_article_id']}/images.zip")
+    assert zipped.status_code == 200
+    assert zipped.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(zipped.content)) as zf:
+        assert zf.read(zf.namelist()[0]) == b"png-bytes"
 
 
 def test_schedule_weeks_show_latest_first_and_nearest_last(owner_client, fresh_db):
