@@ -272,6 +272,68 @@ def create_experience_pairs_from_slots(session: Session, slot_ids: list[int], sc
     return entries
 
 
+def upsert_review_rejection_experience(session: Session, article: Article, note: str) -> FeedbackExperience | None:
+    """把③写作引擎的审核未通过原因沉淀为 campaign 写作经验。
+
+    同一篇文章只保留一条活跃的审核退回经验；再次退回时更新它，避免经验包重复膨胀。
+    """
+    topic = session.get(Topic, article.topic_id)
+    if topic is None:
+        return None
+    note = (note or "").strip()
+    if not note:
+        return None
+    existing = session.exec(
+        select(FeedbackExperience).where(
+            FeedbackExperience.article_id == article.id,
+            FeedbackExperience.experience_type == "写作经验",
+            FeedbackExperience.performance_level == "审核未通过",
+            FeedbackExperience.is_active == True,
+        )
+    ).first()
+    title = f"审核未通过：{article.title or topic.title}"[:120]
+    summary = (
+        f"《{article.title or topic.title}》在人工审核阶段未通过。"
+        f"退回原因：{note}"
+    )
+    positive_notes = "保留选题中具体、可感、与 campaign 相关的素材基础。"
+    negative_notes = note
+    action_advice = (
+        "后续同 campaign 写作时，优先避开这类退回问题；生成正文前先检查标题钩子、"
+        "内容深度、事实准确性、平台语气和段落结构是否满足审核意见。"
+    )
+    entry = existing or FeedbackExperience(
+        brand_id=topic.brand_id,
+        campaign_id=article.campaign_id,
+        platform=article.platform or "通用",
+        experience_type="写作经验",
+        performance_level="审核未通过",
+        source_slot_id=None,
+        article_id=article.id,
+        topic_id=topic.id,
+        title=title,
+    )
+    entry.brand_id = topic.brand_id
+    entry.campaign_id = article.campaign_id
+    entry.platform = article.platform or "通用"
+    entry.title = title
+    entry.summary = summary
+    entry.positive_notes = positive_notes
+    entry.negative_notes = negative_notes
+    entry.action_advice = action_advice
+    entry.updated_at = _now()
+    entry.is_active = True
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    from app.modules.knowledge.experience_pool import sync_brand_experience_pack, sync_campaign_experience_pack
+    if entry.campaign_id is None:
+        sync_brand_experience_pack(session, entry.brand_id)
+    else:
+        sync_campaign_experience_pack(session, entry.campaign_id)
+    return entry
+
+
 def experience_entries(session: Session, brand_id: int) -> list[FeedbackExperience]:
     return session.exec(
         select(FeedbackExperience)
@@ -314,6 +376,110 @@ def experience_pack_text(session: Session, brand_id: int, campaign_id: int | Non
             f"  下次怎么用：{row.action_advice}"
         )
     return "\n".join(lines)
+
+
+def experience_reference_strategy_text(current_count: int = 0, inherited_count: int = 0) -> str:
+    if current_count <= 0 and inherited_count > 0:
+        actual = "当前 campaign 暂无经验：继承 campaign 经验 100%。"
+    elif current_count < 3 and inherited_count > 0:
+        actual = "当前 campaign 经验不足 3 条：当前经验约 50%，继承经验约 50%。"
+    elif inherited_count > 0:
+        actual = "当前 campaign 经验充足：当前经验约 70%，继承经验约 30%。"
+    else:
+        actual = "未关联继承经验包：当前 campaign 经验 100%。"
+    return "\n".join([
+        "【Campaign 总体经验包引用策略】",
+        "- 当前 campaign 经验优先，用来约束本活动自己的选题和写作判断。",
+        "- 继承 campaign 经验用于迁移历史打法，不能机械复刻旧标题或旧文章。",
+        "- 默认权重：当前 campaign 70%，继承 campaign 30%。",
+        "- 当前 campaign 经验不足时，自动提高继承 campaign 权重。",
+        "- 当前 campaign 无经验时，继承 campaign 100%。",
+        f"- 本次实际策略：{actual}",
+    ])
+
+
+def _entry_source_label(entry: FeedbackExperience) -> str:
+    if entry.source_slot_id:
+        return "发布复盘"
+    if entry.performance_level == "审核未通过":
+        return "写作审核退回"
+    return "经验沉淀"
+
+
+def _format_experience_entry(entry: FeedbackExperience) -> str:
+    return (
+        f"- [{_entry_source_label(entry)} / {entry.experience_type} / {entry.performance_level} / {entry.platform}] {entry.title}\n"
+        f"  总结：{entry.summary}\n"
+        f"  正向经验：{entry.positive_notes}\n"
+        f"  反向风险：{entry.negative_notes}\n"
+        f"  下次怎么用：{entry.action_advice}"
+    )
+
+
+def _task_focus_text(task: str) -> str:
+    if task == "topic":
+        return (
+            "选题生成重点：优先吸收选题经验、历史不采纳原因、发布复盘中与切口/标题/素材选择有关的判断；"
+            "避免重复低价值角度，把失败原因反向转化为更清晰的选题。"
+        )
+    if task == "writing":
+        return (
+            "写作生成重点：优先吸收写作经验、审核未通过原因、发布复盘中与标题钩子/开头/结构/语气/事实准确有关的判断；"
+            "先规避退回问题，再迁移高表现做法。"
+        )
+    return "使用重点：按当前任务选择相关经验，保留可迁移打法，规避已验证的问题。"
+
+
+def campaign_experience_context(session: Session, brand_id: int, campaign_id: int | None,
+                                *, platform: str = "", task: str = "general",
+                                inherited_packs: list[str] | None = None,
+                                rejection_topics: list[Topic] | None = None,
+                                limit: int = 10) -> str:
+    """统一组装 Campaign 总体经验包，供②选题库和③写作引擎共同引用。
+
+    底层仍保留选题/写作/发布复盘等来源；对模型统一暴露为 campaign 经验上下文。
+    """
+    platforms = {"通用", ""}
+    if platform:
+        platforms.add(platform)
+    rows = session.exec(
+        select(FeedbackExperience)
+        .where(
+            FeedbackExperience.brand_id == brand_id,
+            FeedbackExperience.campaign_id == campaign_id,
+            FeedbackExperience.is_active == True,
+        )
+        .order_by(FeedbackExperience.updated_at.desc(), FeedbackExperience.id.desc())
+    ).all()
+    current_entries = [row for row in rows if row.platform in platforms]
+    rejection_lines = []
+    for topic in rejection_topics or []:
+        reason = " ".join((topic.rejection_reason or "").split())
+        if reason:
+            rejection_lines.append(f"- [选题回收站 / 不采纳原因] 《{topic.title}》：{reason}")
+    current_count = len(current_entries) + len(rejection_lines)
+    inherited = [pack.strip() for pack in (inherited_packs or []) if pack and pack.strip()]
+    lines = [
+        experience_reference_strategy_text(current_count=current_count, inherited_count=len(inherited)),
+        "",
+        "【本任务使用重点】",
+        _task_focus_text(task),
+        "",
+        "【当前 campaign 经验（优先参考）】",
+    ]
+    if current_entries or rejection_lines:
+        lines.extend(rejection_lines[:limit])
+        remaining = max(limit - len(rejection_lines[:limit]), 0)
+        lines.extend(_format_experience_entry(row) for row in current_entries[:remaining])
+    else:
+        lines.append("（当前 campaign 暂无沉淀经验）")
+    lines.extend(["", "【继承 campaign 经验（迁移参考）】"])
+    if inherited:
+        for idx, pack in enumerate(inherited[:3], start=1):
+            lines.append(f"--- 继承经验包 {idx} ---\n{pack[:4000]}")
+    else:
+        lines.append("（未关联继承经验包）")
+    return "\n".join(lines).strip()
 
 
 def update_experience(session: Session, entry_id: int, **fields) -> FeedbackExperience:

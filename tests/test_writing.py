@@ -13,6 +13,8 @@ import time
 from sqlmodel import Session, select
 
 from app.modules.knowledge.models import Brand, Campaign
+from app.modules.feedback.experience import experience_pack_text
+from app.modules.feedback.models import FeedbackExperience
 from app.modules.topic.models import Topic
 from app.modules.writing import routes as wroutes
 from app.modules.writing.contract import writing_status_map
@@ -368,12 +370,12 @@ def test_generate_with_review_rewrites_article(owner_client, fresh_db, monkeypat
 
 
 def test_writing_experience_flows_into_debate_article_and_rewrite(owner_client, fresh_db, monkeypatch):
-    """写作经验包应贯穿辩论、正文生成和评审后重写。"""
+    """写作经验包默认贯穿辩论、正文生成和评审后重写。"""
     _patch_threading(monkeypatch)
     experience = "高表现经验：开头先抛强问题，结尾留下可评论的问题。"
     prompts: dict[str, list[str]] = {}
 
-    monkeypatch.setattr(wroutes, "experience_pack_text", lambda *a, **k: experience)
+    monkeypatch.setattr(wroutes, "campaign_experience_context", lambda *a, **k: experience)
 
     def fake_text(prompt, task="default", module="default", **k):
         prompts.setdefault(task, []).append(prompt)
@@ -396,7 +398,7 @@ def test_writing_experience_flows_into_debate_article_and_rewrite(owner_client, 
 
     r = owner_client.post(
         f"/writing/topics/{tid}/generate",
-        data={"debate_rounds": "1", "review_rounds": "1", "use_experience": "true"},
+        data={"debate_rounds": "1", "review_rounds": "1"},
         follow_redirects=False,
     )
 
@@ -1423,6 +1425,29 @@ def test_review_reject_changes_status_and_records_note(owner_client, fresh_db):
         assert a.status == "审核未通过"
         assert a.review_note == "标题不够吸引人，需要重写"
         assert a.reviewed_at is not None
+
+
+def test_review_reject_creates_campaign_writing_experience(owner_client, fresh_db):
+    """审核未通过原因会沉淀为同 campaign 的写作经验包。"""
+    with Session(fresh_db) as s:
+        aid, cid = _seed_pending_review_article(s)
+    r = owner_client.post(
+        f"/writing/articles/{aid}/review",
+        data={"decision": "reject", "note": "标题太平，开头没有具体场景"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        entry = s.exec(select(FeedbackExperience).where(FeedbackExperience.article_id == aid)).one()
+        assert entry.experience_type == "写作经验"
+        assert entry.performance_level == "审核未通过"
+        assert entry.campaign_id == cid
+        assert entry.topic_id == article.topic_id
+        assert "标题太平" in entry.negative_notes
+        pack = experience_pack_text(s, entry.brand_id, cid, "写作经验", article.platform)
+        assert "审核未通过" in pack
+        assert "标题太平" in pack
 
 
 def test_review_only_allowed_when_pending(owner_client, fresh_db):

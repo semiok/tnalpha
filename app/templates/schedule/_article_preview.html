@@ -12,7 +12,7 @@
     </div>
     <div class="overflow-auto px-5 py-4 space-y-3 text-sm">
       <div class="flex flex-wrap gap-2">
-        {{ chip(article.status, "emerald" if article.status in ("待审核", "已生成") else "slate") }}
+        {{ chip(article.status, "emerald" if article.status == "已审核" else "slate") }}
         {% if article.platform %}{{ chip(article.platform, "brand") }}{% endif %}
         {% if article.word_count %}{{ chip(article.word_count ~ "字", "slate") }}{% endif %}
       </div>

@@ -18,7 +18,7 @@ class ExperiencePack:
 
 def _metric_line(slot: ScheduleSlot | None, metric: ScheduleMetric | None) -> str:
     if slot is None:
-        return "发布数据：未知"
+        return "审核反馈：来自写作引擎人工审核，未经过发布数据。"
     if metric is None:
         return "发布数据：尚未回填"
     if "小红书" in (slot.platform or ""):
@@ -38,9 +38,9 @@ def _pack_content(session: Session, brand_id: int, label: str, entries: list[Fee
     lines = [
         f"【经验包】{label}",
         f"品牌：{brand.name if brand else brand_id}",
-        f"来源：⑤数据反馈已总结文章，共 {len(by_slot)} 篇。",
+        f"来源：⑤数据反馈发布复盘 + ③写作引擎审核反馈，共 {len(by_slot)} 篇。",
         "",
-        "用途：新 campaign 可引用本经验包，让历史发布反馈迁移到新的选题和写作判断中。",
+        "用途：新 campaign 可引用本经验包，让历史发布反馈和审核退回原因迁移到新的选题和写作判断中。",
     ]
     for slot_id, slot_entries in by_slot.items():
         slot = session.get(ScheduleSlot, slot_id) if slot_id else None

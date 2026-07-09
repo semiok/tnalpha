@@ -17,7 +17,7 @@
           <span class="text-xs text-brand-500 ml-auto">查看进度 →</span>
         </div>
       </a>
-    {% else %}
+    {% elif request.state.can_write_writing %}
       <button type="button" @click="modalOpen = true"
               class="mt-3 w-full px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700">
         生成图文
@@ -26,6 +26,7 @@
   </div>
 
   {# 弹窗 #}
+  {% if request.state.can_write_writing %}
   <div x-show="modalOpen" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center p-4"
        @keydown.escape.window="modalOpen = false">
@@ -103,12 +104,11 @@
         </div>
 
         <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" name="use_experience" value="true" checked
-                   class="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500">
-            <span class="text-sm font-medium text-slate-600">参考发布后的写作经验包</span>
-          </label>
-          <p class="text-xs text-slate-500 mt-1">引用⑤沉淀出的高/低表现经验，约束标题、开头、结构和平台语气。</p>
+          <div class="flex items-center gap-2">
+            <span class="inline-flex h-4 w-4 items-center justify-center rounded bg-brand-600 text-[10px] font-bold text-white">✓</span>
+            <span class="text-sm font-medium text-slate-600">默认参考 Campaign 总体经验包</span>
+          </div>
+          <p class="text-xs text-slate-500 mt-1">自动引用同 campaign 的发布复盘和审核未通过经验，约束标题、开头、结构、事实和平台语气。</p>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -138,4 +138,5 @@
       </form>
     </div>
   </div>
+  {% endif %}
 </div>

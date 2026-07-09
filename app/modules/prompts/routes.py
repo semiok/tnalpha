@@ -10,7 +10,12 @@ from starlette.requests import Request
 
 from app.core.db import get_session
 from app.core.llm import prompts as knowledge_prompts
-from app.modules.feedback.experience import PublishedSample, _draft_prompt
+from app.modules.feedback.experience import (
+    PublishedSample,
+    _draft_prompt,
+    campaign_experience_context,
+    experience_reference_strategy_text,
+)
 from app.modules.knowledge.analysis import _campaign_digest_prompt
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.schedule.models import DEFAULT_RECOMMEND_PROMPT, ScheduleMetric, ScheduleSetting, ScheduleSlot
@@ -217,7 +222,29 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
     def value(template_value: str, preview_value: str) -> str:
         return template_value if template else preview_value
 
+    unified_experience = value(
+        "{campaign_overall_experience_pack}",
+        campaign_experience_context(
+            session,
+            topic.brand_id,
+            topic.campaign_id,
+            platform=article.platform,
+            task="writing",
+            inherited_packs=ctx.pool_experiences,
+        ),
+    )
+
     return [
+        PromptItem(
+            "通用经验策略",
+            "Campaign 总体经验包引用策略",
+            "app/modules/feedback/experience.py::experience_reference_strategy_text",
+            experience_reference_strategy_text(
+                current_count=0 if template else 3,
+                inherited_count=1 if (template or ctx.pool_experiences) else 0,
+            ),
+            "②选题库和③写作引擎共用；当前经验不足时自动提高继承经验权重。",
+        ),
         PromptItem(
             "①知识库",
             "AI 解析 / 单篇资料解读",
@@ -281,20 +308,27 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                     "summary": value("{hot_hit.summary}", "这里会注入 weixin.sogou.com 搜到的微信内容摘要。"),
                     "source": "搜狗公众号",
                 }],
-                rejection_experiences=[
-                    Topic(
-                        brand_id=topic.brand_id,
-                        campaign_id=topic.campaign_id,
-                        title=value("{rejected_topic.title}", "过于抽象的丝路制度科普"),
-                        rejection_reason=value(
-                            "{rejected_topic.rejection_reason}",
-                            "缺少具体物件和观众视角，容易写成说明牌。",
-                        ),
-                        status="回收站",
-                    )
-                ],
+                campaign_experience=value(
+                    "{campaign_overall_experience_pack}",
+                    campaign_experience_context(
+                        session,
+                        topic.brand_id,
+                        topic.campaign_id,
+                        task="topic",
+                        inherited_packs=ctx.pool_experiences,
+                        rejection_topics=[
+                            Topic(
+                                brand_id=topic.brand_id,
+                                campaign_id=topic.campaign_id,
+                                title="过于抽象的丝路制度科普",
+                                rejection_reason="缺少具体物件和观众视角，容易写成说明牌。",
+                                status="回收站",
+                            )
+                        ],
+                    ),
+                ),
             ),
-            "默认读取知识库关联经验包；回收站不采纳原因也会作为选题经验注入。",
+            "默认读取 Campaign 总体经验包；选题侧重点会优先使用切口、标题、回收站不采纳原因和发布表现。",
         ),
         PromptItem(
             "②选题库",
@@ -303,7 +337,7 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
             _manual_prompt(ctx, [
                 value("{manual_title_1}", "用户手动输入的标题一"),
                 value("{manual_title_2}", "用户手动输入的标题二"),
-            ]),
+            ], value("{campaign_overall_experience_pack}", unified_experience)),
             "标题必须逐字保留，模型只补全纲要、受众、素材等字段。",
         ),
         PromptItem(
@@ -316,8 +350,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 style,
                 platform=article.platform,
                 word_count=article.word_count,
-                writing_experience=value("{writing_experience_pack}", "这里会注入⑤沉淀出的写作经验包。"),
+                writing_experience=unified_experience,
             ),
+            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。",
         ),
         PromptItem(
             "③写作引擎",
@@ -330,8 +365,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 brief=value("{debate_brief}", "辩论综合简报示例：推荐切入角度、结构建议、必须包含素材和配图方向。"),
                 platform=article.platform,
                 word_count=article.word_count,
-                writing_experience=value("{writing_experience_pack}", "这里会注入⑤沉淀出的写作经验包。"),
+                writing_experience=unified_experience,
             ),
+            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。",
         ),
         PromptItem(
             "③写作引擎",
@@ -362,7 +398,8 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
             "③写作引擎",
             "多角色辩论 / 单角色发言",
             "app/modules/writing/debate.py::_debate_prompt",
-            _debate_prompt(role_key, role_name, role_stance, topic, ctx, "（首轮，尚无前序发言）"),
+            _debate_prompt(role_key, role_name, role_stance, topic, ctx, "（首轮，尚无前序发言）", unified_experience),
+            "辩论阶段也默认读取 Campaign 总体经验包，避免重复已被验证无效的问题。",
         ),
         PromptItem(
             "③写作引擎",
@@ -380,7 +417,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 topic,
                 ctx,
                 style.summary,
+                unified_experience,
             ),
+            "评审后重写也继承同一 Campaign 总体经验包。",
         ),
         PromptItem(
             "③写作引擎",

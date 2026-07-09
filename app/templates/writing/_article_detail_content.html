@@ -32,7 +32,7 @@
     <div class="min-w-0 flex-1">
       <h1 x-ref="titleArea"
           class="text-lg font-semibold text-slate-800 outline-none rounded {{ 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' if false else '' }}"
-          {% if article.status == "待审核" and level >= 1 %}
+          {% if article.status == "待审核" and request.state.can_write_writing %}
           :contenteditable="editing"
           :class="editing ? 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' : ''"
           {% endif %}>{{ article.title }}</h1>
@@ -42,7 +42,7 @@
     </div>
     <div class="flex items-center gap-2 shrink-0">
       {{ chip(article.status, "rose" if article.status == "已删除" else ("amber" if article.status in ("辩论中", "写作中", "重写中", "待配图") else "emerald")) }}
-      {% if article.status == "待审核" and level >= 1 %}
+      {% if article.status == "待审核" and request.state.can_write_writing %}
         {# 编辑正文 / 保存 / 取消 #}
         <button type="button" x-show="!editing" @click="editing = true"
                 class="px-2 py-0.5 rounded text-xs font-medium border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 hover:text-brand-600 transition">
@@ -57,7 +57,7 @@
           取消
         </button>
       {% endif %}
-      {% if article.status != "已删除" and level >= 1 %}
+      {% if article.status != "已删除" and request.state.can_write_writing %}
         <form method="post" action="/writing/articles/{{ article.id }}/delete"
               onsubmit="return confirm('删除文章「{{ article.title }}」？');" class="inline">
           {{ button("删除", variant="danger", type="submit", extra="!py-1 !text-xs") }}
@@ -208,7 +208,7 @@
           <span class="inline-block w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
           正文已生成，配图正在后台生成中。
         </span>
-        {% if level >= 1 %}
+        {% if request.state.can_write_writing %}
           <form method="post" action="/writing/articles/{{ article.id }}/regenerate-images"
                 hx-post="/writing/articles/{{ article.id }}/regenerate-images"
                 hx-target="#detail-content"
@@ -221,9 +221,13 @@
           </form>
         {% endif %}
       {% else %}
-        图文已完成，等待审核。每个插图位置可换选其他候选图，或点「重生本位置」生成新候选。
+        {% if request.state.can_write_writing %}
+          图文已完成，等待审核。每个插图位置可换选其他候选图，或点「重生本位置」生成新候选。
+        {% else %}
+          图文已完成，等待审核。
+        {% endif %}
       {% endif %}
-      {% if article.status in ("待配图", "待审核") and level >= 1 and has_missing_slots %}
+      {% if article.status in ("待配图", "待审核") and request.state.can_write_writing and has_missing_slots %}
         <button type="button"
                 hx-post="/writing/articles/{{ article.id }}/regenerate-missing-images"
                 hx-target="#detail-content"
@@ -266,7 +270,7 @@
               {% if para %}
             <div data-seg data-type="text"
                  class="whitespace-pre-wrap text-sm leading-7 text-slate-700 outline-none rounded"
-                 {% if article.status == "待审核" and level >= 1 %}
+                 {% if article.status == "待审核" and request.state.can_write_writing %}
                  :contenteditable="editing"
                  :class="editing ? 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' : ''"
                  {% endif %}>{{ para }}</div>
@@ -279,13 +283,21 @@
             {# 占位符：可点击选图 + 可删除（编辑模式下 data-seg 用于收集） #}
             <div data-seg data-type="slot" data-desc="{{ seg.desc }}"
                  class="my-2 rounded-lg border-2 border-dashed border-amber-300 bg-amber-50/50 p-4 text-center">
-              <button type="button" @click="uploadToSlot({{ seg.slot_index }})"
-                      class="inline-flex flex-col items-center gap-1 text-amber-600 hover:text-brand-600 transition">
-                <span class="text-2xl">📷</span>
-                <span class="text-sm font-medium">点击选择图片</span>
-                <span class="text-xs text-slate-400">插图位置 {{ seg.slot_index + 1 }}</span>
-              </button>
-              {% if article.status == "待审核" and level >= 1 %}
+              {% if request.state.can_write_writing %}
+                <button type="button" @click="uploadToSlot({{ seg.slot_index }})"
+                        class="inline-flex flex-col items-center gap-1 text-amber-600 hover:text-brand-600 transition">
+                  <span class="text-2xl">📷</span>
+                  <span class="text-sm font-medium">点击选择图片</span>
+                  <span class="text-xs text-slate-400">插图位置 {{ seg.slot_index + 1 }}</span>
+                </button>
+              {% else %}
+                <div class="inline-flex flex-col items-center gap-1 text-amber-600">
+                  <span class="text-2xl">📷</span>
+                  <span class="text-sm font-medium">待选择图片</span>
+                  <span class="text-xs text-slate-400">插图位置 {{ seg.slot_index + 1 }}</span>
+                </div>
+              {% endif %}
+              {% if article.status == "待审核" and request.state.can_write_writing %}
               <div x-show="editing" x-cloak class="mt-2">
                 <button type="button" @click="deleteSlot({{ seg.slot_index }})"
                         class="text-xs text-rose-500 hover:text-rose-700 transition">
@@ -296,6 +308,7 @@
             </div>
             {% else %}
             {# 编辑模式：只显示标记占位（用于保存时收集） #}
+            {% if request.state.can_write_writing %}
             <div x-show="editing" x-cloak
                  data-seg data-type="slot" data-desc="{{ seg.desc }}"
                  class="my-2 px-3 py-2 rounded border border-dashed border-amber-300 bg-amber-50/50 text-xs text-amber-700 text-center">
@@ -305,6 +318,7 @@
                 × 删除
               </button>
             </div>
+            {% endif %}
             {# 非编辑模式：原来的候选图渲染 #}
             <div x-show="!editing" x-cloak>
             {% set imgs = slots.get(seg.slot_index, []) %}
@@ -330,7 +344,7 @@
                   <span class="text-xs text-emerald-600 font-medium">🖼 用户上传</span>
                 {% else %}
                   <span class="text-xs text-slate-400">{{ imgs | length }}/4 张{{ ' 生成中…' if has_pending_images and (imgs | length) < 4 else '' }}</span>
-                  {% if level >= 1 %}
+                  {% if request.state.can_write_writing %}
                     <button type="button"
                             hx-post="/writing/articles/{{ article.id }}/slots/{{ seg.slot_index }}/regenerate"
                             hx-target="#detail-content"
@@ -368,16 +382,19 @@
                 {# 网格展示：显示已生成的候选图 + 不足 4 张时补占位符 #}
                 <div x-show="showGrid" x-cloak class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {% for img in imgs %}
-                    <label class="cursor-pointer block">
+                    <label class="{{ 'cursor-pointer' if request.state.can_write_writing else 'cursor-default' }} block">
                       <input type="radio" name="image_id_{{ seg.slot_index }}" value="{{ img.id }}"
                              data-slot="{{ seg.slot_index }}"
                              class="peer sr-only"
                              {{ 'checked' if img.is_selected else '' }}
+                             {{ 'disabled' if not request.state.can_write_writing else '' }}
+                             {% if request.state.can_write_writing %}
                              @change="selectedSrc = '{{ img.image_url }}'; showGrid = false"
                              hx-post="/writing/articles/{{ article.id }}/slots/{{ seg.slot_index }}/select"
                              hx-trigger="change"
                              hx-vals='{"image_id": "{{ img.id }}"}'
-                             hx-swap="none">
+                             hx-swap="none"
+                             {% endif %}>
                       <div class="relative overflow-hidden rounded-lg border-2 transition-all border-slate-200 peer-checked:border-brand-400 hover:border-brand-300">
                         <img src="{{ img.image_url }}" alt=""
                              @dblclick.prevent.stop="lightboxSrc = '{{ img.image_url }}'"
@@ -421,7 +438,7 @@
                   </div>
                 {% endif %}
               {% endif %}
-              {% if level >= 1 %}
+              {% if request.state.can_write_writing %}
                 <form method="post"
                       action="/writing/articles/{{ article.id }}/slots/{{ seg.slot_index }}/upload"
                       enctype="multipart/form-data"
@@ -450,7 +467,7 @@
        复制标记：navigator.clipboard 一键复制 [插图：待选择]
        插入占位：Selection API 在光标处插入，无选区时在正文末尾追加。
        不自动保存——用户可连续插入多个占位后点「💾 保存」一次性提交。 #}
-    {% if article.status == "待审核" and level >= 1 %}
+    {% if article.status == "待审核" and request.state.can_write_writing %}
     <div x-data="{copied: false}"
          x-show="editing" x-cloak
          x-transition:enter="transition ease-out duration-200"
@@ -571,7 +588,7 @@
                      @dblclick="lightboxSrc = '{{ img.image_url }}'"
                      class="w-full max-h-[520px] rounded-lg border border-slate-100 object-contain cursor-zoom-in hover:opacity-90 transition">
               {% endfor %}
-              {% if level >= 1 %}
+              {% if request.state.can_write_writing %}
                 <form method="post"
                       action="/writing/articles/{{ article.id }}/slots/{{ seg.slot_index }}/upload"
                       enctype="multipart/form-data"
@@ -607,7 +624,7 @@
         {% if article.review_note %}
           <div class="mt-2 text-xs text-emerald-600 whitespace-pre-wrap">{{ article.review_note }}</div>
         {% endif %}
-        {% if level >= 1 %}
+        {% if request.state.can_write_writing %}
           <form method="post" action="/writing/articles/{{ article.id }}/resubmit-review"
                 hx-post="/writing/articles/{{ article.id }}/resubmit-review"
                 hx-target="#detail-content"
@@ -636,7 +653,7 @@
             <div class="text-xs text-rose-700 whitespace-pre-wrap bg-white/60 rounded px-3 py-2 border border-rose-100">{{ article.review_note }}</div>
           </div>
         {% endif %}
-        {% if level >= 1 %}
+        {% if request.state.can_write_writing %}
           {# 可编辑正文（修改后重新提交审核）#}
           <div class="mt-3 flex flex-wrap gap-2">
             <button type="button"
@@ -729,7 +746,7 @@
   {% endif %}
 
   {# ── 待审核：底部审核操作区 ── #}
-  {% if article.status == "待审核" and level >= 1 %}
+  {% if article.status == "待审核" and request.state.can_write_writing %}
     <div x-data="{showReject: false, rejectNote: ''}"
          class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-3">
       <div class="flex items-center justify-between">

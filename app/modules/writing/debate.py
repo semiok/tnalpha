@@ -52,9 +52,9 @@ def knowledge_context_block(ctx: KnowledgeContext, writing_experience: str = "")
 3. 资料包（事实细节 / 可引用素材）
 {pool_materials}
 
-4. 经验包（结构 / 钩子 / 取舍 / 风险规避）
+4. Campaign 总体经验包（结构 / 钩子 / 取舍 / 风险规避）
 - 知识库经验：{pool_experiences}
-- 发布后写作经验包：{writing_experience or "（本次未引用）"}"""
+- 统一经验上下文：{writing_experience or "（本次未引用）"}"""
 
 
 def clean_llm_output(text: str) -> str:

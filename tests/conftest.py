@@ -71,6 +71,11 @@ def _client(role: str | None) -> TestClient:
 
 
 @pytest.fixture
+def admin0_client(fresh_db):
+    return _client("admin0")
+
+
+@pytest.fixture
 def owner_client(fresh_db):
     return _client("owner")
 

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, chip %}
+{% block content %}
+  {{ page_header("⑥模块", "权限", [("首页", "/")]) }}
+
+  <section class="rounded-xl border border-slate-200 bg-white p-5">
+    <div class="mb-4">
+      <div class="text-sm font-semibold text-slate-700">账号权限矩阵</div>
+      <div class="mt-1 text-xs text-slate-400">密码均为 admin@321；不可见的模块会从导航隐藏，直访问会返回 403。</div>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-100 text-left text-xs text-slate-400">
+            <th class="py-2 pr-4">账号</th>
+            <th class="py-2 pr-4">角色</th>
+            {% for _key, meta in modules.items() %}
+            <th class="py-2 pr-4 whitespace-nowrap">{{ meta.num }}{{ meta.label }}</th>
+            {% endfor %}
+            <th class="py-2 pr-4 whitespace-nowrap">模型配置</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for row in rows %}
+          <tr>
+            <td class="py-3 pr-4 font-mono text-slate-700">{{ row.username }}</td>
+            <td class="py-3 pr-4 text-slate-700">{{ row.label }}</td>
+            {% for m in row.modules %}
+            <td class="py-3 pr-4 whitespace-nowrap">
+              {% if m.write %}
+                {{ chip("可看可改", "emerald") }}
+              {% elif m.view %}
+                {{ chip("能看不能改", "slate") }}
+              {% else %}
+                {{ chip("不可见", "amber") }}
+              {% endif %}
+            </td>
+            {% endfor %}
+            <td class="py-3 pr-4 whitespace-nowrap">
+              {% if row.model %}
+                {{ chip("可见可改", "brand") }}
+              {% else %}
+                {{ chip("不可见不可改", "slate") }}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

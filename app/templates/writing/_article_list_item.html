@@ -37,7 +37,7 @@
             class="inline">
         {{ button("恢复", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
       </form>
-    {% elif level >= 1 %}
+    {% elif request.state.can_write_writing %}
       <form method="post" action="/writing/articles/{{ article.id }}/delete"
             hx-post="/writing/articles/{{ article.id }}/delete"
             hx-target="#article-row-{{ article.id }}"

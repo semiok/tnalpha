@@ -314,7 +314,7 @@ def test_generate_can_reference_recycle_bin_experience(fresh_db, monkeypatch):
                     status="回收站", rejection_reason="品牌常青的经验不混入活动"))
         s.commit()
         gen.generate_topics(s, bid, cid, count=2, use_rejection_experience=True)
-    assert "本活动选题经验包" in seen["prompt"]
+    assert "Campaign 总体经验包" in seen["prompt"]
     assert "过宽泛的展览打卡" in seen["prompt"]
     assert "只像普通打卡" in seen["prompt"]
     assert "品牌常青的经验不混入活动" not in seen["prompt"]

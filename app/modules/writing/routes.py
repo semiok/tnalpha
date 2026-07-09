@@ -15,7 +15,7 @@ from starlette.requests import Request
 
 from app.core import auth, config, db, llm, sources, storage
 from app.core.db import get_session
-from app.modules.feedback.experience import experience_pack_text
+from app.modules.feedback.experience import campaign_experience_context, upsert_review_rejection_experience
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
@@ -493,7 +493,8 @@ def generate_article(topic_id: int, request: Request,
     wc = max(0, min(word_count, 10000))
     # checkbox 勾选才发送 ai_images=true，未勾选时字段缺失（Form("") 兜底）→ False
     ai_images_flag = ai_images.strip().lower() in ("true", "1", "yes", "on")
-    use_experience_flag = use_experience.strip().lower() in ("true", "1", "yes", "on")
+    # Campaign 总体经验包默认纳入后续生成；只有明确传 false/off/no/0 才关闭，便于兼容旧表单。
+    use_experience_flag = use_experience.strip().lower() not in ("false", "0", "no", "off")
     article = session.exec(
         _active_article_query().where(Article.topic_id == topic.id).order_by(Article.updated_at.desc())
     ).first()
@@ -576,7 +577,7 @@ def generate_article(topic_id: int, request: Request,
 
 def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, review_rounds: int,
                            platform: str = "", word_count: int = 0, ai_images: bool = True,
-                           use_experience: bool = False) -> None:
+                           use_experience: bool = True) -> None:
     """后台线程：辩论 → 生成文本 → 评审 → 重写 → 待配图（提交正文，可阅读）。
 
     文本完成后立即把状态置为「待配图」并启动配图子线程，不阻塞用户阅读正文。
@@ -593,7 +594,14 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
             style = _default_style(s, topic.campaign_id)
             style_text = style.summary if style else "无默认风格，使用品牌内容要求。"
             writing_experience = (
-                experience_pack_text(s, topic.brand_id, topic.campaign_id, "写作经验", platform)
+                campaign_experience_context(
+                    s,
+                    topic.brand_id,
+                    topic.campaign_id,
+                    platform=platform,
+                    task="writing",
+                    inherited_packs=ctx.pool_experiences,
+                )
                 if use_experience else ""
             )
 
@@ -1065,7 +1073,8 @@ def detail_status(article_id: int, request: Request, session: Session = Depends(
 @router.get("/writing/uploads/{rel_path:path}")
 def writing_upload(rel_path: str, request: Request):
     """读取写作模块上传图片。走应用登录中间件，不直接暴露整个 data 目录。"""
-    auth.require_level(request, 0)
+    if not auth.can_view_module(auth.current_role(request), "writing"):
+        raise HTTPException(status_code=403, detail="权限不足")
     root = os.path.realpath(config.DATA_DIR)
     path = os.path.realpath(os.path.join(config.DATA_DIR, rel_path))
     if not (path == root or path.startswith(root + os.sep)):
@@ -1123,6 +1132,9 @@ def review_article(article_id: int, request: Request,
         article.reviewed_at = now
     session.add(article)
     session.commit()
+    if decision == "reject":
+        upsert_review_rejection_experience(session, article, note)
+        session.refresh(article)
     # HTMX 请求：返回更新后的详情片段
     if request.headers.get("HX-Request") == "true":
         topic = session.get(Topic, article.topic_id)

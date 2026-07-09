@@ -35,7 +35,7 @@ def toggle_knowledge_writable(request: Request):
 
 @router.get("/settings/llm")
 def llm_settings_page(request: Request, session: Session = Depends(get_session)):
-    auth.require_level(request, 2)
+    auth.require_model_config(request)
     st = get_llm_settings(session)
     ctx = {
         "st": st,
@@ -62,7 +62,7 @@ def save_llm_settings(request: Request,
                       claude_model: str = Form("sonnet"), codex_model: str = Form("gpt-5.5"),
                       gemini_api_key: str = Form(""), perplexity_api_key: str = Form(""),
                       session: Session = Depends(get_session)):
-    auth.require_level(request, 2)
+    auth.require_model_config(request)
     st = get_llm_settings(session)
     st.text_provider = text_provider
     st.image_provider = image_provider

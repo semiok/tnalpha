@@ -12,7 +12,9 @@
           <div class="flex flex-wrap gap-2 border-b border-slate-100 pb-2">
             <button @click="tab='preset'" :class="tab==='preset' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3.5 py-1.5 rounded-lg text-sm font-medium transition">AI 预设</button>
             <button @click="tab='library'" :class="tab==='library' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3.5 py-1.5 rounded-lg text-sm font-medium transition">风格库</button>
+            {% if request.state.can_write_writing %}
             <button @click="tab='new'" :class="tab==='new' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3.5 py-1.5 rounded-lg text-sm font-medium transition">新建</button>
+            {% endif %}
           </div>
 
           {# ── 预设：基于知识库调 LLM 生成符合主题的风格 ── #}
@@ -26,7 +28,7 @@
                   <div class="text-sm font-medium text-slate-700">{{ c.name }}</div>
                   <div class="flex items-center gap-3">
                     {% if c_presets | selectattr('is_default') | list %}
-                      {% if request.state.level >= 1 %}
+                      {% if request.state.can_write_writing %}
                         <form method="post" action="/writing/styles/campaign/{{ c.id }}/unset-default" class="inline"
                               onsubmit="return confirm('取消「{{ c.name }}」的默认风格？取消后 AI 将自行决定文风。');">
                           {{ button("取消默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
@@ -47,12 +49,12 @@
                       </div>
                       <span class="block text-xs text-slate-400 mt-1">{{ style.summary }}</span>
                       <div class="flex gap-2 mt-2">
-                        {% if not style.is_default and request.state.level >= 1 %}
+                        {% if not style.is_default and request.state.can_write_writing %}
                           <form method="post" action="/writing/styles/{{ style.id }}/default" class="inline">
                             {{ button("设为默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
                           </form>
                         {% endif %}
-                        {% if request.state.level >= 1 %}
+                        {% if request.state.can_write_writing %}
                           <form method="post" action="/writing/styles/{{ style.id }}/delete" class="inline"
                                 onsubmit="return confirm('删除风格「{{ style.name }}」？');">
                             {{ button("删除", variant="danger", type="submit", extra="!py-1 !text-xs") }}
@@ -86,7 +88,7 @@
                   <div class="text-sm font-medium text-slate-700">{{ c.name }}</div>
                   <div class="flex items-center gap-3">
                     {% if c_styles | selectattr('is_default') | list %}
-                      {% if request.state.level >= 1 %}
+                      {% if request.state.can_write_writing %}
                         <form method="post" action="/writing/styles/campaign/{{ c.id }}/unset-default" class="inline"
                               onsubmit="return confirm('取消「{{ c.name }}」的默认风格？取消后 AI 将自行决定文风。');">
                           {{ button("取消默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
@@ -121,12 +123,12 @@
                            class="inline-block text-xs text-brand-500 hover:text-brand-600 mt-1.5">查看原文 ↗</a>
                       {% endif %}
                       <div class="flex gap-2 mt-2">
-                        {% if not style.is_default and request.state.level >= 1 %}
+                        {% if not style.is_default and request.state.can_write_writing %}
                           <form method="post" action="/writing/styles/{{ style.id }}/default" class="inline">
                             {{ button("设为默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
                           </form>
                         {% endif %}
-                        {% if request.state.level >= 1 %}
+                        {% if request.state.can_write_writing %}
                           <form method="post" action="/writing/styles/{{ style.id }}/delete" class="inline"
                                 onsubmit="return confirm('删除风格「{{ style.name }}」？');">
                             {{ button("删除", variant="danger", type="submit", extra="!py-1 !text-xs") }}
@@ -135,7 +137,9 @@
                       </div>
                     </div>
                   {% else %}
-                    <div class="col-span-full text-sm text-slate-400 py-2">还没有风格，去「新建」抓取或提取。</div>
+                    <div class="col-span-full text-sm text-slate-400 py-2">
+                      {% if request.state.can_write_writing %}还没有风格，去「新建」抓取或提取。{% else %}还没有风格。{% endif %}
+                    </div>
                   {% endfor %}
                 </div>
                 {% if c_styles | length > 4 %}
@@ -150,6 +154,7 @@
           </div>
 
           {# ── 新建：网络抓取 / URL 提取 两个子 tab ── #}
+          {% if request.state.can_write_writing %}
           <div x-show="tab==='new'" x-cloak x-data="{ntab:'capture'}" class="space-y-4">
             <div class="flex flex-wrap gap-2 border-b border-slate-100 pb-2">
               <button @click="ntab='capture'" :class="ntab==='capture' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">网络抓取</button>
@@ -206,6 +211,7 @@
               {% endfor %}
             </div>
           </div>
+          {% endif %}
         </div>
       {% else %}
         {{ empty_state("还没有活动，先去①知识库创建 campaign。") }}

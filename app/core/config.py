@@ -57,9 +57,10 @@ GEMINI_API_KEY = os.environ.get("TNALPHA_GEMINI_API_KEY", "")          # Google 
 PERPLEXITY_API_KEY = os.environ.get("TNALPHA_PERPLEXITY_API_KEY", "")  # 🔥深度热点（sonar，付费 $1/千次）
 SOURCE_TIMEOUT = int(os.environ.get("TNALPHA_SOURCE_TIMEOUT", "30"))   # 单次搜索超时(秒)
 
-# 三角色账号（密码默认 admin@123，env 可覆盖）。role: owner/editor/publisher
+# 四角色账号（密码默认 admin@321，env 可覆盖）。
 USERS = {
-    os.environ.get("TNALPHA_OWNER_USER", "admin"):      (os.environ.get("TNALPHA_OWNER_PASS", "admin@123"), "owner"),
-    os.environ.get("TNALPHA_EDITOR_USER", "admin1"):    (os.environ.get("TNALPHA_EDITOR_PASS", "admin@123"), "editor"),
-    os.environ.get("TNALPHA_PUBLISHER_USER", "admin2"): (os.environ.get("TNALPHA_PUBLISHER_PASS", "admin@123"), "publisher"),
+    os.environ.get("TNALPHA_ADMIN0_USER", "admin0"):       (os.environ.get("TNALPHA_ADMIN0_PASS", "admin@321"), "admin0"),
+    os.environ.get("TNALPHA_OWNER_USER", "admin"):         (os.environ.get("TNALPHA_OWNER_PASS", "admin@321"), "owner"),
+    os.environ.get("TNALPHA_EDITOR_USER", "admin1"):       (os.environ.get("TNALPHA_EDITOR_PASS", "admin@321"), "editor"),
+    os.environ.get("TNALPHA_PUBLISHER_USER", "admin2"):    (os.environ.get("TNALPHA_PUBLISHER_PASS", "admin@321"), "publisher"),
 }

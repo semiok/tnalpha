@@ -32,7 +32,7 @@ def _seed_published(session: Session) -> dict[str, int]:
         campaign_id=campaign.id,
         title="在边塞练字的人",
         body="标题：在边塞练字的人\n\n正文：从一枚习字简看丝路日常。",
-        status="待审核",
+        status="已审核",
         generated_at=datetime(2026, 7, 7, 9, 0),
         platform="小红书",
     )
@@ -161,7 +161,7 @@ def test_feedback_batch_generates_article_experience_pairs(owner_client, fresh_d
             campaign_id=ids["campaign_id"],
             title="一个汉代驿站消失了两千年",
             body="正文：驿站和丝路交通。",
-            status="待审核",
+            status="已审核",
             generated_at=datetime(2026, 7, 7, 10, 0),
             platform="微信公众号",
         )
@@ -221,7 +221,7 @@ def test_topic_generation_can_reference_publish_experience(monkeypatch, fresh_db
         session.commit()
         generate_topics(session, ids["brand_id"], ids["campaign_id"], count=1)
 
-    assert "知识库关联经验包" in seen["prompt"]
+    assert "Campaign 总体经验包" in seen["prompt"]
     assert "具体物件切口有效" in seen["prompt"]
     assert "标题里保留具体物件和问题" in seen["prompt"]
 
@@ -246,7 +246,7 @@ def test_writing_prompt_can_reference_publish_experience(fresh_db):
         800,
         "下次怎么用：开头先抛出现代问题，再回到文物细节。",
     )
-    assert "发布后写作经验包" in prompt
+    assert "Campaign 总体经验包" in prompt
     assert "开头先抛出现代问题" in prompt
 
 

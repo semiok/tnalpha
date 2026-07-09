@@ -21,16 +21,18 @@
     <div class="font-bold">tnalpha <span class="text-slate-400 font-normal text-sm">· 内容生产协作平台</span></div>
     {% if request.state.version is defined %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 font-mono">v{{ request.state.version }}</span>{% endif %}
     <div class="ml-auto flex items-center gap-3 text-xs">
-      {% if request.state.level is defined and request.state.level >= 2 %}
+      {% if request.state.can_write_knowledge is defined and request.state.can_write_knowledge %}
       <form method="post" action="/settings/knowledge-writable" class="inline">
         <button type="submit" title="切换 开发/演示 模式（全站，点击即切、持久保存到本环境）"
           class="px-2 py-1 rounded font-medium {{ 'bg-emerald-100 text-emerald-700' if request.state.knowledge_writable else 'bg-amber-100 text-amber-700' }} hover:opacity-80">
           {{ '🔓 开发模式' if request.state.knowledge_writable else '👁 演示模式' }} · 点击切换
         </button>
       </form>
+      {% endif %}
+      {% if request.state.can_model_config is defined and request.state.can_model_config %}
       <a href="/settings/llm" class="text-slate-500 hover:text-brand-600">模型配置</a>
       {% endif %}
-      <span class="text-slate-400">{{ {"owner":"定义者","editor":"选题者","publisher":"发布者"}.get(request.state.role, "") if request.state.role else "" }}</span>
+      <span class="text-slate-400">{{ request.state.role_label if request.state.role else "" }}</span>
       {% if request.state.role %}<a href="/logout" class="text-slate-400 hover:text-slate-600">退出登录</a>{% endif %}
     </div>
   </header>
@@ -38,18 +40,12 @@
   {# ── 七模块导航（登录后显示） ── #}
   {% if request.state.role %}
   {% set p = request.url.path %}
-  {% set nav = [
-    ("/", "①知识库", (p == "/" or p.startswith("/brands") or p.startswith("/campaigns") or p.startswith("/pool"))),
-    ("/topics", "②选题库", p.startswith("/topics")),
-    ("/writing", "③写作引擎", p.startswith("/writing")),
-    ("/schedule", "④排期版", p.startswith("/schedule")),
-    ("/feedback", "⑤数据反馈", p.startswith("/feedback")),
-    ("/permissions", "⑥权限", p.startswith("/permissions")),
-    ("/prompts", "⑦提示词展示", p.startswith("/prompts")),
-  ] %}
   <nav class="bg-white border-b border-slate-200 sticky top-[57px] z-10">
     <div class="max-w-5xl mx-auto px-3 flex gap-1 text-sm overflow-x-auto">
-      {% for href, label, active in nav %}
+      {% for item in request.state.visible_nav %}
+      {% set href = item.href %}
+      {% set label = item.num ~ item.label %}
+      {% set active = (item.key == "knowledge" and (p == "/" or p.startswith("/brands") or p.startswith("/campaigns") or p.startswith("/pool"))) or (item.key != "knowledge" and p.startswith(href)) %}
       <a href="{{ href }}" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 {{ 'border-brand-600 text-brand-700' if active else 'border-transparent text-slate-500 hover:text-slate-800' }}">{{ label }}</a>
       {% endfor %}
     </div>

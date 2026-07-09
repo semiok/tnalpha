@@ -9,6 +9,7 @@ import re
 from sqlmodel import Session, select
 
 from app.core import llm, sources
+from app.modules.feedback.experience import campaign_experience_context
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext, TopicCandidate
 from app.modules.topic.models import Topic
@@ -77,7 +78,7 @@ def _format_rejection_experiences(topics: list[Topic]) -> str:
 
 def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int,
                    hot_hits: list[dict] | None = None,
-                   rejection_experiences: list[Topic] | None = None) -> str:
+                   campaign_experience: str = "") -> str:
     parts = [
         f"你是内容选题策划。基于以下知识库信息，生成 {count} 个**全新**的内容选题。\n",
         f"【品牌调性·约束】\n{kc.brand_prompt or '（未填）'}\n",
@@ -94,17 +95,11 @@ def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int,
             f"【本次活动·选题简报】\n{kc.campaign_digest}\n"
             "→ 这是高时效活动选题：**优先采纳/细化简报里③选题方向**（已标受众·时效），"
             "配④关键素材，按②时效节点定发布时机。\n")
-    if kc.pool_experiences:   # ①知识库里当前 campaign 已关联的经验包
-        parts.append("【知识库关联经验包】\n" + "\n---\n".join(kc.pool_experiences)
-                     + "\n→ 这些经验来自①知识库里当前范围已关联的经验包。优先做已验证有效的，"
-                     "规避曾失效的；不要机械复刻旧标题，要迁移打法。\n")
-    if rejection_experiences:
-        formatted = _format_rejection_experiences(rejection_experiences)
-        if formatted:
-            parts.append(
-                "【本活动选题经验包（来自回收站）】\n" + formatted
-                + "\n→ 这些是不采纳/删除过的选题及原因。生成新选题时要吸取教训，"
-                "避免重复同类低价值角度，并把原因反向转化为更清晰的选题判断。\n")
+    if campaign_experience:
+        parts.append(
+            "【Campaign 总体经验包】\n" + campaign_experience
+            + "\n→ 这是选题和写作共用的统一经验包。选题生成时优先吸收选题切口、历史不采纳原因、"
+            "发布复盘中的表现判断；不要机械复刻旧标题，要迁移打法。\n")
     if kc.pool_materials:
         parts.append("【补充素材】\n" + "\n---\n".join(kc.pool_materials) + "\n")
     if existing_titles:
@@ -160,8 +155,16 @@ def generate_topics(session: Session, brand_id: int, campaign_id: int | None = N
     rejection_experiences = []
     if use_rejection_experience:
         rejection_experiences = [t for t in existing if t.status == "回收站" and t.rejection_reason]
+    campaign_experience = campaign_experience_context(
+        session,
+        brand_id,
+        campaign_id,
+        task="topic",
+        inherited_packs=kc.pool_experiences,
+        rejection_topics=rejection_experiences,
+    )
     raw = llm.generate_text(_topics_prompt(
-        kc, existing_titles, count, hot_hits, rejection_experiences),
+        kc, existing_titles, count, hot_hits, campaign_experience),
                             task="topic_gen", module="topic")
     try:
         cands = parse_candidates(raw)[:count]
@@ -184,7 +187,7 @@ def generate_topics(session: Session, brand_id: int, campaign_id: int | None = N
     return created
 
 
-def _manual_prompt(kc: KnowledgeContext, titles: list[str]) -> str:
+def _manual_prompt(kc: KnowledgeContext, titles: list[str], campaign_experience: str = "") -> str:
     return "\n".join([
         "你是内容选题策划。用户已经手动指定了一组选题标题，请只补全选题信息。",
         "标题必须逐字使用用户输入，不得改写、扩写、增删标点。",
@@ -192,6 +195,7 @@ def _manual_prompt(kc: KnowledgeContext, titles: list[str]) -> str:
         f"【内容要求·约束】\n{kc.content_notes or '（未填）'}",
         f"【品牌内容定义】\n{kc.doc_digest or '（暂无）'}",
         f"【本次活动·选题简报】\n{kc.campaign_digest}" if kc.has_campaign else "【范围】品牌常青（不限活动）",
+        f"【Campaign 总体经验包】\n{campaign_experience or '（无）'}",
         "【用户指定标题】\n" + "\n".join(f"{i + 1}. {title}" for i, title in enumerate(titles)),
         "",
         "请为每个标题补全字段，严格按以下格式输出；标题必须与上面完全一致：",
@@ -219,9 +223,16 @@ def create_manual_topics(session: Session, brand_id: int, campaign_id: int | Non
     if not cleaned:
         raise ValueError("请至少填写一个选题标题")
     kc = KnowledgeContext.load(session, brand_id, campaign_id)
+    campaign_experience = campaign_experience_context(
+        session,
+        brand_id,
+        campaign_id,
+        task="topic",
+        inherited_packs=kc.pool_experiences,
+    )
     parsed: list[TopicCandidate] = []
     try:
-        raw = llm.generate_text(_manual_prompt(kc, cleaned), task="topic_manual", module="topic")
+        raw = llm.generate_text(_manual_prompt(kc, cleaned, campaign_experience), task="topic_manual", module="topic")
         parsed = parse_candidates(raw)
     except Exception as exc:
         _log.warning("[topic] 手动选题补全失败，按空字段落库：%s", exc)

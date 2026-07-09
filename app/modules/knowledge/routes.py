@@ -55,6 +55,25 @@ def home(request: Request, session: Session = Depends(get_session)):
     # 顶栏融了真实 app 的「模型配置」+「退出登录」。后端 CRUD 代码保留，翻 KNOWLEDGE_WRITABLE 即恢复动态。
     if not runtime.knowledge_writable():
         html = _DEMO_HTML.read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
+        if not auth.can_write_module(getattr(request.state, "role", None), "knowledge"):
+            html = html.replace(
+                """<form method="post" action="/settings/knowledge-writable" style="display:inline">
+        <button type="submit" title="切换 开发/演示 模式（全站，点击即切、持久保存到本环境）"
+          style="padding:.25rem .55rem;border-radius:.375rem;border:none;cursor:pointer;font-size:.75rem;font-weight:500;background:#fef3c7;color:#b45309;">👁 演示模式 · 点击切换</button>
+      </form>
+      """,
+                "",
+            )
+        if not auth.can_model_config(getattr(request.state, "role", None)):
+            html = html.replace("· 右侧「模型配置」已可真用", "")
+            html = html.replace(" · 右上角「模型配置」已可真用", "")
+            html = html.replace("· 右上角「模型配置」已可真用", "")
+            html = html.replace(
+                '<a href="/settings/llm" class="text-brand-600 hover:text-brand-700 font-medium">模型配置</a>\n      ',
+                "",
+            )
+        if not auth.can_view_module(getattr(request.state, "role", None), "permissions"):
+            html = html.replace(",['perm','⑥权限']", "")
         return HTMLResponse(html)
     brand = _default_brand(session)          # 单品牌：默认「敦煌当代美术馆」
     campaigns = session.exec(

@@ -206,7 +206,7 @@
             {% endif %}
             {% if t.status != "回收站" %}
             <form method="post" action="/topics/{{ t.id }}/delete?status={{ active_tab }}&scope={{ active_scope }}" class="inline"
-                  onsubmit="const reason = prompt('请输入不采纳原因（用于沉淀选题经验包）'); if (!reason || !reason.trim()) return false; this.querySelector('[name=rejection_reason]').value = reason.trim(); return true;">
+                  onsubmit="const reason = prompt('请输入不采纳原因（用于沉淀 Campaign 总体经验包）'); if (!reason || !reason.trim()) return false; this.querySelector('[name=rejection_reason]').value = reason.trim(); return true;">
               <input type="hidden" name="rejection_reason" value="">
               <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
             </form>

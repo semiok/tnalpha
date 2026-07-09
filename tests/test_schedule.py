@@ -39,7 +39,7 @@ def _seed(session: Session) -> dict[str, int]:
         title="品牌文章",
         body="品牌正文",
         image_prompt="品牌图像提示词",
-        status="待审核",
+        status="已审核",
         generated_at=generated_at,
         platform="小红书",
         word_count=800,
@@ -50,7 +50,7 @@ def _seed(session: Session) -> dict[str, int]:
         title="活动文章",
         body="活动正文",
         image_prompt="活动图像提示词",
-        status="待审核",
+        status="已审核",
         generated_at=generated_at,
         platform="微信公众号",
         word_count=1200,
@@ -88,7 +88,7 @@ def test_schedulable_articles_are_generated_and_unscheduled(fresh_db):
         campaign_articles = schedule.schedulable_articles(session, ids["brand_id"], ids["campaign_id"])
         assert [a.id for a in campaign_articles] == []
         assert schedule.schedulable_articles(session, ids["brand_id"], None)[0].id == ids["brand_article_id"]
-        assert session.get(Article, ids["campaign_article_id"]).status == "待审核"
+        assert session.get(Article, ids["campaign_article_id"]).status == "已审核"
         assert session.get(ScheduleSlot, slot.id).status == "已排期"
         assert session.get(ScheduleWeek, week.id).campaign_id is None
         assert slot.campaign_id == ids["campaign_id"]
@@ -161,21 +161,14 @@ def test_pick_article_modal_adds_without_library_jump(owner_client, fresh_db):
     assert f'value="/schedule?campaign_id={ids["campaign_id"]}"' in modal.text
 
 
-def test_editor_can_schedule_and_publisher_can_publish(owner_client, publisher_client, fresh_db):
+def test_publisher_can_schedule_and_publish(owner_client, publisher_client, fresh_db):
     with Session(fresh_db) as session:
         ids = _seed(session)
         week = schedule.add_week(session, ids["brand_id"], ids["campaign_id"])
         publish_date = week.week_start
         week_id = week.id
 
-    blocked = publisher_client.post(
-        "/schedule/slots/add",
-        data={"week_id": week_id, "article_id": ids["campaign_article_id"], "publish_date": publish_date.isoformat()},
-        follow_redirects=False,
-    )
-    assert blocked.status_code == 403
-
-    added = owner_client.post(
+    added = publisher_client.post(
         "/schedule/slots/add",
         data={
             "week_id": week_id,
@@ -329,7 +322,7 @@ def test_library_filters_by_status_then_campaign(owner_client, fresh_db):
             campaign_id=ids["campaign_id"],
             title="额外可排期文章",
             body="正文",
-            status="待审核",
+            status="已审核",
             generated_at=datetime(2026, 7, 7, 10, 0),
             platform="小红书",
         )
@@ -386,7 +379,7 @@ def test_recommend_schedule_creates_week_and_slots(owner_client, fresh_db):
         assert [slot.publish_time for slot in slots] == ["09:30", "12:30"]
         assert all("AI 推荐排期" in slot.notes for slot in slots)
         assert all(slot.platform == "" for slot in slots)
-        assert session.get(Article, ids["campaign_article_id"]).status == "待审核"
+        assert session.get(Article, ids["campaign_article_id"]).status == "已审核"
         assert len(session.exec(select(ScheduleWeek)).all()) == 1
 
 
@@ -403,7 +396,7 @@ def test_recommend_schedule_balances_across_existing_weeks(owner_client, fresh_d
                 campaign_id=ids["campaign_id"],
                 title=f"补充文章{idx}",
                 body="正文",
-                status="待审核",
+                status="已审核",
                 generated_at=datetime(2026, 7, 7, 9, idx),
             ))
             session.commit()
@@ -538,5 +531,5 @@ def test_remove_slot_keeps_article_generated(fresh_db):
         schedule.remove_slot(session, slot.id)
 
         assert session.get(ScheduleSlot, slot.id).status == "已取消"
-        assert session.get(Article, ids["campaign_article_id"]).status == "待审核"
+        assert session.get(Article, ids["campaign_article_id"]).status == "已审核"
         assert schedule.schedulable_articles(session, ids["brand_id"], ids["campaign_id"])[0].id == ids["campaign_article_id"]

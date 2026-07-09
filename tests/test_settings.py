@@ -273,8 +273,8 @@ def test_settings_read_from_db(fresh_db):
 
 # ── 配置页：权限 ──
 
-def test_page_owner_ok(owner_client):
-    r = owner_client.get("/settings/llm")
+def test_page_admin0_ok(admin0_client):
+    r = admin0_client.get("/settings/llm")
     assert r.status_code == 200
     assert "模型配置" in r.text
     # 三种模式齐全
@@ -286,6 +286,11 @@ def test_page_owner_ok(owner_client):
 
 def test_page_editor_forbidden(editor_client):
     assert editor_client.get("/settings/llm").status_code == 403
+
+
+def test_page_owner_forbidden(owner_client):
+    assert owner_client.get("/settings/llm").status_code == 403
+    assert owner_client.post("/settings/llm", data={"text_provider": "stub"}).status_code == 403
 
 
 def test_page_anon_redirected_to_login(anon_client):
@@ -309,33 +314,33 @@ def _post(client, **over):
     return client.post("/settings/llm", data=data, follow_redirects=False)
 
 
-def test_post_persists_and_masks_key(owner_client):
-    r = _post(owner_client, openai_base_url="https://api.deepseek.com/v1",
+def test_post_persists_and_masks_key(admin0_client):
+    r = _post(admin0_client, openai_base_url="https://api.deepseek.com/v1",
               openai_api_key="sk-secret-1234", openai_model="deepseek-chat")
     assert r.status_code == 303
-    page = owner_client.get("/settings/llm").text
+    page = admin0_client.get("/settings/llm").text
     assert "https://api.deepseek.com/v1" in page and "deepseek-chat" in page
     assert "sk-secret-1234" not in page                       # 明文绝不回显
     assert "••••••1234" in page                               # 打码显示尾 4 位
 
 
-def test_empty_key_keeps_existing(owner_client):
-    _post(owner_client, openai_api_key="sk-keepme-9999", openai_model="m1")
-    _post(owner_client, openai_api_key="", openai_model="m2")  # 留空 key，改 model
+def test_empty_key_keeps_existing(admin0_client):
+    _post(admin0_client, openai_api_key="sk-keepme-9999", openai_model="m1")
+    _post(admin0_client, openai_api_key="", openai_model="m2")  # 留空 key，改 model
     got = llm._settings()
     assert got["openai_api_key"] == "sk-keepme-9999"          # key 保留
     assert got["openai_model"] == "m2"                        # 其他字段照常更新
 
 
-def test_masked_key_not_overwrite(owner_client):
-    _post(owner_client, openai_api_key="sk-original-7777")
-    _post(owner_client, openai_api_key="••••••7777")          # 回填打码值（用户没改 key）
+def test_masked_key_not_overwrite(admin0_client):
+    _post(admin0_client, openai_api_key="sk-original-7777")
+    _post(admin0_client, openai_api_key="••••••7777")          # 回填打码值（用户没改 key）
     assert llm._settings()["openai_api_key"] == "sk-original-7777"
 
 
-def test_text_and_image_keys_are_saved_independently(owner_client):
+def test_text_and_image_keys_are_saved_independently(admin0_client):
     r = _post(
-        owner_client,
+        admin0_client,
         openai_api_key="sk-text-1111",
         image_provider="minimax-m3",
         image_api_key="sk-image-2222",
@@ -348,15 +353,15 @@ def test_text_and_image_keys_are_saved_independently(owner_client):
     assert got["image_base_url"] == "https://api.minimax.chat/v1"
 
 
-def test_empty_image_key_keeps_existing(owner_client):
-    _post(owner_client, image_provider="minimax-m3", image_api_key="sk-image-9999")
-    _post(owner_client, image_provider="minimax-m3", image_api_key="")
+def test_empty_image_key_keeps_existing(admin0_client):
+    _post(admin0_client, image_provider="minimax-m3", image_api_key="sk-image-9999")
+    _post(admin0_client, image_provider="minimax-m3", image_api_key="")
     assert llm._settings()["image_api_key"] == "sk-image-9999"
 
 
-def test_minimax_m3_option_defaults_model(owner_client):
+def test_minimax_m3_option_defaults_model(admin0_client):
     r = _post(
-        owner_client,
+        admin0_client,
         text_provider="minimax-m3",
         openai_base_url="https://wrong.example/v1",
         openai_model="wrong-model",
@@ -369,9 +374,9 @@ def test_minimax_m3_option_defaults_model(owner_client):
     assert got["image_base_url"] == "https://img/v1"
 
 
-def test_minimax_m3_image_option_defaults_model(owner_client):
+def test_minimax_m3_image_option_defaults_model(admin0_client):
     r = _post(
-        owner_client,
+        admin0_client,
         text_provider="stub",
         image_provider="minimax-m3",
         openai_base_url="https://wrong.example/v1",

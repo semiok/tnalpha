@@ -10,7 +10,7 @@ from app.modules.topic.models import Topic
 from app.modules.writing.models import Article
 
 ACTIVE_SLOT_STATUSES = ("已排期", "已发布")
-SCHEDULABLE_ARTICLE_STATUSES = ("待审核", "已生成")
+SCHEDULABLE_ARTICLE_STATUSES = ("已审核",)
 RECOMMEND_TIMES = ("09:30", "12:30", "18:30")
 
 
@@ -227,7 +227,7 @@ def add_slot(session: Session, week_id: int, article_id: int,
     if article is None:
         raise ValueError("文章不存在")
     if not _is_schedulable_article(article):
-        raise ValueError("只有待审核文章可以排期")
+        raise ValueError("只有审核通过的文章可以排期")
     if active_slot_for_article(session, article_id):
         raise ValueError("文章已在排期表中")
     topic = session.get(Topic, article.topic_id)

@@ -231,11 +231,11 @@ def test_readonly_renders_prototype_shell(owner_client):
     from app.core import runtime
     runtime.set_knowledge_writable(False)               # 切演示模式
     home = owner_client.get("/").text
-    # 六模块 tab 导航齐全
-    for tab in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈", "⑥权限"):
+    for tab in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈"):
         assert tab in home
+    assert "⑥权限" not in home and "⑦提示词展示" not in home
     assert "敦煌IP" in home and "敦煌当代美术展" in home   # ①知识库那屏内容
-    assert "模型配置" in home and "退出登录" in home       # 顶栏融了真实 app 入口
+    assert "模型配置" not in home and "退出登录" in home
     assert 'action="/brands"' not in home               # 不是动态首页
     from app import __version__
     assert f"v{__version__}" in home                     # 版本号已注入演示壳（占位符替换）
@@ -473,7 +473,7 @@ def test_campaign_experience_pack_shows_in_pool_and_can_be_inherited(owner_clien
         s.add(topic)
         s.commit()
         s.refresh(topic)
-        article = Article(topic_id=topic.id, campaign_id=old_cid, title="在边塞练字的人", body="正文", status="待审核")
+        article = Article(topic_id=topic.id, campaign_id=old_cid, title="在边塞练字的人", body="正文", status="已审核")
         s.add(article)
         s.commit()
         s.refresh(article)

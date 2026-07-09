@@ -1,20 +1,14 @@
-"""模块入口 + 六模块导航测试。"""
+"""模块入口 + 权限导航测试。"""
 import pytest
 
-_PLACEHOLDERS = [
-    # ②选题库(/topics)、③写作引擎(/writing)、④排期版(/schedule)、⑤数据反馈(/feedback) 已实现，不再是占位
-    ("/permissions", "权限"),
-]
-
-
-@pytest.mark.parametrize("path,name", _PLACEHOLDERS)
-def test_placeholder_page_ok(owner_client, path, name):
-    r = owner_client.get(path)
+def test_permissions_page_ok_for_admin0(admin0_client):
+    path, name = "/permissions", "权限"
+    r = admin0_client.get(path)
     assert r.status_code == 200
-    assert name in r.text and "开发中" in r.text
+    assert name in r.text and "账号权限矩阵" in r.text
 
 
-@pytest.mark.parametrize("path,_name", _PLACEHOLDERS)
+@pytest.mark.parametrize("path,_name", [("/permissions", "权限")])
 def test_placeholder_requires_login(anon_client, path, _name):
     r = anon_client.get(path, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("/login")
@@ -53,12 +47,21 @@ def test_feedback_requires_login(anon_client):
     assert r.status_code == 303 and r.headers["location"].endswith("/login")
 
 
-def test_six_module_nav_on_pages(owner_client):
-    # 登录后每页顶栏都有六模块导航
-    for page in ("/", "/topics", "/permissions"):
-        html = owner_client.get(page).text
-        for label in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈", "⑥权限"):
+def test_admin0_seven_module_nav(admin0_client):
+    for page in ("/", "/topics", "/permissions", "/prompts"):
+        html = admin0_client.get(page).text
+        for label in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈", "⑥权限", "⑦提示词展示"):
             assert label in html
+
+
+def test_owner_nav_hides_admin_modules(owner_client):
+    html = owner_client.get("/").text
+    for label in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈"):
+        assert label in html
+    assert "⑥权限" not in html
+    assert "⑦提示词展示" not in html
+    assert owner_client.get("/permissions").status_code == 403
+    assert owner_client.get("/prompts").status_code == 403
 
 
 def test_nav_hidden_when_anon(anon_client):
