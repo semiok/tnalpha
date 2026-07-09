@@ -55,6 +55,64 @@
     function tnToast(msg){const t=document.getElementById('toast');t.textContent=msg||'保存成功';t.classList.remove('hidden');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.add('hidden'),2000);}
     document.body.addEventListener('saved', e=>tnToast((e.detail&&e.detail.value)||'保存成功'));
     function tnCloseModal(){document.getElementById('modal-slot').innerHTML='';}
+
+    // ── 滚动跟随：用户未滑动时跟随最新输出；一旦手动滑动过则保持位置不动 ──
+    // 适用于 HTMX 整块 outerHTML 替换的场景（如写作引擎详情页 2s 轮询）。
+    // 给滚动容器加 data-auto-scroll 属性即可启用；data-as-key 提供稳定的逻辑键。
+    // 状态挂在 window 上，按 key 索引，避免被 HTMX 替换丢失。
+    // 注意：afterSwap 时 e.detail.target 可能已脱离 DOM（outerHTML 替换），
+    // 必须用 document.querySelector 重新查找新插入的容器。
+    window._autoScrollState = window._autoScrollState || {};
+    document.body.addEventListener('htmx:beforeSwap', function(e){
+      // 替换前：从当前 DOM 找旧容器，记录 scrollTop
+      document.querySelectorAll('[data-auto-scroll]').forEach(function(el){
+        const key = el.getAttribute('data-as-key') || 'default';
+        if(!window._autoScrollState[key]){
+          window._autoScrollState[key] = { scrolled: false, scrollTop: el.scrollTop };
+        }
+        window._autoScrollState[key].scrollTop = el.scrollTop;
+      });
+    });
+    document.body.addEventListener('htmx:afterSwap', function(e){
+      // 替换后：从当前 DOM 重新查找新容器（旧 target 已脱离 DOM）
+      document.querySelectorAll('[data-auto-scroll]').forEach(function(el){
+        const key = el.getAttribute('data-as-key') || 'default';
+        const st = window._autoScrollState[key];
+        if(!st){ return; }
+        if(st.scrolled){
+          // 用户滑动过 → 恢复到原来的 scrollTop，不跟随
+          el._isAutoScroll = true;
+          el.scrollTop = st.scrollTop;
+        } else {
+          // 用户没滑动过 → 滚到底跟随
+          el._isAutoScroll = true;
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    });
+    // 监听滚动事件（capture 模式）：用户手动滑动一次就永久标记
+    document.addEventListener('scroll', function(e){
+      const el = e.target;
+      if(!el || !el.matches || !el.matches('[data-auto-scroll]')) return;
+      const key = el.getAttribute('data-as-key') || 'default';
+      if(!window._autoScrollState[key]){
+        window._autoScrollState[key] = { scrolled: false, scrollTop: 0 };
+      }
+      // 程序触发的滚动不算用户滑动
+      if(el._isAutoScroll){
+        el._isAutoScroll = false;
+        return;
+      }
+      window._autoScrollState[key].scrolled = true;
+      window._autoScrollState[key].scrollTop = el.scrollTop;
+    }, true);
+    // 首次加载（非 HTMX 替换）时，滚到底部让用户看到最新进度
+    document.addEventListener('DOMContentLoaded', function(){
+      document.querySelectorAll('[data-auto-scroll]').forEach(function(el){
+        el._isAutoScroll = true;
+        el.scrollTop = el.scrollHeight;
+      });
+    });
   </script>
 </body>
 </html>

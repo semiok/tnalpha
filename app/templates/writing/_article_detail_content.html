@@ -8,7 +8,7 @@
        lightboxSrc: null,
        editing: {{ 'true' if force_editing else 'false' }},
        articleId: {{ article.id }},
-       shouldPoll: {{ 'true' if (not force_editing and article.status in ('辩论中', '写作中', '重写中', '待配图') and not article.error_message) else 'false' }},
+       shouldPoll: {{ 'true' if (not force_editing and article.status in ('辩论中', '写作中', '重写中', '待配图', 'AI审核中') and not article.error_message) else 'false' }},
        pollTimer: null,
        replaceFragment(html) { const tmp = document.createElement('div'); tmp.innerHTML = html.trim(); const newEl = tmp.firstElementChild; if (!newEl) { alert('返回内容异常'); return; } document.getElementById('detail-content').replaceWith(newEl); },
        collectBody() { const segs = this.$refs.bodyArea.querySelectorAll('[data-seg]'); let parts = []; segs.forEach(el => { const t = el.dataset.type; if (t === 'text') { const txt = el.innerText; if (txt) parts.push(txt); } else if (t === 'slot') { parts.push('[插图：' + el.dataset.desc + ']'); } }); return parts.join('\n\n'); },
@@ -149,8 +149,8 @@
       </div>
 
       <div class="max-h-[500px] overflow-y-auto pr-1"
-           x-data="{}"
-           x-init="$nextTick(() => $el.scrollTop = $el.scrollHeight)">
+           data-auto-scroll
+           data-as-key="ai-review-progress">
         {# 角色介绍 #}
         {% if intros %}
           <div class="text-xs text-slate-400 font-medium ml-12 mb-2">📋 审核角色</div>
@@ -181,19 +181,56 @@
           {% endfor %}
         {% endif %}
 
-        {# 正在处理指示器 #}
-        <div class="flex gap-2 mb-2 opacity-60">
-          <div class="shrink-0 w-8 h-8 rounded-full bg-violet-500 flex items-center justify-center text-sm">🤖</div>
-          <div class="min-w-0 flex-1">
-            <div class="text-xs font-medium text-violet-700 mb-0.5">总审核员 AI</div>
-            <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2 text-sm text-slate-500 flex items-center gap-1">
-              <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce"></span>
-              <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.15s"></span>
-              <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.3s"></span>
-              <span class="ml-1">{% if not reviews %}正在生成审核角色并审核…{% else %}正在综合各方意见…{% endif %}</span>
+        {# 正在处理指示器：动态显示当前真正在说话的角色，而不是恒为总审核员。
+           - intros 为空 → 正在生成审核角色（无具体角色）
+           - reviews 数 < intros 数 → 第 (reviews|length + 1) 个审核角色正在发言
+           - reviews 数 == intros 数（且 > 0）→ 总审核员 AI 正在综合各方意见 #}
+        {% set review_count = reviews | length %}
+        {% if intros | length == 0 %}
+          {# 生成角色中：不挂任何具体角色 #}
+          <div class="flex gap-2 mb-2 opacity-60">
+            <div class="shrink-0 w-8 h-8 rounded-full bg-violet-500 flex items-center justify-center text-sm">🤖</div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-medium text-violet-700 mb-0.5">AI 审核</div>
+              <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2 text-sm text-slate-500 flex items-center gap-1">
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.15s"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.3s"></span>
+                <span class="ml-1">正在生成审核角色…</span>
+              </div>
             </div>
           </div>
-        </div>
+        {% elif review_count < (intros | length) %}
+          {# 第 review_count+1 个审核角色正在发言 #}
+          {% set next_intro = intros[review_count] %}
+          {% set c = ns.role_colors[next_intro.role] or ai_review_colors[0] %}
+          <div class="flex gap-2 mb-2 opacity-60">
+            <div class="shrink-0 w-8 h-8 rounded-full {{ c[1] }} flex items-center justify-center text-sm">🤖</div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-medium {{ c[2] }} mb-0.5">{{ next_intro.role }}</div>
+              <div class="rounded-lg {{ c[0] }} border px-3 py-2 text-sm text-slate-500 flex items-center gap-1">
+                <span class="inline-block w-1.5 h-1.5 rounded-full {{ c[1] }} animate-bounce"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full {{ c[1] }} animate-bounce" style="animation-delay:0.15s"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full {{ c[1] }} animate-bounce" style="animation-delay:0.3s"></span>
+                <span class="ml-1">正在审核…</span>
+              </div>
+            </div>
+          </div>
+        {% else %}
+          {# 所有角色已发言完 → 轮到总审核员综合 #}
+          <div class="flex gap-2 mb-2 opacity-60">
+            <div class="shrink-0 w-8 h-8 rounded-full bg-violet-500 flex items-center justify-center text-sm">🤖</div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-medium text-violet-700 mb-0.5">总审核员 AI</div>
+              <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2 text-sm text-slate-500 flex items-center gap-1">
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.15s"></span>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-violet-500 animate-bounce" style="animation-delay:0.3s"></span>
+                <span class="ml-1">正在综合各方意见…</span>
+              </div>
+            </div>
+          </div>
+        {% endif %}
       </div>
     </div>
   {% endif %}
@@ -238,22 +275,56 @@
       {% endif %}
     </div>
 
-    {% if article.debate_brief or article.review_summary %}
+    {% if article.debate_brief or article.review_summary or records %}
+      {% set role_styles = {
+        'writer':  ('✍️', '主笔',     'bg-blue-50 border-blue-100',    'bg-blue-500',   'text-blue-700'),
+        'editor':   ('✏️', '编辑',     'bg-amber-50 border-amber-100',  'bg-amber-500',  'text-amber-700'),
+        'brand':    ('🏛️', '品牌守护', 'bg-violet-50 border-violet-100','bg-violet-500','text-violet-700'),
+        'reader':   ('👥', '读者代表', 'bg-emerald-50 border-emerald-100','bg-emerald-500','text-emerald-700'),
+      } %}
       <details id="debate-records" hx-preserve class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
         <summary class="text-xs font-medium text-slate-500 cursor-pointer">AI 辩论/评审记录</summary>
         <div class="mt-2 space-y-2">
+          {# 综合简报（保留） #}
           {% if article.debate_brief %}
-            <div>
-              <div class="text-xs text-slate-400 mb-1">辩论综合简报（{{ article.debate_rounds }} 轮 × 4 角色）</div>
+            <div class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <div class="text-xs text-slate-400 mb-1">📋 辩论综合简报（{{ article.debate_rounds }} 轮 × 4 角色）</div>
               <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.debate_brief | strip_markdown }}</div>
             </div>
           {% endif %}
           {% if article.review_summary %}
-            <div>
-              <div class="text-xs text-slate-400 mb-1">评审综合建议（{{ article.review_rounds }} 轮 × 4 角色）</div>
+            <div class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <div class="text-xs text-slate-400 mb-1">📋 评审综合建议（{{ article.review_rounds }} 轮 × 4 角色）</div>
               <div class="text-xs text-slate-600 whitespace-pre-wrap">{{ article.review_summary | strip_markdown }}</div>
             </div>
           {% endif %}
+
+          {# 完整辩论/评审过程：逐条展示每个角色的发言 #}
+          {% set ns = namespace(prev_phase='', prev_round=0) %}
+          {% for r in records if r.phase in ('debate', 'review') %}
+            {% if r.phase != ns.prev_phase %}
+              {% set phase_name = '💬 辩论阶段' if r.phase == 'debate' else '🔍 评审阶段' %}
+              <div class="flex items-center gap-2 mt-3 mb-1">
+                <div class="flex-1 border-t border-dashed border-slate-200"></div>
+                <span class="text-xs text-slate-400 font-medium">{{ phase_name }}</span>
+                <div class="flex-1 border-t border-dashed border-slate-200"></div>
+              </div>
+              {% set ns.prev_phase = r.phase %}
+              {% set ns.prev_round = 0 %}
+            {% endif %}
+            {% if r.round_num != ns.prev_round %}
+              <div class="text-xs text-slate-400 font-medium ml-12 mt-2 mb-1">第 {{ r.round_num }} 轮</div>
+              {% set ns.prev_round = r.round_num %}
+            {% endif %}
+            {% set style = role_styles.get(r.role, ('❓', r.role, 'bg-slate-50 border-slate-100', 'bg-slate-400', 'text-slate-600')) %}
+            <div class="flex gap-2 mb-2">
+              <div class="shrink-0 w-8 h-8 rounded-full {{ style[3] }} flex items-center justify-center text-sm">{{ style[0] }}</div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-medium {{ style[4] }} mb-0.5">{{ style[1] }}</div>
+                <div class="rounded-lg {{ style[2] }} border px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap break-words">{{ r.content }}</div>
+              </div>
+            </div>
+          {% endfor %}
         </div>
       </details>
     {% endif %}
@@ -747,42 +818,68 @@
 
   {# ── 待审核：底部审核操作区 ── #}
   {% if article.status == "待审核" and request.state.can_write_writing %}
-    <div x-data="{showReject: false, rejectNote: ''}"
+    {# 已有效 AI 审核过：summary 非空且非失败兜底文案 → AI 审核按钮禁用 #}
+    {% set ai_reviewed = article.ai_review_summary and not article.ai_review_summary.startswith('（AI 审核综合失败') %}
+    <div x-data="{showReject: false, rejectNote: '', showApprove: false, approveNote: ''}"
          class="rounded-lg border border-slate-200 bg-white px-4 py-4 space-y-3">
       <div class="flex items-center justify-between">
         <div class="text-sm font-medium text-slate-700">📝 文章审核</div>
         <div class="text-xs text-slate-400">审核通过 → 已审核；未通过需填写原因</div>
       </div>
       <div class="flex flex-wrap gap-2">
-        {# 审核通过：直接提交 #}
-        <form method="post" action="/writing/articles/{{ article.id }}/review"
-              hx-post="/writing/articles/{{ article.id }}/review"
-              hx-target="#detail-content"
-              hx-swap="outerHTML"
-              hx-confirm="确认审核通过？"
-              class="inline">
-          <input type="hidden" name="decision" value="approve">
-          <button type="submit"
-                  class="px-4 py-2 rounded text-sm font-medium border border-emerald-400 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition">
-            ✅ 审核通过
-          </button>
-        </form>
+        {# 审核通过：展开选填原因输入 #}
+        <button type="button"
+                @click="showApprove = !showApprove"
+                class="px-4 py-2 rounded text-sm font-medium border border-emerald-400 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition">
+          ✅ 审核通过
+        </button>
         {# 审核未通过：展开原因输入 #}
         <button type="button"
                 @click="showReject = !showReject"
                 class="px-4 py-2 rounded text-sm font-medium border border-rose-300 text-rose-700 bg-rose-50 hover:bg-rose-100 transition">
           ❌ 审核未通过
         </button>
-        {# AI 审核：动态生成审核角色 → 单轮审核 → 总审核员汇总 #}
-        <form method="post" action="/writing/articles/{{ article.id }}/ai-review"
-              hx-post="/writing/articles/{{ article.id }}/ai-review"
+        {# AI 审核：已审过 → 禁用 + 提示；否则正常可点 #}
+        {% if ai_reviewed %}
+          <button type="button" disabled
+                  title="已生成 AI 审核意见，编辑图文后可重新审核"
+                  class="px-4 py-2 rounded text-sm font-medium border border-violet-200 text-violet-400 bg-violet-50 cursor-not-allowed transition">
+            🤖 AI 审核（已审核）
+          </button>
+        {% else %}
+          <form method="post" action="/writing/articles/{{ article.id }}/ai-review"
+                hx-post="/writing/articles/{{ article.id }}/ai-review"
+                hx-target="#detail-content"
+                hx-swap="outerHTML"
+                hx-confirm="启动 AI 审核？AI 会根据图文内容动态生成审核角色，各角色从自身领域视角审核后，由总审核员汇总意见并决定是否通过。"
+                class="inline">
+            <button type="submit"
+                    class="px-4 py-2 rounded text-sm font-medium border border-violet-300 text-violet-700 bg-violet-50 hover:bg-violet-100 transition">
+              🤖 AI 审核
+            </button>
+          </form>
+        {% endif %}
+      </div>
+      {# 通过原因输入区（选填） #}
+      <div x-show="showApprove" x-cloak x-transition
+           class="space-y-2">
+        <label class="block text-xs font-medium text-slate-600">通过原因 <span class="text-slate-400 font-normal">（选填）</span></label>
+        <form method="post" action="/writing/articles/{{ article.id }}/review"
+              hx-post="/writing/articles/{{ article.id }}/review"
               hx-target="#detail-content"
               hx-swap="outerHTML"
-              hx-confirm="启动 AI 审核？AI 会根据图文内容动态生成审核角色，各角色从自身领域视角审核后，由总审核员汇总意见并决定是否通过。"
-              class="inline">
+              hx-confirm="确认审核通过？"
+              @submit.prevent="$el.querySelector('input[name=note]').value = approveNote; htmx.trigger($el, 'submit');"
+              class="space-y-2">
+          <input type="hidden" name="decision" value="approve">
+          <input type="hidden" name="note" value="">
+          <textarea x-model="approveNote"
+                    placeholder="可填写通过的原因或备注（选填，不填可直接确认）..."
+                    rows="3"
+                    class="block w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 outline-none"></textarea>
           <button type="submit"
-                  class="px-4 py-2 rounded text-sm font-medium border border-violet-300 text-violet-700 bg-violet-50 hover:bg-violet-100 transition">
-            🤖 AI 审核
+                  class="px-4 py-2 rounded text-sm font-medium border border-emerald-400 text-white bg-emerald-500 hover:bg-emerald-600 transition">
+            确认通过
           </button>
         </form>
       </div>
