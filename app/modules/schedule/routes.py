@@ -63,7 +63,7 @@ def _public_image_url(url_or_path: str) -> str:
     return value
 
 
-def _article_images(session: Session, article: Article) -> list[dict[str, str]]:
+def _article_images(session: Session, article: Article) -> list[dict[str, str | int]]:
     rows = session.exec(
         select(ArticleImage)
         .where(ArticleImage.article_id == article.id, ArticleImage.is_selected == True)
@@ -76,10 +76,14 @@ def _article_images(session: Session, article: Article) -> list[dict[str, str]]:
         if not url or url in seen:
             continue
         seen.add(url)
-        images.append({"url": url, "label": row.slot_desc or row.prompt or f"配图 {row.slot_index + 1}"})
+        images.append({
+            "url": url,
+            "label": row.slot_desc or row.prompt or f"配图 {row.slot_index + 1}",
+            "slot_index": row.slot_index,
+        })
     fallback = _public_image_url(article.image_url)
     if fallback and fallback not in seen:
-        images.insert(0, {"url": fallback, "label": article.image_prompt or "主图"})
+        images.insert(0, {"url": fallback, "label": article.image_prompt or "主图", "slot_index": 0})
     return images
 
 
@@ -87,6 +91,46 @@ def _publish_body(body: str) -> str:
     text = re.sub(r"\n?\[插图(?:位|位置)?[：:].+?\]\n?", "\n\n", body or "")
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _body_segments_with_images(body: str, images: list[dict[str, str | int]]) -> list[dict]:
+    slots: dict[int, list[dict[str, str | int]]] = {}
+    for image in images:
+        try:
+            slot_index = int(image.get("slot_index", 0))
+        except (TypeError, ValueError):
+            slot_index = 0
+        slots.setdefault(slot_index, []).append(image)
+
+    result: list[dict] = []
+    pattern = re.compile(r"\[插图(?:位|位置)?[：:](.+?)\]")
+    last_end = 0
+    slot_index = 0
+    for match in pattern.finditer(body or ""):
+        text = (body or "")[last_end:match.start()].strip()
+        if text:
+            result.append({"type": "text", "text": text})
+        result.append({
+            "type": "slot",
+            "slot_index": slot_index,
+            "desc": match.group(1).strip(),
+            "images": slots.get(slot_index, []),
+        })
+        slot_index += 1
+        last_end = match.end()
+    tail = (body or "")[last_end:].strip()
+    if tail:
+        result.append({"type": "text", "text": tail})
+
+    if slot_index == 0 and images:
+        for idx in sorted(slots):
+            result.append({
+                "type": "slot",
+                "slot_index": idx,
+                "desc": str((slots[idx][0].get("label") if slots[idx] else "") or "文章配图"),
+                "images": slots[idx],
+            })
+    return result
 
 
 def _download_image_bytes(url: str) -> tuple[bytes, str]:
@@ -507,12 +551,14 @@ def article_preview(article_id: int, request: Request, session: Session = Depend
     images = _article_images(session, article)
     publish_body = _publish_body(article.body)
     copy_text = "\n\n".join(part for part in [article.title, publish_body] if part)
+    body_segments = _body_segments_with_images(article.body, images)
     return templates.TemplateResponse(request, "schedule/_article_preview.html", {
         "request": request,
         "article": article,
         "topic": topic,
         "images": images,
         "publish_body": publish_body,
+        "body_segments": body_segments,
         "copy_text": copy_text,
     })
 

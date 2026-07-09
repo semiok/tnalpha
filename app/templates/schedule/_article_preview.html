@@ -31,25 +31,27 @@
           <div class="text-slate-600 whitespace-pre-wrap">{{ topic.outline }}</div>
         </div>
       {% endif %}
-      {% if images %}
-        <div>
-          <div class="text-xs text-slate-400 mb-2">配图</div>
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {% for image in images %}
-            <a href="{{ image.url }}" target="_blank" class="group rounded-lg border border-slate-100 bg-slate-50 overflow-hidden">
-              <img src="{{ image.url }}" alt="{{ image.label }}" class="w-full aspect-square object-cover bg-slate-100">
-              <div class="px-2 py-1.5 text-[11px] text-slate-500 truncate group-hover:text-brand-600">{{ image.label }}</div>
-            </a>
-            {% endfor %}
-          </div>
-        </div>
-      {% endif %}
-      {% if publish_body %}
+      {% if body_segments %}
         <div class="rounded-xl border border-slate-100 bg-white px-4 py-4">
           <div class="text-xs text-slate-400 mb-2">发布正文</div>
           <article class="prose prose-sm max-w-none text-slate-700">
-            {% for block in publish_body.split('\n\n') %}
-              {% if block.strip() %}<p class="mb-3 leading-7 whitespace-pre-wrap">{{ block.strip() }}</p>{% endif %}
+            {% for seg in body_segments %}
+              {% if seg.type == "text" %}
+                {% for block in seg.text.split('\n\n') %}
+                  {% if block.strip() %}<p class="mb-3 leading-7 whitespace-pre-wrap">{{ block.strip() }}</p>{% endif %}
+                {% endfor %}
+              {% elif seg.type == "slot" and seg.images %}
+                <figure class="my-4 space-y-2">
+                  {% for image in seg.images %}
+                  <a href="{{ image.url }}" target="_blank" class="block group rounded-lg border border-slate-100 bg-slate-50 overflow-hidden">
+                    <img src="{{ image.url }}" alt="{{ image.label }}" class="w-full max-h-[560px] object-contain bg-slate-100">
+                    <figcaption class="px-2 py-1.5 text-[11px] text-slate-500 truncate group-hover:text-brand-600">
+                      {{ image.label or seg.desc }}
+                    </figcaption>
+                  </a>
+                  {% endfor %}
+                </figure>
+              {% endif %}
             {% endfor %}
           </article>
         </div>

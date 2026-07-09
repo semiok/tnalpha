@@ -53,7 +53,7 @@ def _seed(session: Session) -> dict[str, int]:
         topic_id=campaign_topic.id,
         campaign_id=campaign.id,
         title="活动文章",
-        body="活动正文",
+        body="活动正文开头\n\n[插图：活动配图]\n\n活动正文结尾",
         image_prompt="活动图像提示词",
         status="已审核",
         generated_at=generated_at,
@@ -156,6 +156,11 @@ def test_schedule_page_lists_generated_articles_and_preview(owner_client, fresh_
     assert "复制全文" in preview.text
     assert "下载全部图片" in preview.text
     assert "/writing/uploads/schedule-preview.png" in preview.text
+    assert "[插图" not in preview.text
+    before = preview.text.find("活动正文开头")
+    image = preview.text.find("/writing/uploads/schedule-preview.png")
+    after = preview.text.find("活动正文结尾")
+    assert before < image < after
 
     zipped = owner_client.get(f"/schedule/articles/{ids['campaign_article_id']}/images.zip")
     assert zipped.status_code == 200
