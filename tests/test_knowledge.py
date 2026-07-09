@@ -527,6 +527,7 @@ def test_campaign_experience_pack_shows_in_pool_and_can_be_inherited(owner_clien
         assert "在边塞练字的人" in pack.content
         assert "选题经验" in pack.content and "写作经验" in pack.content
         pack_id = pack.id
+        slot_id = slot.id
         assert len(s.exec(select(FeedbackExperience).where(FeedbackExperience.source_slot_id == slot.id)).all()) == 2
 
     pool_page = owner_client.get("/pool")
@@ -535,7 +536,8 @@ def test_campaign_experience_pack_shows_in_pool_and_can_be_inherited(owner_clien
     assert "丝路有多长" in pool_page.text
     assert "在边塞练字的人" in pool_page.text
     assert "正向经验" in pool_page.text and "反向风险" in pool_page.text
-    assert "删除经验包" in pool_page.text
+    assert "删除经验包" not in pool_page.text
+    assert "删除此文章经验" in pool_page.text
     assert "2条经验" not in pool_page.text
     home = owner_client.get("/")
     assert "继承历史经验包" in home.text
@@ -558,13 +560,22 @@ def test_campaign_experience_pack_shows_in_pool_and_can_be_inherited(owner_clien
         ctx = KnowledgeContext.load(s, brand_id, new_cid)
         assert any("新 campaign 生成选题时优先复用" in item for item in ctx.pool_experiences)
 
-    deleted = owner_client.post(f"/pool/{pack_id}/delete", follow_redirects=False)
+    blocked = owner_client.post(f"/pool/{pack_id}/delete", follow_redirects=False)
+    assert blocked.status_code == 400
+
+    deleted = owner_client.post(
+        "/pool/experience-articles/delete",
+        data={"source_slot_id": slot_id},
+        follow_redirects=False,
+    )
     assert deleted.status_code == 303 and deleted.headers["location"] == "/pool"
     with Session(fresh_db) as s:
-        assert s.get(PoolTopic, pack_id) is None
-        assert not s.exec(select(CampaignPoolRef).where(CampaignPoolRef.pool_topic_id == pack_id)).all()
+        assert s.get(PoolTopic, pack_id) is not None
+        assert s.exec(select(CampaignPoolRef).where(CampaignPoolRef.pool_topic_id == pack_id)).all()
         entries = s.exec(select(FeedbackExperience).where(FeedbackExperience.campaign_id == old_cid)).all()
         assert entries and all(not entry.is_active for entry in entries)
+    pool_after_delete = owner_client.get("/pool")
+    assert "在边塞练字的人" not in pool_after_delete.text
 
 
 def test_brand_evergreen_experience_pack_shows_in_pool(owner_client, fresh_db):

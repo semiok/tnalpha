@@ -19,6 +19,7 @@ from app.modules.feedback.models import FeedbackExperience
 from app.modules.knowledge import analysis
 from app.modules.knowledge.experience_pool import (
     campaign_experience_pack_options, sync_all_campaign_experience_packs,
+    sync_brand_experience_pack, sync_campaign_experience_pack,
 )
 from app.modules.knowledge.models import (
     Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, PoolTopic,
@@ -438,32 +439,48 @@ def _delete_pool_file_if_safe(file_path: str) -> None:
         pass
 
 
+@router.post("/pool/experience-articles/delete")
+def delete_experience_article(request: Request,
+                              source_slot_id: int | None = Form(None),
+                              article_id: int | None = Form(None),
+                              session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    brand = _default_brand(session)
+    conditions = [FeedbackExperience.brand_id == brand.id, FeedbackExperience.is_active == True]
+    if source_slot_id:
+        conditions.append(FeedbackExperience.source_slot_id == source_slot_id)
+    elif article_id:
+        conditions.append(FeedbackExperience.article_id == article_id)
+    else:
+        raise HTTPException(400, "缺少文章经验来源")
+    entries = session.exec(select(FeedbackExperience).where(*conditions)).all()
+    campaign_ids = {entry.campaign_id for entry in entries}
+    for entry in entries:
+        entry.is_active = False
+        session.add(entry)
+    session.commit()
+    for campaign_id in campaign_ids:
+        if campaign_id is None:
+            sync_brand_experience_pack(session, brand.id)
+        else:
+            sync_campaign_experience_pack(session, campaign_id)
+    return RedirectResponse("/pool", status_code=303)
+
+
 @router.post("/pool/{topic_id}/delete")
 def delete_pool_topic(topic_id: int, request: Request, session: Session = Depends(get_session)):
     auth.require_level(request, 2)
     topic = session.get(PoolTopic, topic_id)
     if not topic:
         return RedirectResponse("/pool", status_code=303)
+    if topic.kind == "经验包" and topic.source == "feedback":
+        raise HTTPException(400, "经验包不能整体删除，请删除单篇文章经验")
 
     refs = session.exec(select(CampaignPoolRef).where(CampaignPoolRef.pool_topic_id == topic_id)).all()
     for ref in refs:
         session.delete(ref)
 
-    if topic.kind == "经验包" and topic.source == "feedback":
-        brand = _default_brand(session)
-        entries = session.exec(
-            select(FeedbackExperience).where(
-                FeedbackExperience.brand_id == brand.id,
-                FeedbackExperience.campaign_id == topic.source_campaign_id,
-                FeedbackExperience.is_active == True,
-            )
-        ).all()
-        for entry in entries:
-            entry.is_active = False
-            session.add(entry)
-    else:
-        _delete_pool_file_if_safe(topic.file_path)
-
+    _delete_pool_file_if_safe(topic.file_path)
     session.delete(topic)
     session.commit()
     return RedirectResponse("/pool", status_code=303)

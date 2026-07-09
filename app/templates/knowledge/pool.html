@@ -17,12 +17,6 @@
           <span class="font-semibold text-sm text-slate-700">{{ pack.label }}</span>
           {{ chip("经验包", "brand") }}
           {{ chip(pack.article_count ~ "篇文章", "slate") }}
-          {% if can_edit %}
-          <form method="post" action="/pool/{{ pack.pool_topic.id }}/delete" class="ml-auto"
-                onsubmit="return confirm('删除这个经验包？对应经验将不再参与后续选题和写作参考。')">
-            <button type="submit" class="text-xs text-rose-500 hover:text-rose-700">删除经验包</button>
-          </form>
-          {% endif %}
         </summary>
         <div class="mt-3 space-y-3">
           <div class="text-xs text-slate-400">新建 campaign 时可以继承这个经验包；被引用后会进入②选题库和③写作引擎的经验参考。</div>
@@ -32,6 +26,17 @@
               <span class="font-medium text-sm text-slate-700">{{ article.title }}</span>
               <span class="ml-2">{{ chip(article.platform, "slate") }}</span>
               <span>{{ chip(article.performance_level, "emerald" if article.performance_level == "高表现" else "amber") }}</span>
+              {% if can_edit and (article.source_slot_id or article.article_id) %}
+              <form method="post" action="/pool/experience-articles/delete" class="inline float-right"
+                    onsubmit="return confirm('删除这篇文章沉淀出的经验？删除后不会再参与选题和写作参考。')">
+                {% if article.source_slot_id %}
+                  <input type="hidden" name="source_slot_id" value="{{ article.source_slot_id }}">
+                {% elif article.article_id %}
+                  <input type="hidden" name="article_id" value="{{ article.article_id }}">
+                {% endif %}
+                <button type="submit" class="text-xs text-rose-500 hover:text-rose-700">删除此文章经验</button>
+              </form>
+              {% endif %}
             </summary>
             <div class="mt-3 space-y-3 text-xs text-slate-600">
               <div class="rounded-md bg-slate-50 px-3 py-2">{{ article.metric_line }}</div>

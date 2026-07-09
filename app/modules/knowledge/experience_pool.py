@@ -24,6 +24,8 @@ class ExperiencePackArticle:
     performance_level: str
     metric_line: str
     entries: list[FeedbackExperience]
+    source_slot_id: int | None = None
+    article_id: int | None = None
 
 
 def _metric_line(slot: ScheduleSlot | None, metric: ScheduleMetric | None) -> str:
@@ -116,6 +118,8 @@ def _pack_articles(session: Session, entries: list[FeedbackExperience]) -> list[
             performance_level=first.performance_level or "数据不足",
             metric_line=_metric_line(slot, metric),
             entries=sorted(rows, key=lambda row: row.experience_type),
+            source_slot_id=first.source_slot_id,
+            article_id=(slot.article_id if slot else first.article_id),
         ))
     return articles
 
