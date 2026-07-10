@@ -37,6 +37,8 @@ class Topic(SQLModel, table=True):
     publish_window: str = ""      # 建议发布时机
     status: str = "候选"          # 见 TOPIC_STATUSES
     source: str = "generated"     # generated（首次生成）| added（增补去重）
+    llm_provider: str = ""        # 生成/补全此选题时使用的文本 provider
+    llm_model: str = ""           # 生成/补全此选题时使用的文本模型
     rejection_reason: str = ""    # 进回收站时填写：为什么不采纳，后续沉淀选题经验包
     rejected_at: datetime | None = None
     created_at: datetime = Field(default_factory=_now)

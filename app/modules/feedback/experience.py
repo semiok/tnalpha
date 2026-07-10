@@ -163,6 +163,8 @@ def build_experience_draft(session: Session, slot_id: int, experience_type: str)
     if sample is None:
         raise ValueError("发布样本不存在")
     fallback = _fallback_experience(sample, experience_type)
+    llm_provider, llm_model = llm.text_model_info("feedback")
+    fallback.update({"llm_provider": llm_provider, "llm_model": llm_model})
     try:
         raw = clean_llm_output(llm.generate_text(
             _draft_prompt(sample, experience_type),
@@ -178,6 +180,8 @@ def build_experience_draft(session: Session, slot_id: int, experience_type: str)
         "positive_notes": _parse_field(raw, "正向经验") or fallback["positive_notes"],
         "negative_notes": _parse_field(raw, "反向风险") or fallback["negative_notes"],
         "action_advice": _parse_field(raw, "下次怎么用") or fallback["action_advice"],
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
     }
     return parsed
 
@@ -195,6 +199,8 @@ def create_experience_from_slot(session: Session, slot_id: int, experience_type:
     if sample is None:
         raise ValueError("发布样本不存在")
     draft = build_experience_draft(session, slot_id, experience_type)
+    draft.setdefault("llm_provider", "")
+    draft.setdefault("llm_model", "")
     campaign_id = None if scope == "brand" else sample.slot.campaign_id
     entry = FeedbackExperience(
         brand_id=sample.slot.brand_id,
@@ -237,6 +243,9 @@ def create_experience_pair_from_slot(session: Session, slot_id: int, scope: str 
         for experience_type in EXPERIENCE_TYPES
         if experience_type not in existing_by_type
     }
+    for draft in drafts.values():
+        draft.setdefault("llm_provider", "")
+        draft.setdefault("llm_model", "")
     for experience_type in EXPERIENCE_TYPES:
         if experience_type in existing_by_type:
             entries.append(existing_by_type[experience_type])
@@ -321,6 +330,8 @@ def upsert_review_rejection_experience(session: Session, article: Article, note:
     entry.positive_notes = positive_notes
     entry.negative_notes = negative_notes
     entry.action_advice = action_advice
+    entry.llm_provider = "manual"
+    entry.llm_model = "review-rejection"
     entry.updated_at = _now()
     entry.is_active = True
     session.add(entry)

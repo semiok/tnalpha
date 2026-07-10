@@ -26,6 +26,8 @@ class FeedbackExperience(SQLModel, table=True):
     negative_notes: str = ""
     action_advice: str = ""
     performance_level: str = "数据不足"
+    llm_provider: str = ""       # 生成这条经验时使用的文本 provider
+    llm_model: str = ""          # 生成这条经验时使用的文本模型
     source_slot_id: int | None = Field(default=None, foreign_key="scheduleslot.id", index=True)
     article_id: int | None = Field(default=None, foreign_key="article.id", index=True)
     topic_id: int | None = Field(default=None, foreign_key="topic.id", index=True)

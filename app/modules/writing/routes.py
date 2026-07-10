@@ -610,10 +610,12 @@ def generate_article(topic_id: int, request: Request,
             })
         return RedirectResponse("/writing", status_code=303)
     # 每次生成都是新建一篇图文（支持一选题多图文，旧的保留不动）
+    llm_provider, llm_model = llm.text_model_info("writing")
     article = Article(
         topic_id=topic.id, campaign_id=topic.campaign_id, title=topic.title,
         status="辩论中" if dr > 0 else "写作中",
         debate_rounds=dr, review_rounds=rr, platform=pf, word_count=wc,
+        llm_provider=llm_provider, llm_model=llm_model,
         updated_at=_now(),
     )
     session.add(article)
@@ -696,7 +698,10 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
                 prompt = _article_prompt(topic, ctx, style, platform, word_count, writing_experience)
 
             # ── 生成文本 ──
+            llm_provider, llm_model = llm.text_model_info("writing")
             article.status = "写作中"
+            article.llm_provider = llm_provider
+            article.llm_model = llm_model
             article.updated_at = _now()
             s.add(article)
             s.commit()
@@ -816,6 +821,7 @@ def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
                     else:
                         need = 4
                     img_p = _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, platform)
+                    image_provider, image_model = llm.image_model_info("writing")
                     try:
                         urls = llm.generate_images(img_p, module="writing", n=need, fallback=False)
                     except RuntimeError:
@@ -830,6 +836,8 @@ def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
                             article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
                             slot_index=slot_idx, slot_desc=slot_desc,
                             is_selected=is_sel,
+                            image_provider=image_provider,
+                            image_model=image_model,
                         ))
                     s.commit()
 
@@ -893,6 +901,7 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
                 s.commit()
 
                 img_p = _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, platform)
+                image_provider, image_model = llm.image_model_info("writing")
                 try:
                     urls = llm.generate_images(img_p, module="writing", n=4, fallback=False)
                 except RuntimeError:
@@ -903,6 +912,8 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
                         article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
                         slot_index=slot_index, slot_desc=slot_desc,
                         is_selected=(candidate_idx == 0),
+                        image_provider=image_provider,
+                        image_model=image_model,
                     ))
                 s.commit()
 
@@ -1468,6 +1479,8 @@ def upload_slot_image(article_id: int, slot_index: int, request: Request,
         slot_index=slot_index,
         slot_desc=slot_desc,
         is_selected=True,
+        image_provider="manual",
+        image_model="upload",
     )
     session.add(image)
     session.commit()

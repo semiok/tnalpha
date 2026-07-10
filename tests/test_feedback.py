@@ -64,7 +64,11 @@ def _seed_published(session: Session) -> dict[str, int]:
     }
 
 
-def test_feedback_page_creates_experience_from_published_sample(owner_client, fresh_db):
+def test_feedback_page_creates_experience_from_published_sample(owner_client, fresh_db, monkeypatch):
+    monkeypatch.setattr(
+        "app.modules.feedback.experience.llm.text_model_info",
+        lambda module="default": ("minimax-m3", "MiniMax-M3"),
+    )
     with Session(fresh_db) as session:
         ids = _seed_published(session)
 
@@ -94,6 +98,8 @@ def test_feedback_page_creates_experience_from_published_sample(owner_client, fr
         assert all(entry.campaign_id == ids["campaign_id"] for entry in entries)
         assert all(entry.platform == "小红书" for entry in entries)
         assert all(entry.performance_level == "高表现" for entry in entries)
+        assert all(entry.llm_provider == "minimax-m3" for entry in entries)
+        assert all(entry.llm_model == "MiniMax-M3" for entry in entries)
 
     updated = owner_client.post(
         f"/feedback/experiences/slot/{ids['slot_id']}/update",

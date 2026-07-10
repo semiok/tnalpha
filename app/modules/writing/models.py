@@ -63,6 +63,8 @@ class Article(SQLModel, table=True):
     # 发布平台 & 目标字数
     platform: str = ""           # "小红书" | "微信公众号" | ""
     word_count: int = 0          # 目标字数（0=不限）
+    llm_provider: str = ""       # 生成正文时使用的文本 provider
+    llm_model: str = ""          # 生成正文时使用的文本模型
     # 审核
     review_note: str = ""        # 审核备注（审核未通过时填写原因；通过时可选备注）
     reviewed_at: datetime | None = None  # 审核时间（首次审核时记录，不覆盖）
@@ -90,3 +92,5 @@ class ArticleImage(SQLModel, table=True):
     slot_index: int = 0         # 第几个插图位置（0=头图/封面）
     slot_desc: str = ""        # 该位置插图描述（AI 标记的内容）
     is_selected: bool = False  # 用户是否选中此图
+    image_provider: str = ""    # 生成/上传此图的 provider；手动上传为 manual
+    image_model: str = ""       # 生成此图的模型；手动上传为 upload

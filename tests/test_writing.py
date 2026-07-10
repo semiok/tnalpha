@@ -361,6 +361,8 @@ def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
 
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
     monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
+    monkeypatch.setattr(wroutes.llm, "text_model_info", lambda module="default": ("codex", "gpt-5.5"))
+    monkeypatch.setattr(wroutes.llm, "image_model_info", lambda module="default": ("minimax-m3", "image-01"))
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
         s.add(Style(campaign_id=campaign.id, name="默认风格", summary="短句开场，史料收束", is_default=True))
@@ -383,9 +385,13 @@ def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
         assert topic.status == "采纳"
         assert article.status == "待审核"
         assert "完整文章" in article.body
+        assert article.llm_provider == "codex"
+        assert article.llm_model == "gpt-5.5"
         images = s.exec(select(ArticleImage).where(ArticleImage.article_id == article.id)).all()
         assert len(images) >= 1
         assert all(img.image_url.endswith(".png") for img in images)
+        assert all(img.image_provider == "minimax-m3" for img in images)
+        assert all(img.image_model == "image-01" for img in images)
         assert article.debate_rounds == 0
         assert article.review_rounds == 0
 

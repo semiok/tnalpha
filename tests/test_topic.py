@@ -61,6 +61,20 @@ def test_parse_candidates_raises_on_garbage():
         parse_candidates("[stub:topic_gen] 一段没有标题结构的文本")
 
 
+def test_parse_candidates_rejects_model_thinking_output():
+    bad = """标题：one-line title
+纲要：The 纲要 should be 100-200 characters, containing what, core entry point, usable materials.
+受众：target audience
+时效：strong/medium/weak
+素材：specific materials
+配图：image direction
+时机：suggested publishing timing
+
+Let me finalize and write the output."""
+    with pytest.raises(ValueError):
+        parse_candidates(bad)
+
+
 # ---------- generate：两模式 ----------
 
 def test_generate_topics_campaign_mode(fresh_db, monkeypatch):
@@ -71,12 +85,15 @@ def test_generate_topics_campaign_mode(fresh_db, monkeypatch):
         return _SAMPLE
 
     monkeypatch.setattr(gen.llm, "generate_text", fake)
+    monkeypatch.setattr(gen.llm, "text_model_info", lambda module="default": ("codex", "gpt-5.5"))
     with Session(fresh_db) as s:
         bid, cid = _seed_brand(s, with_campaign=True)
         created = gen.generate_topics(s, bid, cid, count=5)
     assert len(created) == 2
     assert all(t.campaign_id == cid for t in created)
     assert created[0].source == "generated"               # 首轮=generated
+    assert created[0].llm_provider == "codex"
+    assert created[0].llm_model == "gpt-5.5"
     assert "③选题方向" in seen["prompt"]                    # 活动简报进了 prompt
 
 

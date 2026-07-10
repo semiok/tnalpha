@@ -33,6 +33,34 @@ def _settings(scope: str = "default") -> dict:
         }
 
 
+def text_model_info(module: str = "default") -> tuple[str, str]:
+    """返回某模块当前生效的文本 provider/model，用于业务记录留痕。"""
+    st = _settings(module)
+    provider = (st.get("text_provider") or "stub").strip() or "stub"
+    if provider in ("openai", "minimax-m3"):
+        model = st.get("openai_model") or ""
+    elif provider == "claude-cli":
+        model = st.get("claude_model") or ""
+    elif provider == "codex":
+        model = st.get("codex_model") or ""
+    else:
+        model = "stub"
+    return provider, model
+
+
+def image_model_info(module: str = "default") -> tuple[str, str]:
+    """返回某模块当前生效的图像 provider/model，用于业务记录留痕。"""
+    st = _settings(module)
+    provider = (st.get("image_provider") or "stub").strip() or "stub"
+    if provider == "minimax-m3":
+        model = st.get("image_model") or ""
+    elif provider == "codex":
+        model = config.IMAGE_MODEL
+    else:
+        model = "stub"
+    return provider, model
+
+
 def generate_text(prompt: str, task: str = "default", pdf_path: str | None = None,
                   module: str = "default", attachments: list[str] | None = None,
                   fallback: bool = True) -> str:
