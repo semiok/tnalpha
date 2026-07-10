@@ -27,6 +27,12 @@
                 <div class="flex items-center justify-between mb-3">
                   <div class="text-sm font-medium text-slate-700">{{ c.name }}</div>
                   <div class="flex items-center gap-3">
+                    {% if request.state.can_write_writing %}
+                      <form method="post" action="/writing/styles/campaign/{{ c.id }}/preset" class="inline"
+                            onsubmit="return confirm('为「{{ c.name }}」生成 8 个 AI 预设风格？{% if c_presets %}已存在的预设将被覆盖（默认 preset 保留）。{% endif %}');">
+                        {{ button("生成 8 个预设", variant="primary", type="submit", extra="!py-1 !text-xs") }}
+                      </form>
+                    {% endif %}
                     {% if c_presets | selectattr('is_default') | list %}
                       {% if request.state.can_write_writing %}
                         <form method="post" action="/writing/styles/campaign/{{ c.id }}/unset-default" class="inline"

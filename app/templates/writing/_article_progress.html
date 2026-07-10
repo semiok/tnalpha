@@ -30,8 +30,8 @@
   </div>
 
   <div class="max-h-[400px] overflow-y-auto pr-1"
-       x-data="{}"
-       x-init="$nextTick(() => $el.scrollTop = $el.scrollHeight)">
+       data-auto-scroll
+       data-as-key="article-progress">
     {% if article.debate_brief and (is_writing or is_review or is_rewrite) %}
       <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
         <div class="text-xs text-slate-400 mb-1">📋 辩论综合简报</div>

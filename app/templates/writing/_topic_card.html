@@ -1,26 +1,67 @@
-{# 单个待写作选题卡片（用于首页列表 + 生成后的 HTMX 刷新）。#}
+{# 单个待写作选题卡片（用于首页列表 + 生成后的 HTMX 刷新）。
+   支持一选题多图文：展示篇数统计 + 可展开图文列表 + 生成入口。 #}
 {% from "components/ui.html" import button %}
-{% set card_article = article if article is defined else (topic_articles.get(t.id) if topic_articles is defined else none) %}
-{% set is_generating = card_article and card_article.status in ("辩论中", "写作中", "重写中", "待配图") and not card_article.error_message %}
+{# card_articles = 该选题下全部未删除图文（列表）；首页来自 topic_articles dict，生成响应直接传入 #}
+{% set card_articles = topic_articles.get(t.id, []) if topic_articles is defined else [] %}
+{% set ns = namespace(gen=0, review=0, other=0, generating_id=none) %}
+{% for a in card_articles %}
+  {% if a.status in ("辩论中", "写作中", "重写中", "待配图", "AI审核中") and not a.error_message %}
+    {% set ns.gen = ns.gen + 1 %}
+    {% if ns.generating_id is none %}{% set ns.generating_id = a.id %}{% endif %}
+  {% elif a.status == "待审核" %}
+    {% set ns.review = ns.review + 1 %}
+  {% else %}
+    {% set ns.other = ns.other + 1 %}
+  {% endif %}
+{% endfor %}
+{% set total = card_articles | length %}
 <div id="topic-card-{{ t.id }}"
-     x-data="{modalOpen: false, wordCount: 800, aiImages: true}">
+     x-data="{modalOpen: false, wordCount: 800, aiImages: true, showArticles: {{ 'true' if total > 0 and ns.gen == 0 else 'false' }}}">
   <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
     <div class="text-sm font-medium text-slate-700">{{ t.title }}</div>
     <div class="text-xs text-slate-400 mt-1">{{ cmap.get(t.campaign_id, "品牌常青") }}</div>
     <div class="text-xs text-slate-500 mt-2 line-clamp-3">{{ t.outline }}</div>
-    {% if is_generating %}
-      <a href="/writing/articles/{{ card_article.id }}"
-         class="mt-3 block rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-700 hover:bg-brand-100 transition">
-        <div class="flex items-center gap-2">
-          <span class="inline-block w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
-          <span class="font-medium">{{ card_article.status }}…</span>
-          <span class="text-xs text-brand-500 ml-auto">查看进度 →</span>
-        </div>
-      </a>
-    {% elif request.state.can_write_writing %}
+
+    {# 阻止提示（生成中时再次点生成图文） #}
+    {% if block_message is defined and block_message %}
+      <div class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700">
+        ⚠ {{ block_message }}
+      </div>
+    {% endif %}
+
+    {# 图文统计 #}
+    {% if total > 0 %}
+      <div class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span class="text-slate-500">共 {{ total }} 篇图文</span>
+        {% if ns.gen > 0 %}<span class="text-amber-600">● {{ ns.gen }} 生成中</span>{% endif %}
+        {% if ns.review > 0 %}<span class="text-emerald-600">● {{ ns.review }} 待审核</span>{% endif %}
+        {% if ns.other > 0 %}<span class="text-slate-400">● {{ ns.other }} 其他</span>{% endif %}
+      </div>
+      <button @click="showArticles = !showArticles" type="button"
+              class="mt-1 text-xs text-brand-500 hover:text-brand-600 hover:underline flex items-center gap-1 cursor-pointer">
+        <span x-text="showArticles ? '收起列表' : '查看列表'"></span>
+        <span x-text="showArticles ? '▴' : '▾'"></span>
+      </button>
+      <div x-show="showArticles" x-cloak class="mt-1.5 space-y-1">
+        {% for a in card_articles %}
+          {% set a_running = a.status in ("辩论中", "写作中", "重写中", "待配图", "AI审核中") and not a.error_message %}
+          <a href="/writing/articles/{{ a.id }}"
+             class="block rounded-lg border px-2.5 py-1.5 text-xs transition {{ 'border-amber-200 bg-amber-50' if a_running else ('border-emerald-200 bg-emerald-50' if a.status == '待审核' else 'border-slate-200 bg-white') }} hover:brightness-95">
+            <div class="flex items-center gap-1.5">
+              {% if a_running %}<span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0"></span>{% endif %}
+              <span class="font-medium text-slate-700 truncate flex-1">#{{ a.id }} {{ a.status }}</span>
+              {% if a.error_message %}<span class="text-rose-500 shrink-0" title="{{ a.error_message }}">⚠</span>{% endif %}
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {# 生成入口：始终显示按钮（生成中时按钮仍在，点击会触发守卫阻止） #}
+    {% if request.state.can_write_writing %}
       <button type="button" @click="modalOpen = true"
               class="mt-3 w-full px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700">
-        生成图文
+        {% if total > 0 %}再生成一篇{% else %}生成图文{% endif %}
       </button>
     {% endif %}
   </div>

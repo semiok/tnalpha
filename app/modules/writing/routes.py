@@ -57,6 +57,39 @@ def _jinja_combine(base: dict, extra: dict) -> dict:
 
 templates.env.filters["combine"] = _jinja_combine
 RUNNING_ARTICLE_STATUSES = ("辩论中", "写作中", "重写中", "待配图", "AI审核中")
+# AI 审核综合失败时的兜底文案（见 debate._synthesize_ai_review），出现它代表"未有效审过"
+AI_REVIEW_FAIL_MARKER = "（AI 审核综合失败"
+
+
+def _ai_review_effective(summary: str | None) -> bool:
+    """判断文章是否已有一份有效的 AI 审核意见（可据此拒绝重复审核）。
+
+    空或失败兜底文案 → 未有效审过，允许重试；其余 → 已审过。
+    """
+    if not summary:
+        return False
+    return not summary.startswith(AI_REVIEW_FAIL_MARKER)
+
+
+def _has_ai_review_records(session: Session, article_id: int) -> bool:
+    """是否存有 ai_review 阶段的 DebateRecord（角色介绍/发言）。"""
+    return session.exec(
+        select(DebateRecord.id).where(
+            DebateRecord.article_id == article_id,
+            DebateRecord.phase == "ai_review",
+        )
+    ).first() is not None
+
+
+def _clear_ai_review_records(session: Session, article_id: int) -> None:
+    """删除某文章全部 ai_review 阶段的 DebateRecord（编辑正文后旧意见失效）。"""
+    for r in session.exec(
+        select(DebateRecord).where(
+            DebateRecord.article_id == article_id,
+            DebateRecord.phase == "ai_review",
+        )
+    ).all():
+        session.delete(r)
 
 # 配图子线程互斥锁：防止同一文章并发跑多个 worker（用户双击「补生」等场景）
 _image_worker_locks: dict[int, threading.Lock] = {}
@@ -70,6 +103,40 @@ def _get_article_lock(article_id: int) -> threading.Lock:
             lock = threading.Lock()
             _image_worker_locks[article_id] = lock
         return lock
+
+
+def recover_zombie_articles() -> int:
+    """启动时恢复僵尸文章：worker 线程随进程死亡后，状态仍卡在「生成中/AI审核中」。
+
+    策略：
+    - AI审核中 → 待审核（文章已生成完毕，仅审核被中断，用户可重新发起 AI 审核或人工审核）
+    - 待配图 / 辩论中 / 写作中 / 重写中 → 保留状态但补 error_message（无完整正文，提示用户删除重生成）
+
+    返回恢复的文章数。在 main.py lifespan 的 init_db() 后调用。
+    """
+    session = next(get_session())
+    try:
+        zombies = session.exec(
+            select(Article).where(Article.status.in_(RUNNING_ARTICLE_STATUSES))
+        ).all()
+        recovered = 0
+        for a in zombies:
+            if a.status == "AI审核中":
+                a.status = "待审核"
+                a.error_message = "AI 审核因服务器重启中断，已自动恢复为待审核。"
+                a.updated_at = _now()
+                session.add(a)
+                recovered += 1
+            elif not a.error_message:
+                a.error_message = "生成因服务器重启中断，请删除后重新生成。"
+                a.updated_at = _now()
+                session.add(a)
+                recovered += 1
+        if recovered:
+            session.commit()
+        return recovered
+    finally:
+        session.close()
 
 
 def _first_brand(session: Session) -> Brand | None:
@@ -228,7 +295,7 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
     topics: list[Topic] = []
     campaigns: list[Campaign] = []
     article_rows: list[dict] = []
-    topic_articles: dict[int, Article] = {}
+    topic_articles: dict[int, list[Article]] = {}
     styles: dict[int, list[Style]] = {}
     preset_styles: dict[int, list[Style]] = {}
     if brand is not None:
@@ -246,8 +313,7 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
                 .where(Article.topic_id.in_(topic_ids))
                 .order_by(Article.updated_at.desc(), Article.id.desc())
             ).all():
-                if article.topic_id not in topic_articles:
-                    topic_articles[article.topic_id] = article
+                topic_articles.setdefault(article.topic_id, []).append(article)
         article_q = select(Article).order_by(Article.updated_at.desc(), Article.id.desc())
         if status_filter == "全部":
             # 全部 = 含已删除在内的所有状态
@@ -400,9 +466,14 @@ def delete_style(style_id: int, request: Request, session: Session = Depends(get
 
 
 @router.post("/writing/styles/campaign/{campaign_id}/preset")
-def preset_styles(campaign_id: int, request: Request, count: int = Form(3),
+def preset_styles(campaign_id: int, request: Request, count: int = Form(8),
                   session: Session = Depends(get_session)):
-    """预设：基于知识库（品牌调性/活动简报）调 LLM 生成符合主题的写作风格。"""
+    """预设：基于知识库（品牌调性/活动简报）调 LLM 生成符合主题的写作风格。
+
+    生成规则：总数凑足 8 个 preset。
+    - 若当前默认风格是 preset → 保留它，删其他 preset，生成 7 个新 preset（都不设默认）。
+    - 若默认风格不存在或非 preset → 删全部旧 preset，生成 8 个新 preset（都不设默认）。
+    """
     auth.require_level(request, 1)
     campaign = session.get(Campaign, campaign_id)
     if campaign is None:
@@ -410,7 +481,24 @@ def preset_styles(campaign_id: int, request: Request, count: int = Form(3),
     brand = session.get(Brand, campaign.brand_id)
     if brand is None:
         raise HTTPException(400, "品牌不存在")
-    n = max(1, min(count, 20))
+    # 找出真正的默认 preset（is_default=True 且 source="preset"），保留不动
+    kept_default = session.exec(
+        select(Style).where(
+            Style.campaign_id == campaign_id,
+            Style.is_default == True,
+            Style.source == "preset",
+        ).order_by(Style.id)
+    ).first()
+    # 删除该 Campaign 所有非保留的旧 preset
+    old_presets = session.exec(
+        select(Style).where(Style.campaign_id == campaign_id, Style.source == "preset")
+    ).all()
+    for p in old_presets:
+        if kept_default is None or p.id != kept_default.id:
+            session.delete(p)
+    session.commit()
+    # 需要新生成几个，凑足 count 个 preset
+    n = max(1, min(count - (1 if kept_default else 0), 20))
     ctx = KnowledgeContext.load(session, brand.id, campaign_id)
     prompt = _preset_prompt(campaign, ctx, n)
     try:
@@ -420,11 +508,10 @@ def preset_styles(campaign_id: int, request: Request, count: int = Form(3),
     parsed = _parse_styles(raw)
     if not parsed:
         raise HTTPException(502, "AI 未返回可识别的风格，请重试或检查模型配置")
-    existing_default = _default_style(session, campaign_id) is not None
-    for i, (name, summary) in enumerate(parsed[:n]):
+    for name, summary in parsed[:n]:
         session.add(Style(
             campaign_id=campaign_id, name=name, summary=summary,
-            source="preset", is_default=(not existing_default and i == 0),
+            source="preset", is_default=False,
         ))
     session.commit()
     return RedirectResponse("/writing", status_code=303)
@@ -495,55 +582,40 @@ def generate_article(topic_id: int, request: Request,
     ai_images_flag = ai_images.strip().lower() in ("true", "1", "yes", "on")
     # Campaign 总体经验包默认纳入后续生成；只有明确传 false/off/no/0 才关闭，便于兼容旧表单。
     use_experience_flag = use_experience.strip().lower() not in ("false", "0", "no", "off")
-    article = session.exec(
-        _active_article_query().where(Article.topic_id == topic.id).order_by(Article.updated_at.desc())
+    # 同选题已有生成中的图文（无错误）→ 阻止并提示，不新建
+    running = session.exec(
+        _active_article_query()
+        .where(Article.topic_id == topic.id, Article.status.in_(RUNNING_ARTICLE_STATUSES))
+        .order_by(Article.updated_at.desc())
     ).first()
-    if article is None:
-        article = Article(topic_id=topic.id, campaign_id=topic.campaign_id, title=topic.title, status="辩论中")
-    elif article.status in RUNNING_ARTICLE_STATUSES and not article.error_message:
+    if running and not running.error_message:
         if request.headers.get("HX-Request") == "true":
-            campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all()
-            records = session.exec(
-                select(DebateRecord).where(DebateRecord.article_id == article.id)
-                .order_by(DebateRecord.round_num, DebateRecord.id)
+            all_articles = session.exec(
+                _active_article_query()
+                .where(Article.topic_id == topic.id)
+                .order_by(Article.updated_at.desc(), Article.id.desc())
             ).all()
-            return templates.TemplateResponse(request, "writing/_generate_response.html", {
+            campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all()
+            return templates.TemplateResponse(request, "writing/_topic_card.html", {
                 "request": request,
                 "t": topic,
                 "topic": topic,
-                "article": article,
                 "campaigns": campaigns,
                 "cmap": {c.id: c.name for c in campaigns},
                 "campaign_name": {c.id: c.name for c in campaigns}.get(topic.campaign_id, "品牌常青"),
                 "level": getattr(request.state, "level", 0),
-                "records": records,
-                "oob": True,
-                "display_phase": _display_phase_for_article(article),
+                "topic_articles": {topic.id: all_articles},
                 "platforms": PLATFORMS,
+                "block_message": "当前已有生成中的图文，请等待完成后再生成新的。",
             })
         return RedirectResponse("/writing", status_code=303)
-    # 清空旧辩论记录 + 旧候选图（重新生成时，避免残留与新正文错位）
-    old_records = session.exec(
-        select(DebateRecord).where(DebateRecord.article_id == article.id)
-    ).all() if article.id else []
-    for r in old_records:
-        session.delete(r)
-    if article.id:
-        for oi in session.exec(
-            select(ArticleImage).where(ArticleImage.article_id == article.id)
-        ).all():
-            session.delete(oi)
-    article.status = "辩论中" if dr > 0 else "写作中"
-    article.error_message = ""
-    article.debate_rounds = dr
-    article.review_rounds = rr
-    article.debate_brief = ""
-    article.review_summary = ""
-    article.image_url = ""
-    article.image_prompt = ""
-    article.platform = pf
-    article.word_count = wc
-    article.updated_at = _now()
+    # 每次生成都是新建一篇图文（支持一选题多图文，旧的保留不动）
+    article = Article(
+        topic_id=topic.id, campaign_id=topic.campaign_id, title=topic.title,
+        status="辩论中" if dr > 0 else "写作中",
+        debate_rounds=dr, review_rounds=rr, platform=pf, word_count=wc,
+        updated_at=_now(),
+    )
     session.add(article)
     session.commit()
     session.refresh(article)
@@ -556,8 +628,13 @@ def generate_article(topic_id: int, request: Request,
     t.start()
 
     if request.headers.get("HX-Request") == "true":
-        # HTMX：左侧刷新原选题卡片，右侧 OOB 追加生成中卡片
+        # HTMX：左侧刷新原选题卡片（显示新+旧图文列表），右侧 OOB 追加生成中卡片
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all()
+        all_articles = session.exec(
+            _active_article_query()
+            .where(Article.topic_id == topic.id)
+            .order_by(Article.updated_at.desc(), Article.id.desc())
+        ).all()
         return templates.TemplateResponse(request, "writing/_generate_response.html", {
             "request": request,
             "t": topic,
@@ -567,6 +644,7 @@ def generate_article(topic_id: int, request: Request,
             "cmap": {c.id: c.name for c in campaigns},
             "campaign_name": {c.id: c.name for c in campaigns}.get(topic.campaign_id, "品牌常青"),
             "level": getattr(request.state, "level", 0),
+            "topic_articles": {topic.id: all_articles},
             "records": [],
             "oob": True,
             "display_phase": None,
@@ -1178,6 +1256,8 @@ def start_ai_review(article_id: int, request: Request,
         raise HTTPException(404, "文章不存在")
     if article.status != "待审核":
         raise HTTPException(400, "只有待审核状态可以启动 AI 审核")
+    if _ai_review_effective(article.ai_review_summary):
+        raise HTTPException(400, "已生成 AI 审核意见，编辑图文后可重新审核")
     article.status = "AI审核中"
     article.error_message = ""
     article.ai_review_summary = ""
@@ -1569,6 +1649,10 @@ def edit_article_body(article_id: int, request: Request,
     new_title = (title or "").strip()
     if new_title:
         article.title = new_title[:200]
+    # 正文有改动 → 旧的 AI 审核意见已对不上新内容，清空 summary + 删 ai_review 阶段发言
+    if _ai_review_effective(article.ai_review_summary) or _has_ai_review_records(session, article_id):
+        article.ai_review_summary = ""
+        _clear_ai_review_records(session, article_id)
     article.updated_at = _now()
     session.add(article)
     session.commit()

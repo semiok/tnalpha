@@ -183,6 +183,167 @@ def test_set_default_style(owner_client, fresh_db):
         assert s.get(Style, bid).is_default is True
 
 
+# ── AI 预设生成测试 ──
+
+def _preset_llm_factory(n: int):
+    """构造返回 n 个预设风格的 fake LLM。"""
+    block = "\n\n".join(
+        f"名称：预设风格{i + 1}\n总结：这是第 {i + 1} 个 AI 预设风格的总结。"
+        for i in range(n)
+    )
+    return lambda *a, **k: block
+
+
+def test_preset_styles_creates_eight_when_no_default(owner_client, fresh_db, monkeypatch):
+    """情况B：无任何默认风格 → 删旧 preset + 生成 8 个新 preset（都不设默认）。"""
+    monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(8))
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        # 预先存在的旧 preset（应被删除）
+        s.add(Style(campaign_id=campaign.id, name="旧预设", summary="旧的", source="preset"))
+        s.commit()
+        cid = campaign.id
+
+    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        presets = s.exec(
+            select(Style).where(Style.campaign_id == cid, Style.source == "preset").order_by(Style.id)
+        ).all()
+        assert len(presets) == 8
+        assert all(p.is_default is False for p in presets)
+        assert all(p.name.startswith("预设风格") for p in presets)
+        # 旧 preset 已被删除
+        assert all(p.name != "旧预设" for p in presets)
+
+
+def test_preset_styles_keeps_default_preset_and_generates_seven(owner_client, fresh_db, monkeypatch):
+    """情况A：默认风格是 preset → 保留该默认 preset + 删其他 preset + 生成 7 个凑足 8。"""
+    monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(7))
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        keep = Style(campaign_id=campaign.id, name="要保留的默认预设", summary="保留",
+                     source="preset", is_default=True)
+        drop = Style(campaign_id=campaign.id, name="要删除的非默认预设", summary="删除", source="preset")
+        s.add(keep); s.add(drop)
+        s.commit()
+        s.refresh(keep)
+        keep_id = keep.id
+        cid = campaign.id
+
+    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        presets = s.exec(
+            select(Style).where(Style.campaign_id == cid, Style.source == "preset").order_by(Style.id)
+        ).all()
+        assert len(presets) == 8
+        # 保留的默认 preset 仍在且仍为默认
+        kept = s.get(Style, keep_id)
+        assert kept is not None
+        assert kept.name == "要保留的默认预设"
+        assert kept.is_default is True
+        # 其余 7 个新生成的均非默认
+        new_presets = [p for p in presets if p.id != keep_id]
+        assert len(new_presets) == 7
+        assert all(p.is_default is False for p in new_presets)
+        # 旧的非默认 preset 已删
+        assert all(p.name != "要删除的非默认预设" for p in presets)
+
+
+def test_preset_styles_keeps_non_preset_default_and_generates_eight(owner_client, fresh_db, monkeypatch):
+    """默认风格非 preset（如网络抓取的）→ 该默认不被删 + 删旧 preset + 生成 8 个新 preset。"""
+    monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(8))
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        # 非 preset 的默认风格（应保留不动）
+        non_preset_default = Style(campaign_id=campaign.id, name="网络抓取的默认", summary="保留",
+                                    source="google", is_default=True)
+        # 旧 preset（应删除）
+        old_preset = Style(campaign_id=campaign.id, name="旧预设", summary="删", source="preset")
+        s.add(non_preset_default); s.add(old_preset)
+        s.commit()
+        s.refresh(non_preset_default)
+        keep_id = non_preset_default.id
+        cid = campaign.id
+
+    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        # 非 preset 默认保留
+        kept = s.get(Style, keep_id)
+        assert kept is not None
+        assert kept.source == "google"
+        assert kept.is_default is True
+        # preset 全部是新生成的 8 个，都不设默认
+        presets = s.exec(
+            select(Style).where(Style.campaign_id == cid, Style.source == "preset")
+        ).all()
+        assert len(presets) == 8
+        assert all(p.is_default is False for p in presets)
+        assert all(p.name != "旧预设" for p in presets)
+
+
+def test_preset_styles_llm_failure_returns_502(owner_client, fresh_db, monkeypatch):
+    """LLM 调用失败 → 502，不写库。"""
+    def boom(*a, **k):
+        raise RuntimeError("LLM down")
+    monkeypatch.setattr(wroutes.llm, "generate_text", boom)
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+
+    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    assert r.status_code == 502
+    with Session(fresh_db) as s:
+        presets = s.exec(
+            select(Style).where(Style.campaign_id == cid, Style.source == "preset")
+        ).all()
+        assert len(presets) == 0
+
+
+def test_preset_styles_unparseable_output_returns_502(owner_client, fresh_db, monkeypatch):
+    """LLM 返回无法解析的格式 → 502。"""
+    monkeypatch.setattr(wroutes.llm, "generate_text", lambda *a, **k: "思考中...这不是格式化输出")
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+
+    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    assert r.status_code == 502
+
+
+def test_preset_styles_requires_editor_level(publisher_client, fresh_db):
+    """publisher(0) 无生成预设权限：返回 403。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+    r = publisher_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    assert r.status_code == 403
+
+
+def test_preset_styles_default_count_is_eight(owner_client, fresh_db, monkeypatch):
+    """不传 count 时默认生成 8 个。"""
+    seen = {"count_in_prompt": None}
+    def fake_text(prompt, *a, **k):
+        seen["count_in_prompt"] = prompt
+        return _preset_llm_factory(8)()
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+
+    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    assert r.status_code == 303
+    assert "8 个差异化的写作风格" in seen["count_in_prompt"]
+    with Session(fresh_db) as s:
+        presets = s.exec(
+            select(Style).where(Style.campaign_id == cid, Style.source == "preset")
+        ).all()
+        assert len(presets) == 8
+
+
 # ── 文章生成测试 ──
 
 def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
@@ -229,8 +390,8 @@ def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
         assert article.review_rounds == 0
 
 
-def test_regenerate_clears_old_candidate_images(owner_client, fresh_db, monkeypatch):
-    """重新生成（含未勾 AI 配图）时，旧候选图与主图字段必须被清空，避免与新正文错位残留。"""
+def test_regenerate_creates_new_article_keeps_old(owner_client, fresh_db, monkeypatch):
+    """一选题多图文：再次生成应新建文章，旧文章（含候选图/主图）原样保留不动。"""
     _patch_threading(monkeypatch)
     call_count = {"img": 0}
 
@@ -254,26 +415,72 @@ def test_regenerate_clears_old_candidate_images(owner_client, fresh_db, monkeypa
                       data={"debate_rounds": "0", "review_rounds": "0", "ai_images": "true"},
                       follow_redirects=False)
     with Session(fresh_db) as s:
-        article = s.exec(select(Article).where(Article.topic_id == tid)).one()
-        aid = article.id
+        articles = s.exec(select(Article).where(Article.topic_id == tid)).all()
+        assert len(articles) == 1
+        aid = articles[0].id
         old_count = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
         assert len(old_count) >= 1
-        article.image_url = "/writing/uploads/old.jpg"
-        article.image_prompt = "手动上传"
-        s.add(article)
+        articles[0].image_url = "/writing/uploads/old.jpg"
+        articles[0].image_prompt = "手动上传"
+        s.add(articles[0])
         s.commit()
 
-    # 第二次：不勾 AI 配图重新生成（checkbox 未勾选 → ai_images 不发送）
+    # 第二次：不勾 AI 配图再生成一篇（应新建，不动旧的）
     owner_client.post(f"/writing/topics/{tid}/generate",
                       data={"debate_rounds": "0", "review_rounds": "0", "ai_images": ""},
                       follow_redirects=False)
     with Session(fresh_db) as s:
-        article = s.get(Article, aid)
-        assert article.status == "待审核"
-        assert article.image_url == ""
-        assert article.image_prompt == ""
+        articles = s.exec(select(Article).where(Article.topic_id == tid)).all()
+        assert len(articles) == 2, f"应有 2 篇图文，实际 {len(articles)}"
+        # 旧文章原样保留
+        old = s.get(Article, aid)
+        assert old.status == "待审核"
+        assert old.image_url == "/writing/uploads/old.jpg"
+        assert old.image_prompt == "手动上传"
         remaining = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
-        assert remaining == [], f"重新生成后旧候选图应被清空，但剩 {len(remaining)} 张"
+        assert len(remaining) == len(old_count), "旧文章的候选图不应被清空"
+        # 新文章是独立的新记录
+        new = next(a for a in articles if a.id != aid)
+        assert new.id != aid
+        assert new.status in ("待审核", "写作中", "待配图")
+
+
+def test_generate_blocked_while_running(owner_client, fresh_db, monkeypatch):
+    """同选题已有生成中的图文时，再次生成应被阻止（不新建）。"""
+    _patch_threading(monkeypatch)
+
+    def fake_text(prompt, task="default", module="default", **k):
+        return "标题：一枚汉简写了什么\n\n正文：这是一篇完整文章。"
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    monkeypatch.setattr(wroutes.llm, "generate_images", lambda *a, **k: ["/x.png"] * 4)
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        s.add(Style(campaign_id=campaign.id, name="默认风格", summary="短句开场", is_default=True))
+        s.commit()
+        tid = topic.id
+
+    # 造一篇「生成中」的文章（辩论中、无错误）
+    with Session(fresh_db) as s:
+        t = s.get(Topic, tid)
+        a = Article(topic_id=tid, campaign_id=t.campaign_id, title=t.title,
+                    status="辩论中", debate_rounds=2, review_rounds=2)
+        s.add(a)
+        s.commit()
+        running_id = a.id
+
+    # 再次生成 → 被阻止，不新建（HTMX 请求走卡片刷新分支）
+    resp = owner_client.post(f"/writing/topics/{tid}/generate",
+                             data={"debate_rounds": "2", "review_rounds": "2", "ai_images": "true"},
+                             headers={"HX-Request": "true"},
+                             follow_redirects=False)
+    assert resp.status_code == 200
+    with Session(fresh_db) as s:
+        articles = s.exec(select(Article).where(Article.topic_id == tid)).all()
+        assert len(articles) == 1, "生成中再次生成不应新建文章"
+        assert articles[0].id == running_id
+    # 响应含阻止提示
+    assert "已有生成中的图文" in resp.text
 
 
 def test_generate_with_debate_creates_records(owner_client, fresh_db, monkeypatch):
@@ -1777,3 +1984,183 @@ def test_ai_review_button_shown_when_pending(owner_client, fresh_db):
         aid, _cid = _seed_pending_review_article(s)
     html = owner_client.get(f"/writing/articles/{aid}").text
     assert "AI 审核" in html or "AI审核" in html
+
+
+# ── 启动恢复僵尸文章 ──
+
+def test_recover_zombie_ai_review_to_pending(fresh_db):
+    """AI审核中的僵尸文章 → 恢复为待审核 + error_message。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        a = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="卡在AI审核",
+            body="正文内容", status="AI审核中", platform="小红书",
+        )
+        s.add(a)
+        s.commit()
+        s.refresh(a)
+        aid = a.id
+
+    recovered = wroutes.recover_zombie_articles()
+    assert recovered >= 1
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "待审核"
+        assert "服务器重启中断" in a.error_message
+
+
+def test_recover_zombie_writing_without_error(fresh_db):
+    """写作中无 error_message 的僵尸文章 → 补 error_message，状态不变。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        a = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="卡在写作中",
+            body="", status="写作中",
+        )
+        s.add(a)
+        s.commit()
+        s.refresh(a)
+        aid = a.id
+
+    wroutes.recover_zombie_articles()
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "写作中"
+        assert "服务器重启中断" in a.error_message
+
+
+def test_recover_zombie_with_existing_error_unchanged(fresh_db):
+    """已有 error_message 的非 AI审核中僵尸文章 → 不重复处理。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        a = Article(
+            topic_id=topic.id, campaign_id=campaign.id, title="已有错误",
+            body="", status="写作中", error_message="provider 调用失败",
+        )
+        s.add(a)
+        s.commit()
+        s.refresh(a)
+        aid = a.id
+
+    wroutes.recover_zombie_articles()
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "写作中"
+        assert a.error_message == "provider 调用失败"
+
+
+def test_recover_zombie_skips_non_running(fresh_db):
+    """待审核文章（非运行态）→ 不受恢复影响。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    wroutes.recover_zombie_articles()
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.status == "待审核"
+        assert a.error_message == ""
+
+
+# ── AI 审核一次性约束 + 编辑后解锁 ──
+
+def test_ai_review_blocked_after_effective_summary(owner_client, fresh_db, monkeypatch):
+    """已生成有效 AI 审核意见后，再次发起 AI 审核 → 400 拒绝。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    # 第一次：成功生成 AI 审核意见
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        assert wroutes._ai_review_effective(s.get(Article, aid).ai_review_summary)
+    # 第二次：应被拒绝
+    r = owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    assert r.status_code == 400
+    assert "已生成 AI 审核意见" in r.text
+
+
+def test_ai_review_retry_allowed_when_summary_failed(owner_client, fresh_db, monkeypatch):
+    """AI 审核综合失败（兜底文案）→ 视为未有效审过，允许重试。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch, fail_summary=True)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    # 第一次：综合失败 → summary 是兜底文案
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.ai_review_summary.startswith("（AI 审核综合失败")
+        assert not wroutes._ai_review_effective(a.ai_review_summary)
+    # 第二次：应允许重试（不返回 400）
+    _patch_ai_review_llm(monkeypatch, fail_summary=False)  # 这次成功
+    r = owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert wroutes._ai_review_effective(a.ai_review_summary)
+
+
+def test_edit_body_clears_ai_review_summary_and_records(owner_client, fresh_db, monkeypatch):
+    """编辑保存正文 → 旧 AI 审核意见清空 + ai_review 阶段 DebateRecord 删除。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    # 先生成 AI 审核意见
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    with Session(fresh_db) as s:
+        assert wroutes._ai_review_effective(s.get(Article, aid).ai_review_summary)
+        assert wroutes._has_ai_review_records(s, aid)
+    # 编辑保存正文
+    owner_client.post(f"/writing/articles/{aid}/edit-body",
+                      data={"body": "修改后的正文内容", "title": "新标题"},
+                      follow_redirects=False)
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        assert a.ai_review_summary == ""
+        assert not wroutes._has_ai_review_records(s, aid)
+        assert a.body == "修改后的正文内容"
+
+
+def test_edit_body_restores_ai_review_button(owner_client, fresh_db, monkeypatch):
+    """编辑保存后 → AI 审核意见清空 → 详情页 AI 审核按钮恢复可点（非禁用态）。"""
+    _patch_threading(monkeypatch)
+    _patch_ai_review_llm(monkeypatch)
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    # 先审核 → 按钮应禁用
+    owner_client.post(f"/writing/articles/{aid}/ai-review", follow_redirects=False)
+    html_before = owner_client.get(f"/writing/articles/{aid}").text
+    assert "AI 审核（已审核）" in html_before
+    assert "cursor-not-allowed" in html_before
+    # 编辑保存 → 按钮恢复
+    owner_client.post(f"/writing/articles/{aid}/edit-body",
+                      data={"body": "改过的正文", "title": ""},
+                      follow_redirects=False)
+    html_after = owner_client.get(f"/writing/articles/{aid}").text
+    assert "AI 审核（已审核）" not in html_after
+    assert "cursor-not-allowed" not in html_after or "AI 审核" not in html_after.split("cursor-not-allowed")[0][-200:]
+
+
+def test_review_approve_with_optional_note(owner_client, fresh_db):
+    """审核通过时 note 选填：填了 → 存 review_note；不填 → review_note 为空。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    # 不填 note
+    r = owner_client.post(f"/writing/articles/{aid}/review",
+                          data={"decision": "approve", "note": ""},
+                          follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        assert s.get(Article, aid).review_note == ""
+    # 填 note（需先把状态拨回待审核）
+    with Session(fresh_db) as s:
+        a = s.get(Article, aid)
+        a.status = "待审核"
+        s.add(a); s.commit()
+    r = owner_client.post(f"/writing/articles/{aid}/review",
+                          data={"decision": "approve", "note": "内容合规，可以发布"},
+                          follow_redirects=False)
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        assert s.get(Article, aid).review_note == "内容合规，可以发布"

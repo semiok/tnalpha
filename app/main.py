@@ -23,6 +23,8 @@ from app.modules.writing import routes as writing_routes
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 恢复僵尸文章：上次进程死亡时 worker 线程随之中断，状态卡在「生成中/AI审核中」
+    writing_routes.recover_zombie_articles()
     yield
 
 
