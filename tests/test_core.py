@@ -67,9 +67,23 @@ def test_sources_unknown_raises():
 
 def test_docparse_unsupported_returns_empty(tmp_path):
     from app.core import docparse
-    p = tmp_path / "note.txt"
-    p.write_text("hi", encoding="utf-8")
+    p = tmp_path / "note.bin"
+    p.write_bytes(b"unsupported")
     assert docparse.extract_text(str(p)) == ""
+
+
+def test_docparse_txt_extracts_utf8_text(tmp_path):
+    from app.core import docparse
+    p = tmp_path / "note.txt"
+    p.write_text("敦煌壁画与丝路", encoding="utf-8")
+    assert docparse.extract_text(str(p)) == "敦煌壁画与丝路"
+
+
+def test_docparse_markdown_extracts_gb18030_text(tmp_path):
+    from app.core import docparse
+    p = tmp_path / "brief.markdown"
+    p.write_bytes("# 活动简报\n丝路有多长".encode("gb18030"))
+    assert docparse.extract_text(str(p)) == "# 活动简报\n丝路有多长"
 
 
 def test_docparse_docx_extracts_text(tmp_path):
