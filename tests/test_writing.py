@@ -165,6 +165,104 @@ def test_capture_styles_creates_default_styles(owner_client, fresh_db, monkeypat
         assert styles[1].source == "google"
 
 
+def test_manual_style_with_files_and_note_creates_style(owner_client, fresh_db, monkeypatch):
+    """手动上传：多文件 + 文字说明 → 抽文本拼接 + 说明注入 prompt → 落 source=manual 的风格。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+
+    captured_prompts: list[str] = []
+    def fake_llm(prompt, task="default", module="default", **k):
+        captured_prompts.append(prompt)
+        return "名称：文博长文体\n总结：段落克制，史料收尾，节奏稳健。"
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_llm)
+
+    # mock docparse：按调用顺序返回不同正文，验证多文件拼接
+    seq = iter([
+        "悬泉置里程简：敦煌至渊泉二百一十里。",
+        "汉简记载的丝路里程体系。",
+    ])
+    monkeypatch.setattr(wroutes.docparse, "extract_text", lambda p: next(seq, ""))
+
+    r = owner_client.post(
+        f"/writing/styles/campaign/{cid}/manual",
+        data={"note": "这两篇是我们公众号过往爆款"},
+        files=[
+            ("files", ("a.pdf", io.BytesIO(b"hello a"), "application/pdf")),
+            ("files", ("b.docx", io.BytesIO(b"hello b"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+        ],
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/writing?tab=library&highlight=")
+    with Session(fresh_db) as s:
+        styles = s.exec(select(Style).where(Style.campaign_id == cid)).all()
+        assert len(styles) == 1
+        st = styles[0]
+        assert st.source == "manual"
+        assert st.name == "文博长文体"
+        assert st.is_default is True   # 首个风格自动设默认
+        assert st.reference_url == ""
+    # prompt 同时含两份正文 + 文字说明
+    assert len(captured_prompts) == 1
+    p = captured_prompts[0]
+    assert "悬泉置里程简" in p and "汉简记载的丝路里程体系" in p
+    assert "这两篇是我们公众号过往爆款" in p
+
+
+def test_manual_style_text_only_when_files_extract_empty(owner_client, fresh_db, monkeypatch):
+    """文件抽不出文本（如扫描件 PDF）时，回退用文字说明作为待分析正文。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+
+    captured_prompts: list[str] = []
+    def fake_llm(prompt, task="default", module="default", **k):
+        captured_prompts.append(prompt)
+        return "名称：诗性体\n总结：意象密集。"
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_llm)
+    monkeypatch.setattr(wroutes.docparse, "extract_text", lambda p: "")  # 全抽不出
+
+    r = owner_client.post(
+        f"/writing/styles/campaign/{cid}/manual",
+        data={"note": "我们希望的调性：克制、诗性、准确"},
+        files=[("files", ("scan.pdf", io.BytesIO(b"binary"), "application/pdf"))],
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with Session(fresh_db) as s:
+        st = s.exec(select(Style).where(Style.campaign_id == cid)).first()
+        assert st is not None and st.source == "manual"
+    # prompt 正文段是文字说明本身
+    assert "我们希望的调性" in captured_prompts[0]
+
+
+def test_manual_style_requires_file_or_note(owner_client, fresh_db):
+    """文件和文字都空 → 400。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+    r = owner_client.post(
+        f"/writing/styles/campaign/{cid}/manual",
+        data={"note": ""},  # 不发 files 字段 + 空 note
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+
+
+def test_manual_style_requires_editor_level(publisher_client, fresh_db):
+    """发布者（level 0）无权访问手动上传风格。"""
+    with Session(fresh_db) as s:
+        _brand, campaign, _topic = _seed_topic(s)
+        cid = campaign.id
+    r = publisher_client.post(
+        f"/writing/styles/campaign/{cid}/manual",
+        data={"note": "x"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 403
+
+
 def test_set_default_style(owner_client, fresh_db):
     with Session(fresh_db) as s:
         _brand, campaign, _topic = _seed_topic(s)

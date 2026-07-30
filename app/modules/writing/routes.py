@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from sqlmodel import Session, select
 from starlette.requests import Request
 
-from app.core import auth, config, db, llm, sources, storage
+from app.core import auth, config, db, docparse, llm, sources, storage
 from app.core.db import get_session
 from app.core.templates import create_templates
 from app.modules.feedback.experience import campaign_experience_context, upsert_review_rejection_experience
@@ -246,6 +246,27 @@ def _extract_style_prompt(url: str, text: str) -> str:
 {url}
 
 【网页正文】
+{text[:6000]}
+
+直接按以下格式输出，不要输出思考过程、分析步骤或其他任何内容：
+名称：用一个短语概括这种风格
+总结：段落结构、语气调性、用词偏好、节奏等（100-200字）
+"""
+
+
+def _manual_style_prompt(filenames: list[str], note: str, text: str) -> str:
+    """手动上传 prompt：从用户上传的文档正文（可带文字说明）提炼一个可复用的写作风格。
+
+    filenames=上传文件名列表（用于让模型知道来源形态）；note=用户写的文字说明（可为空）。
+    """
+    src_label = "、".join(filenames) if filenames else "（无文件，仅文字说明）"
+    note_block = f"【用户说明】\n{note.strip()}\n" if note.strip() else ""
+    return f"""请分析以下内容的写作风格，提炼出一个可复用的写作风格总结。
+
+【来源文件】
+{src_label}
+
+{note_block}【文档正文】
 {text[:6000]}
 
 直接按以下格式输出，不要输出思考过程、分析步骤或其他任何内容：
@@ -549,6 +570,70 @@ def extract_style(campaign_id: int, request: Request, url: str = Form(...),
     style = Style(
         campaign_id=campaign_id, name=name, summary=summary,
         reference_url=url, source="url",
+        is_default=not existing_default,
+    )
+    session.add(style)
+    session.commit()
+    session.refresh(style)
+    return RedirectResponse(f"/writing?tab=library&highlight={style.id}", status_code=303)
+
+
+@router.post("/writing/styles/campaign/{campaign_id}/manual")
+async def manual_style(campaign_id: int, request: Request,
+                       note: str = Form(""),
+                       files: list[UploadFile] = File([]),
+                       session: Session = Depends(get_session)):
+    """新建·手动上传：上传本地文档（pdf/word/ppt/xlsx/txt 等，可多选）+ 可选文字说明
+    → 抽文本喂 LLM 提炼写作风格 → 落入风格库（source=manual）。
+
+    - 文件和文字至少有一项；同时存在时，文字作为这些文件的说明注入 prompt。
+    - 上传的原文件抽完文本即删除（不持久化保留，和 URL 提取不存网页快照对齐）。
+    """
+    auth.require_level(request, 1)
+    campaign = session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(404, "活动不存在")
+    note = (note or "").strip()
+    # 过滤空文件名占位（浏览器多文件框未选时会发一个空 UploadFile）
+    uploads = [f for f in files if f.filename]
+    if not uploads and not note:
+        raise HTTPException(400, "请上传文件或填写文字说明")
+    # 抽文本：每文件单独抽，按文件名顺序拼接
+    text_parts: list[str] = []
+    filenames: list[str] = []
+    for f in uploads:
+        path = storage.save_upload(f, subdir=f"writing/style-manual/{campaign_id}")
+        try:
+            t = docparse.extract_text(path).strip()
+        finally:
+            # 抽完即删，不堆积文件
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        if t:
+            text_parts.append(t)
+            filenames.append(f.filename or "未命名")
+    text = "\n\n".join(text_parts)
+    # 无文件或文件都抽不出文本 → 回退用文字说明本身作为待分析正文
+    if not text:
+        if not note:
+            raise HTTPException(
+                400, "未能从上传文件中抽出文本（可能是扫描件 PDF），请补填文字说明")
+        text = note
+    try:
+        raw = llm.generate_text(_manual_style_prompt(filenames, note, text),
+                                task="writing_style_manual", module="writing", fallback=False)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    parsed = _parse_styles(raw)
+    if not parsed:
+        raise HTTPException(502, "AI 未能从该内容提炼出风格")
+    name, summary = parsed[0]
+    existing_default = _default_style(session, campaign_id) is not None
+    style = Style(
+        campaign_id=campaign_id, name=name, summary=summary,
+        reference_url="", source="manual",
         is_default=not existing_default,
     )
     session.add(style)
