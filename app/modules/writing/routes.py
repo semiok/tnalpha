@@ -602,6 +602,7 @@ async def manual_style(campaign_id: int, request: Request,
     text_parts: list[str] = []
     filenames: list[str] = []
     for f in uploads:
+        filenames.append(f.filename or "未命名")
         path = storage.save_upload(f, subdir=f"writing/style-manual/{campaign_id}")
         try:
             t = docparse.extract_text(path).strip()
@@ -613,7 +614,6 @@ async def manual_style(campaign_id: int, request: Request,
                 pass
         if t:
             text_parts.append(t)
-            filenames.append(f.filename or "未命名")
     text = "\n\n".join(text_parts)
     # 无文件或文件都抽不出文本 → 回退用文字说明本身作为待分析正文
     if not text:

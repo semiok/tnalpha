@@ -235,6 +235,7 @@ def test_manual_style_text_only_when_files_extract_empty(owner_client, fresh_db,
         assert st is not None and st.source == "manual"
     # prompt 正文段是文字说明本身
     assert "我们希望的调性" in captured_prompts[0]
+    assert "scan.pdf" in captured_prompts[0]
 
 
 def test_manual_style_requires_file_or_note(owner_client, fresh_db):

@@ -1,4 +1,4 @@
-"""文档抽文本（复用 tngen extract 逻辑）。pdf/docx/pptx/xlsx → 纯文本。
+"""文档抽文本（复用 tngen extract 逻辑）。pdf/docx/pptx/xlsx/md/txt → 纯文本。
 
 上传时调 `extract_text` 把文档内容抽出来存库，供 AI 解析读真实内容。
 容错：不支持的格式 / 解析失败 → 返回空串，不抛（不拖垮上传）。
@@ -18,9 +18,22 @@ def extract_text(path: str) -> str:
             return _pptx(path)
         if ft == "xlsx":
             return _xlsx(path)
+        if ft in ("md", "markdown", "txt"):
+            return _plaintext(path)
     except Exception:
         return ""  # 解析失败不拖垮上传，正文留空
-    return ""      # 不支持的格式（如 txt/图片）留空
+    return ""      # 不支持的格式（如图片）留空
+
+
+def _plaintext(path: str) -> str:
+    """读取纯文本文件；优先 UTF-8，兼容常见中文 GB18030 编码。"""
+    data = Path(path).read_bytes()
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return data.decode(encoding).strip()
+        except UnicodeDecodeError:
+            continue
+    return ""
 
 
 def _pdf(path: str) -> str:
