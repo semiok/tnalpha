@@ -159,12 +159,13 @@
             {% endfor %}
           </div>
 
-          {# ── 新建：网络抓取 / URL 提取 两个子 tab ── #}
+          {# ── 新建：网络抓取 / URL 提取 / 手动上传 三个子 tab ── #}
           {% if request.state.can_write_writing %}
           <div x-show="tab==='new'" x-cloak x-data="{ntab:'capture'}" class="space-y-4">
             <div class="flex flex-wrap gap-2 border-b border-slate-100 pb-2">
               <button @click="ntab='capture'" :class="ntab==='capture' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">网络抓取</button>
               <button @click="ntab='extract'" :class="ntab==='extract' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">URL 提取</button>
+              <button @click="ntab='manual'" :class="ntab==='manual' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">手动上传</button>
             </div>
 
             {# 网络抓取：关键词 + 搜索源 #}
@@ -212,6 +213,30 @@
                         class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
                     </label>
                     {{ button("提取风格", variant="secondary", type="submit") }}
+                  </form>
+                </div>
+              {% endfor %}
+            </div>
+
+            {# 手动上传：本地文档（可多选）+ 文字说明 → AI 提炼风格 #}
+            <div x-show="ntab==='manual'" x-cloak class="space-y-4">
+              <p class="text-xs text-slate-400">上传本地 PDF / Word / PPT / Excel 等文档（可多选），或直接在文字框粘贴内容，AI 会提炼写作风格并落入「风格库」。文件和文字可同时填，文字作为这些文件的说明。</p>
+              {% for c in campaigns %}
+                <div class="border-b border-slate-100 last:border-0 pb-4 last:pb-0">
+                  <div class="text-sm font-medium text-slate-700 mb-2">{{ c.name }}</div>
+                  <form method="post" action="/writing/styles/campaign/{{ c.id }}/manual" enctype="multipart/form-data" class="space-y-2">
+                    <label class="block">
+                      <span class="block text-xs text-slate-500 mb-1">本地文档（可多选，支持 pdf / docx / pptx / xlsx）</span>
+                      <input type="file" name="files" multiple
+                        accept=".pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls"
+                        class="block w-full text-sm text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100 file:cursor-pointer">
+                    </label>
+                    <label class="block">
+                      <span class="block text-xs text-slate-500 mb-1">文字说明 / 直接粘贴文字（可选，作为这些文件的说明）</span>
+                      <textarea name="note" rows="3" placeholder="例如：这几篇是我们公众号过往的爆款，希望提炼出标题钩子+短段落的风格。"
+                        class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none"></textarea>
+                    </label>
+                    {{ button("提炼风格", variant="secondary", type="submit") }}
                   </form>
                 </div>
               {% endfor %}
