@@ -5,7 +5,7 @@
 
     from app.core import sources
     sources.catalog()                      # [{name,label,emoji,paid,default_on,enabled}, ...] → 渲染勾选框
-    sources.gather(["google","mp"], "敦煌") # 跑多个源、合并命中，跳过未接入/报错的源
+    sources.gather(["google","mp"], "东方生活方式") # 跑多个源、合并命中，跳过未接入/报错的源
     sources.search("stub", "国潮")          # 单源；未接入且 fallback=True 时回退 stub
 """
 import logging

@@ -7,7 +7,7 @@ provider 由定义者在「模型配置」页设置（存 DB），router 每次�
 
     from app.core import llm
     text = llm.generate_text("给品牌写个定位摘要", task="brand_digest")
-    img  = llm.generate_image("敦煌飞天国潮插画")   # 返回图片路径
+    img  = llm.generate_image("自然光下的东方生活方式静物")   # 返回图片路径
 """
 from sqlmodel import Session
 

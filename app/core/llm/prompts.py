@@ -5,11 +5,18 @@
 """
 
 
-def content_analysis(filename: str, text: str) -> str:
+def content_analysis(filename: str, text: str, has_attachment: bool = False) -> str:
+    attachment_note = (
+        "已附上原始 PDF/图片。请同时深读附件中的文字、版式、图表和视觉信息；"
+        "附件与抽取文本冲突时，以附件为准。\n"
+        if has_attachment
+        else ""
+    )
     return (
         "你是品牌内容策划。阅读以下文档，输出一份**供后续选题与文章生成直接复用**的中文解读。"
         "要求：① 这是什么文档；② 核心信息/关键事实/可用素材点（具体、列要点）；③ 可用的内容创作角度。"
         "信息密度高、清晰完整、不要客套、不要逐句复述原文；长度以\"够生成用\"为准，不强行压缩。\n\n"
+        f"{attachment_note}"
         f"文档名：{filename}\n\n文档内容：\n{text}"
     )
 

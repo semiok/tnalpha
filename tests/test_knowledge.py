@@ -23,9 +23,9 @@ def test_create_brand_no_default_campaign(owner_client):
 
 
 def test_home_shows_default_brand_and_entries(owner_client):
-    # 空库首访自动建默认品牌「敦煌当代美术馆」+ 两个管理入口，无「新建品牌」
+    # 空库首访自动建默认品牌「溯肤」+ 两个管理入口，无「新建品牌」
     home = owner_client.get("/").text
-    assert "敦煌当代美术馆" in home
+    assert "溯肤" in home
     assert "品牌库管理" in home and "数据池管理" in home
     assert "新建品牌" not in home
 
@@ -89,7 +89,9 @@ def test_analyze_route_sets_running(owner_client, fresh_db, monkeypatch):
     from sqlmodel import Session
     from app.modules.knowledge import analysis
     from app.modules.knowledge.models import Brand
-    monkeypatch.setattr(analysis, "start_background_analysis", lambda bid: None)  # 不起线程
+    monkeypatch.setattr(
+        analysis, "start_background_analysis", lambda bid, **kwargs: None
+    )  # 不起线程
     brand_id = _create_brand(owner_client)
     r = owner_client.post(f"/brands/{brand_id}/analyze", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == f"/brands/{brand_id}"
@@ -281,7 +283,7 @@ def test_readonly_detail_routes_redirect_home(owner_client):
 def test_writable_default_shows_dynamic_home(owner_client):
     # 开发模式（测试基线）：GET / 是动态首页（默认品牌 + 管理入口），不是演示壳
     home = owner_client.get("/").text
-    assert "敦煌当代美术馆" in home and "品牌库管理" in home
+    assert "溯肤" in home and "品牌库管理" in home
     assert "敦煌IP" not in home           # 不是演示壳
 
 
@@ -373,6 +375,123 @@ def test_deep_read_toggle(owner_client, fresh_db):
         assert s.get(BrandDoc, doc.id).deep_read is True
 
 
+def test_brand_analysis_deep_reads_content_and_style(
+        owner_client, fresh_db, monkeypatch):
+    """品牌图片应同时进入内容解读和视觉解析，不能只产出空文本摘要。"""
+    from sqlmodel import Session
+    from app.modules.knowledge import analysis
+
+    brand_id = _create_brand(owner_client)
+    owner_client.post(
+        f"/brands/{brand_id}/docs",
+        files={"file": ("brand.png", b"\x89PNG", "image/png")},
+    )
+    calls = []
+
+    def fake_gen(prompt, task="default", attachments=None, **kwargs):
+        calls.append({
+            "task": task,
+            "prompt": prompt,
+            "attachments": attachments or [],
+        })
+        if task == "brand_fields":
+            return "调性：从身体出发\n要求：内容具体准确"
+        return f"{task} result"
+
+    monkeypatch.setattr(analysis.llm, "generate_text", fake_gen)
+    with Session(fresh_db) as s:
+        analysis.run_analysis(brand_id, s)
+
+    doc_call = next(c for c in calls if c["task"] == "doc_analysis")
+    style_call = next(c for c in calls if c["task"] == "style")
+    assert doc_call["attachments"][0].endswith(".png")
+    assert style_call["attachments"] == doc_call["attachments"]
+    assert "同时深读附件" in doc_call["prompt"]
+
+
+def test_brand_analysis_disables_stub_fallback(
+        owner_client, fresh_db, monkeypatch):
+    """正式品牌解析失败要显式失败，不能悄悄写入 stub 假摘要。"""
+    from sqlmodel import Session
+    from app.modules.knowledge import analysis
+
+    brand_id = _create_brand(owner_client)
+    owner_client.post(
+        f"/brands/{brand_id}/docs",
+        files={"file": ("brief.txt", b"brand facts", "text/plain")},
+    )
+
+    def fail_without_fallback(*args, **kwargs):
+        assert kwargs["fallback"] is False
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(analysis.llm, "generate_text", fail_without_fallback)
+    import pytest
+    with Session(fresh_db) as s, pytest.raises(
+        RuntimeError, match="provider unavailable"
+    ):
+        analysis.run_analysis(brand_id, s)
+
+
+def test_brand_analysis_checkpoints_and_resumes(
+        owner_client, fresh_db, monkeypatch):
+    """后续文档失败不能丢前序结果；resume 只补未完成文档。"""
+    from sqlmodel import Session, select
+    from app.modules.knowledge import analysis
+    from app.modules.knowledge.models import BrandDoc
+
+    brand_id = _create_brand(owner_client)
+    for name in ("a.txt", "b.txt"):
+        owner_client.post(
+            f"/brands/{brand_id}/docs",
+            files={"file": (name, name.encode(), "text/plain")},
+        )
+    doc_calls = 0
+
+    def fail_second_doc(prompt, task="default", **kwargs):
+        nonlocal doc_calls
+        if task == "doc_analysis":
+            doc_calls += 1
+            if doc_calls == 2:
+                raise RuntimeError("second doc failed")
+            return "first doc result"
+        raise AssertionError("失败前不应进入综合阶段")
+
+    monkeypatch.setattr(analysis.llm, "generate_text", fail_second_doc)
+    import pytest
+    with Session(fresh_db) as s, pytest.raises(
+        RuntimeError, match="second doc failed"
+    ):
+        analysis.run_analysis(brand_id, s)
+
+    with Session(fresh_db) as s:
+        docs = s.exec(select(BrandDoc).order_by(BrandDoc.id)).all()
+        assert docs[0].ai_analysis == "first doc result"
+        assert docs[1].ai_analysis == ""
+
+    resumed_doc_calls = 0
+
+    def resume_remaining(prompt, task="default", **kwargs):
+        nonlocal resumed_doc_calls
+        if task == "doc_analysis":
+            resumed_doc_calls += 1
+            return "second doc result"
+        if task == "brand_fields":
+            return "调性：从身体出发\n要求：内容具体准确"
+        return f"{task} result"
+
+    monkeypatch.setattr(analysis.llm, "generate_text", resume_remaining)
+    with Session(fresh_db) as s:
+        analysis.run_analysis(brand_id, s, resume=True)
+    assert resumed_doc_calls == 1
+    with Session(fresh_db) as s:
+        docs = s.exec(select(BrandDoc).order_by(BrandDoc.id)).all()
+        assert [d.ai_analysis for d in docs] == [
+            "first doc result",
+            "second doc result",
+        ]
+
+
 def test_editor_cannot_analyze_or_deepread(owner_client, editor_client, fresh_db):
     from sqlmodel import Session, select
     from app.modules.knowledge.models import BrandDoc
@@ -392,7 +511,7 @@ def test_default_brand_created_on_first_home(owner_client, fresh_db):
     owner_client.get("/")                                     # 首访触发建默认品牌
     with Session(fresh_db) as s:
         brands = s.exec(select(Brand)).all()
-        assert len(brands) == 1 and brands[0].name == "敦煌当代美术馆"
+        assert len(brands) == 1 and brands[0].name == "溯肤"
         # 品牌日常已去除：首访只建品牌，不建默认 campaign
         assert s.exec(select(Campaign)).first() is None
 

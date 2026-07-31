@@ -566,6 +566,47 @@ def test_codex_text_retries_transient_then_succeeds(monkeypatch, tmp_path):
     assert calls["n"] == 2                                            # 重试了一次
 
 
+def test_codex_text_retries_url_error_then_succeeds(monkeypatch, tmp_path):
+    """TLS/连接瞬断产生 URLError 时也应重试，不能让整份深读失败。"""
+    import urllib.error
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+    monkeypatch.setattr(codex_text.time, "sleep", lambda *a: None)
+    calls = {"n": 0}
+    ok = [
+        b'data: {"type":"response.output_text.delta","delta":"ok"}\n',
+        b'data: [DONE]\n',
+    ]
+
+    def flaky(req, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.URLError("temporary SSL EOF")
+        return _FakeCodexResp(ok)
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", flaky)
+    assert codex_text.generate_text("hi") == "ok"
+    assert calls["n"] == 2
+
+
+def test_codex_text_exhausts_network_retries(monkeypatch, tmp_path):
+    """连续网络错误应完成全部重试，再把最后一次异常交给上层断点续跑。"""
+    import urllib.error
+    from app.core.llm import codex_text
+    _fake_auth(tmp_path, monkeypatch)
+    monkeypatch.setattr(codex_text.time, "sleep", lambda *a: None)
+    calls = {"n": 0}
+
+    def unavailable(*a, **k):
+        calls["n"] += 1
+        raise urllib.error.URLError("temporary SSL EOF")
+
+    monkeypatch.setattr(codex_text.urllib.request, "urlopen", unavailable)
+    with pytest.raises(urllib.error.URLError):
+        codex_text.generate_text("hi")
+    assert calls["n"] == codex_text._MAX_ATTEMPTS == 5
+
+
 def test_codex_text_auth_error_no_retry(monkeypatch, tmp_path):
     """401 授权错误 → 不重试，直接抛。"""
     import io
