@@ -1,7 +1,7 @@
 """③写作引擎 数据模型。
 
 Article 按 topic_id 接 ② 的采纳选题；写作/发布状态归③持有，不回写 Topic.status。
-Style 归属 campaign，生成文章时可注入默认风格。
+Style 归属品牌，品牌常青和所有 campaign 共用同一套风格库。
 """
 from datetime import datetime
 
@@ -31,7 +31,7 @@ STYLE_SOURCES = {
 
 class Style(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    campaign_id: int = Field(foreign_key="campaign.id", index=True)
+    brand_id: int = Field(foreign_key="brand.id", index=True)
     name: str
     summary: str = ""          # 段落/语气/用词总结
     reference_url: str = ""

@@ -114,9 +114,9 @@ def _sample_article(topic: Topic) -> Article:
     )
 
 
-def _sample_style(campaign: Campaign | None) -> Style:
+def _sample_style(brand: Brand | None) -> Style:
     return Style(
-        campaign_id=campaign.id if campaign and campaign.id else 1,
+        brand_id=brand.id if brand and brand.id else 1,
         name="展览叙事风",
         summary="以具体物件开场，用短段落推进现场感；语言准确但不过度学术，结尾落到观众可感的生活问题。",
         source="preset",
@@ -214,7 +214,7 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
             campaign = session.get(Campaign, topic.campaign_id) or campaign
         sample_campaign = _sample_campaign(brand, campaign)
         ctx = _sample_context(session, brand, topic.campaign_id or (sample_campaign.id if campaign else None))
-    style = _sample_style(sample_campaign)
+    style = _sample_style(brand)
     article = _sample_article(topic)
     sample = _feedback_sample(topic, article, brand)
     role_key, role_name, role_stance = ROLES[0]
@@ -373,7 +373,12 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
             "③写作引擎",
             "AI 预设写作风格",
             "app/modules/writing/routes.py::_preset_prompt",
-            writing_prompts._preset_prompt(sample_campaign, ctx, 3),
+            writing_prompts._preset_prompt(
+                brand or Brand(name="示例品牌"),
+                ctx,
+                3,
+            ),
+            "生成品牌公共风格库，不绑定具体 campaign。",
         ),
         PromptItem(
             "③写作引擎",
