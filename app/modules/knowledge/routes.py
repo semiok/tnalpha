@@ -30,7 +30,7 @@ templates = create_templates()
 _DEMO_HTML = Path("app/templates/demo.html")  # 只读演示壳（原型全貌，纯静态）
 
 _ANALYZE_CHARS = 12000  # AI 解析喂给 LLM 的最大字符数（防超长）
-_DEFAULT_BRAND_NAME = "敦煌当代美术馆"  # 单品牌默认（新增/删除品牌 UI 已隐藏）
+_DEFAULT_BRAND_NAME = "溯肤"  # 单品牌默认（新增/删除品牌 UI 已隐藏）
 
 
 def _parse_date(value: str) -> date | None:
@@ -39,7 +39,7 @@ def _parse_date(value: str) -> date | None:
 
 
 def _default_brand(session: Session) -> Brand:
-    """取默认品牌；无则建「敦煌当代美术馆」。campaign 由用户自建（品牌日常已去除，品牌库已承载品牌内容）。"""
+    """取默认品牌；无则建「溯肤」。campaign 由用户自建（品牌日常已去除，品牌库已承载品牌内容）。"""
     brand = session.exec(select(Brand).order_by(Brand.id)).first()
     if brand is None:
         brand = Brand(name=_DEFAULT_BRAND_NAME)
@@ -69,7 +69,7 @@ def home(request: Request, session: Session = Depends(get_session)):
         if not auth.can_view_module(getattr(request.state, "role", None), "permissions"):
             html = html.replace(",['perm','⑥权限']", "")
         return HTMLResponse(html)
-    brand = _default_brand(session)          # 单品牌：默认「敦煌当代美术馆」
+    brand = _default_brand(session)          # 单品牌：默认「溯肤」
     campaigns = session.exec(
         select(Campaign).where(Campaign.brand_id == brand.id)
         .order_by(Campaign.is_default.desc(), Campaign.id)).all()
@@ -168,10 +168,11 @@ def analyze_brand(brand_id: int, request: Request, session: Session = Depends(ge
     if not brand:
         raise HTTPException(404, "品牌不存在")
     if brand.analysis_status != "running":
+        resume = brand.analysis_status == "failed"
         brand.analysis_status, brand.analysis_error = "running", ""
         session.add(brand)
         session.commit()
-        analysis.start_background_analysis(brand_id)
+        analysis.start_background_analysis(brand_id, resume=resume)
     return RedirectResponse(f"/brands/{brand_id}", status_code=303)
 
 

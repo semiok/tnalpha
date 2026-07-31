@@ -9,6 +9,7 @@ pdf_path 非空=深度读图：把 PDF（含图片页）作 input_file(base64) �
 """
 import base64
 import json
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -16,8 +17,8 @@ from pathlib import Path
 
 from app.core import config
 
-_MAX_ATTEMPTS = 3          # 首次 + 2 次重试
-_BACKOFF_BASE = 1.5        # 递增退避基数（秒）
+_MAX_ATTEMPTS = 5          # 首次 + 4 次重试
+_BACKOFF_BASE = 3.0        # 递增退避基数（秒），总等待约 30 秒
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}   # 走 input_image；其余（pdf）走 input_file
 
 
@@ -115,7 +116,13 @@ def generate_text(prompt: str, model: str | None = None, timeout: int = 180,
             return _attempt(prompt, model, timeout, reasoning, pdf_path, attachments)
         except _CodexAuthError:           # 授权错误：不重试
             raise
-        except RuntimeError as e:         # 瞬时错误（HTTP 5xx/limit、response.failed、空响应）：重试
+        except (
+            RuntimeError,
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            ssl.SSLError,
+        ) as e:                           # 瞬时模型/网络错误：重试
             last = e
             if attempt < _MAX_ATTEMPTS - 1:
                 time.sleep(_BACKOFF_BASE * (attempt + 1))

@@ -50,53 +50,95 @@ def _campaign_digest_prompt(material: str) -> str:
         "用简体中文，结构清晰、选题库拿了直接能用。附件里的 PDF/图片请仔细读。\n\n" + material)
 
 
-def run_analysis(brand_id: int, session: Session) -> None:
-    """重生成该品牌所有文档的解读 + 综合解读 + 反推品牌字段。单篇失败不中断整体。
+def run_analysis(
+    brand_id: int, session: Session, *, resume: bool = False
+) -> None:
+    """生成品牌文档解读、综合解读与品牌字段。
 
-    两段式：先做完全部 LLM 调用（收集内存），再一次性写库——避免 LLM 调用期间持有
-    待写事务（llm.generate_text 每次开嵌套 DB session 读设置，会与外层事务冲突）。
+    每篇文档完成后立即落库，长任务中断时可从未完成文档继续。LLM 调用前不持有
+    待写事务，避免 provider 读取设置时与外层 SQLite 事务冲突。
     """
     brand = session.get(Brand, brand_id)
     if brand is None:
         raise ValueError("品牌不存在")
-    docs = session.exec(
-        select(BrandDoc).where(BrandDoc.brand_id == brand_id).order_by(BrandDoc.created_at)).all()
+    doc_ids = session.exec(
+        select(BrandDoc.id)
+        .where(BrandDoc.brand_id == brand_id)
+        .order_by(BrandDoc.created_at, BrandDoc.id)
+    ).all()
 
-    # ── Phase 1：只做 LLM 调用，结果存内存 ──
-    results = []  # (doc, ai_analysis, style_summary)
-    for d in docs:
+    # ── Phase 1：逐篇调用、逐篇提交，失败后可断点续跑 ──
+    for doc_id in doc_ids:
+        d = session.get(BrandDoc, doc_id)
+        if d is None:
+            continue
         content = (d.extracted_text or "")[:_ANALYZE_CHARS]
-        ai = llm.generate_text(prompts.content_analysis(d.filename, content), task="doc_analysis")
-        style = ""
-        if d.deep_read:
-            try:
-                style = llm.generate_text(prompts.style_analysis(d.filename),
-                                          task="style", pdf_path=d.file_path)
-            except Exception as e:                       # 深度读图失败不拖垮整体
-                style = f"[风格解析失败: {str(e)[:80]}]"
-        results.append((d, ai, style))
+        vision_attachments = (
+            [d.file_path] if _as_attachment(d.file_path, d.deep_read) else []
+        )
+        needs_content = (
+            not resume
+            or not d.ai_analysis
+            or (bool(vision_attachments) and not d.style_summary)
+        )
+        needs_style = bool(vision_attachments) and (
+            not resume or not d.style_summary
+        )
+        if needs_content:
+            d.ai_analysis = llm.generate_text(
+                prompts.content_analysis(
+                    d.filename, content, has_attachment=bool(vision_attachments)
+                ),
+                task="doc_analysis",
+                attachments=vision_attachments,
+                fallback=False,
+            )
+        if needs_style:
+            d.style_summary = llm.generate_text(
+                    prompts.style_analysis(d.filename),
+                    task="style",
+                    attachments=vision_attachments,
+                    fallback=False,
+            )
+        session.add(d)
+        session.commit()
 
-    content_items = [(d.filename, ai) for d, ai, _ in results if ai]
-    doc_digest = (llm.generate_text(prompts.aggregate_content(content_items), task="doc_digest")
+    # ── Phase 2：单篇齐全后生成综合定义 ──
+    docs = session.exec(
+        select(BrandDoc)
+        .where(BrandDoc.brand_id == brand_id)
+        .order_by(BrandDoc.created_at, BrandDoc.id)
+    ).all()
+    content_items = [(d.filename, d.ai_analysis) for d in docs if d.ai_analysis]
+    doc_digest = (llm.generate_text(
+        prompts.aggregate_content(content_items),
+        task="doc_digest",
+        fallback=False,
+    )
                   if content_items else "")
-    style_items = [(d.filename, st) for d, _, st in results
-                   if st and not st.startswith("[风格解析失败")]
-    style_digest = (llm.generate_text(prompts.aggregate_style(style_items), task="style_digest")
+    style_items = [
+        (d.filename, d.style_summary) for d in docs if d.style_summary
+    ]
+    style_digest = (llm.generate_text(
+        prompts.aggregate_style(style_items),
+        task="style_digest",
+        fallback=False,
+    )
                     if style_items else "")
     # 基于 doc_digest 反推主题调性/内容要求（自动填，可被定义者改；失败则保持原值）
     brand_prompt, content_notes = brand.brand_prompt, brand.content_notes
     if doc_digest:
         try:
             bf = _parse_brand_fields(llm.generate_text(
-                prompts.brand_fields_prompt(brand.name, doc_digest), task="brand_fields"))
+                prompts.brand_fields_prompt(brand.name, doc_digest),
+                task="brand_fields",
+                fallback=False,
+            ))
             brand_prompt, content_notes = bf["brand_prompt"], bf["content_notes"]
         except Exception:
             pass
 
-    # ── Phase 2：一次性写库（此时无 LLM 调用、无嵌套 session）──
-    for d, ai, style in results:
-        d.ai_analysis, d.style_summary = ai, style
-        session.add(d)
+    # ── Phase 3：综合结果一次性落库 ──
     brand.doc_digest, brand.style_digest = doc_digest, style_digest
     brand.brand_prompt, brand.content_notes = brand_prompt, content_notes
     session.add(brand)
@@ -114,12 +156,12 @@ def _parse_brand_fields(text: str) -> dict:
     return {"brand_prompt": brand, "content_notes": notes}
 
 
-def start_background_analysis(brand_id: int) -> None:
+def start_background_analysis(brand_id: int, *, resume: bool = False) -> None:
     """置 running + 后台线程跑 run_analysis（独立 Session）；成功 done、异常 failed。"""
     def _worker() -> None:
         with Session(db.engine) as s:
             try:
-                run_analysis(brand_id, s)
+                run_analysis(brand_id, s, resume=resume)
                 brand = s.get(Brand, brand_id)
                 brand.analysis_status, brand.analysis_error = "done", ""
                 s.add(brand)
