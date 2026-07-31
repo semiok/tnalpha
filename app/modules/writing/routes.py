@@ -143,15 +143,18 @@ def _first_brand(session: Session) -> Brand | None:
     return session.exec(select(Brand).order_by(Brand.id)).first()
 
 
-def _default_style(session: Session, campaign_id: int | None) -> Style | None:
-    if campaign_id is None:
-        return None
+def _default_style(session: Session, brand_id: int) -> Style | None:
     style = session.exec(
-        select(Style).where(Style.campaign_id == campaign_id, Style.is_default == True).order_by(Style.id)
+        select(Style).where(
+            Style.brand_id == brand_id,
+            Style.is_default == True,
+        ).order_by(Style.id)
     ).first()
     if style is not None:
         return style
-    return session.exec(select(Style).where(Style.campaign_id == campaign_id).order_by(Style.id)).first()
+    return session.exec(
+        select(Style).where(Style.brand_id == brand_id).order_by(Style.id)
+    ).first()
 
 
 def _active_article_query():
@@ -168,23 +171,9 @@ def _article_title(text: str, fallback: str) -> str:
     return fallback
 
 
-def _style_from_hit(campaign_id: int, hit: dict, is_default: bool) -> Style:
-    title = (hit.get("title") or "写作风格").strip()
-    summary = (hit.get("summary") or title).strip()
-    source = (hit.get("source") or "stub").strip()
-    return Style(
-        campaign_id=campaign_id,
-        name=title[:80],
-        summary=summary[:1200],
-        reference_url=(hit.get("url") or "").strip(),
-        source=source,
-        is_default=is_default,
-    )
-
-
-def _preset_prompt(campaign: Campaign, ctx: KnowledgeContext, count: int) -> str:
-    """预设风格 prompt：基于知识库品牌调性/活动内容，让 LLM 生成符合主题的写作风格。"""
-    return f"""你是写作风格预设器。请基于以下知识库信息，为活动「{campaign.name}」预设 {count} 个符合主题的写作风格。
+def _preset_prompt(brand: Brand, ctx: KnowledgeContext, count: int) -> str:
+    """基于品牌知识库预设可跨 campaign 复用的写作风格。"""
+    return f"""你是写作风格预设器。请基于以下知识库信息，为品牌「{brand.name}」预设 {count} 个可长期复用的写作风格。
 
 【品牌调性】
 {ctx.brand_prompt or "（未设置）"}
@@ -195,10 +184,8 @@ def _preset_prompt(campaign: Campaign, ctx: KnowledgeContext, count: int) -> str
 【品牌资料综合】
 {ctx.doc_digest or "（无）"}
 
-【活动简报】
-{ctx.campaign_digest or "（品牌常青，无特定活动）"}
-
 请预设 {count} 个差异化的写作风格，每个风格包含名称和总结（段落结构/语气调性/用词偏好/节奏，100-200字）。
+这些风格属于品牌公共风格库，不绑定具体 campaign，不要写入活动名称、时间节点或一次性素材。
 严格按以下格式输出，每个风格之间用空行分隔，不要输出思考过程、分析步骤或其他任何内容：
 
 名称：风格名称
@@ -317,8 +304,9 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
     campaigns: list[Campaign] = []
     article_rows: list[dict] = []
     topic_articles: dict[int, list[Article]] = {}
-    styles: dict[int, list[Style]] = {}
-    preset_styles: dict[int, list[Style]] = {}
+    styles: list[Style] = []
+    preset_styles: list[Style] = []
+    has_default_style = False
     if brand is not None:
         campaigns = session.exec(
             select(Campaign).where(Campaign.brand_id == brand.id).order_by(Campaign.id)
@@ -359,12 +347,14 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
                     .order_by(DebateRecord.round_num, DebateRecord.id)
                 ).all()
             article_rows.append({"article": article, "topic": topic, "records": records})
-        for c in campaigns:
-            all_styles = session.exec(
-                select(Style).where(Style.campaign_id == c.id).order_by(Style.is_default.desc(), Style.id)
-            ).all()
-            preset_styles[c.id] = [st for st in all_styles if st.source == "preset"]
-            styles[c.id] = [st for st in all_styles if st.source != "preset"]
+        all_styles = session.exec(
+            select(Style)
+            .where(Style.brand_id == brand.id)
+            .order_by(Style.is_default.desc(), Style.id)
+        ).all()
+        preset_styles = [st for st in all_styles if st.source == "preset"]
+        styles = [st for st in all_styles if st.source != "preset"]
+        has_default_style = any(st.is_default for st in all_styles)
     cmap = {c.id: c.name for c in campaigns}
     return templates.TemplateResponse(request, "writing/home.html", {
         "brand": brand,
@@ -378,6 +368,7 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         "status_filters": ("全部", "生成中", "待审核", "审核通过", "审核未通过", "已删除"),
         "styles": styles,
         "preset_styles": preset_styles,
+        "has_default_style": has_default_style,
         "style_sources": STYLE_SOURCES,
         "catalog": sources.catalog(),
         "tab": tab,
@@ -409,19 +400,19 @@ def _extract_from_hit_prompt(hit: dict) -> str:
 """
 
 
-@router.post("/writing/styles/campaign/{campaign_id}/capture")
-def capture_styles(campaign_id: int, request: Request, query: str = Form(""),
+@router.post("/writing/styles/capture")
+def capture_styles(request: Request, query: str = Form(""),
                    source: list[str] = Form([]), count: int = Form(5),
                    session: Session = Depends(get_session)):
     """网络抓取：搜索引擎检索 → 每条命中经 LLM 提炼写作风格 → 入风格库（记录搜索来源）。"""
     auth.require_level(request, 1)
-    campaign = session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(404, "活动不存在")
+    brand = _first_brand(session)
+    if brand is None or brand.id is None:
+        raise HTTPException(404, "品牌不存在")
     names = [s for s in source if s in sources.available()] or ["stub"]
-    q = query.strip() or f"{campaign.name} 写作风格"
+    q = query.strip() or f"{brand.name} 写作风格"
     hits = sources.gather(names, q, per_source=max(1, min(count, 5))) or sources.search("stub", q)
-    existing_default = _default_style(session, campaign_id) is not None
+    existing_default = _default_style(session, brand.id) is not None
     created = 0
     failed = 0
     for hit in hits[:max(1, min(count, 5))]:
@@ -437,7 +428,7 @@ def capture_styles(campaign_id: int, request: Request, query: str = Form(""),
             continue
         name, summary = parsed[0]
         session.add(Style(
-            campaign_id=campaign_id, name=name, summary=summary,
+            brand_id=brand.id, name=name, summary=summary,
             reference_url=(hit.get("url") or "").strip(),
             source=(hit.get("source") or "stub").strip(),
             is_default=(not existing_default and created == 0),
@@ -455,7 +446,7 @@ def set_default_style(style_id: int, request: Request, session: Session = Depend
     style = session.get(Style, style_id)
     if style is None:
         raise HTTPException(404, "风格不存在")
-    peers = session.exec(select(Style).where(Style.campaign_id == style.campaign_id)).all()
+    peers = session.exec(select(Style).where(Style.brand_id == style.brand_id)).all()
     for peer in peers:
         peer.is_default = peer.id == style_id
         session.add(peer)
@@ -463,11 +454,14 @@ def set_default_style(style_id: int, request: Request, session: Session = Depend
     return RedirectResponse("/writing", status_code=303)
 
 
-@router.post("/writing/styles/campaign/{campaign_id}/unset-default")
-def unset_default_style(campaign_id: int, request: Request, session: Session = Depends(get_session)):
-    """取消该活动的默认风格——所有风格 is_default=False，让 AI 自行决定文风。"""
+@router.post("/writing/styles/unset-default")
+def unset_default_style(request: Request, session: Session = Depends(get_session)):
+    """取消品牌默认风格，让 AI 按品牌要求自行决定文风。"""
     auth.require_level(request, 1)
-    peers = session.exec(select(Style).where(Style.campaign_id == campaign_id)).all()
+    brand = _first_brand(session)
+    if brand is None or brand.id is None:
+        raise HTTPException(404, "品牌不存在")
+    peers = session.exec(select(Style).where(Style.brand_id == brand.id)).all()
     for peer in peers:
         peer.is_default = False
         session.add(peer)
@@ -486,33 +480,30 @@ def delete_style(style_id: int, request: Request, session: Session = Depends(get
     return RedirectResponse("/writing", status_code=303)
 
 
-@router.post("/writing/styles/campaign/{campaign_id}/preset")
-def preset_styles(campaign_id: int, request: Request, count: int = Form(8),
+@router.post("/writing/styles/preset")
+def preset_styles(request: Request, count: int = Form(8),
                   session: Session = Depends(get_session)):
-    """预设：基于知识库（品牌调性/活动简报）调 LLM 生成符合主题的写作风格。
+    """基于品牌知识库生成可跨 campaign 复用的写作风格。
 
     生成规则：总数凑足 8 个 preset。
     - 若当前默认风格是 preset → 保留它，删其他 preset，生成 7 个新 preset（都不设默认）。
     - 若默认风格不存在或非 preset → 删全部旧 preset，生成 8 个新 preset（都不设默认）。
     """
     auth.require_level(request, 1)
-    campaign = session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(404, "活动不存在")
-    brand = session.get(Brand, campaign.brand_id)
-    if brand is None:
-        raise HTTPException(400, "品牌不存在")
+    brand = _first_brand(session)
+    if brand is None or brand.id is None:
+        raise HTTPException(404, "品牌不存在")
     # 找出真正的默认 preset（is_default=True 且 source="preset"），保留不动
     kept_default = session.exec(
         select(Style).where(
-            Style.campaign_id == campaign_id,
+            Style.brand_id == brand.id,
             Style.is_default == True,
             Style.source == "preset",
         ).order_by(Style.id)
     ).first()
     # 删除该 Campaign 所有非保留的旧 preset
     old_presets = session.exec(
-        select(Style).where(Style.campaign_id == campaign_id, Style.source == "preset")
+        select(Style).where(Style.brand_id == brand.id, Style.source == "preset")
     ).all()
     for p in old_presets:
         if kept_default is None or p.id != kept_default.id:
@@ -520,8 +511,8 @@ def preset_styles(campaign_id: int, request: Request, count: int = Form(8),
     session.commit()
     # 需要新生成几个，凑足 count 个 preset
     n = max(1, min(count - (1 if kept_default else 0), 20))
-    ctx = KnowledgeContext.load(session, brand.id, campaign_id)
-    prompt = _preset_prompt(campaign, ctx, n)
+    ctx = KnowledgeContext.load(session, brand.id)
+    prompt = _preset_prompt(brand, ctx, n)
     try:
         raw = llm.generate_text(prompt, task="writing_style_preset", module="writing", fallback=False)
     except RuntimeError as exc:
@@ -531,21 +522,21 @@ def preset_styles(campaign_id: int, request: Request, count: int = Form(8),
         raise HTTPException(502, "AI 未返回可识别的风格，请重试或检查模型配置")
     for name, summary in parsed[:n]:
         session.add(Style(
-            campaign_id=campaign_id, name=name, summary=summary,
+            brand_id=brand.id, name=name, summary=summary,
             source="preset", is_default=False,
         ))
     session.commit()
     return RedirectResponse("/writing", status_code=303)
 
 
-@router.post("/writing/styles/campaign/{campaign_id}/extract")
-def extract_style(campaign_id: int, request: Request, url: str = Form(...),
+@router.post("/writing/styles/extract")
+def extract_style(request: Request, url: str = Form(...),
                   session: Session = Depends(get_session)):
     """新建·URL 提取：抓 URL 页面正文 → LLM 提炼写作风格。"""
     auth.require_level(request, 1)
-    campaign = session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(404, "活动不存在")
+    brand = _first_brand(session)
+    if brand is None or brand.id is None:
+        raise HTTPException(404, "品牌不存在")
     url = (url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "请输入完整的 URL（以 http:// 或 https:// 开头）")
@@ -566,9 +557,9 @@ def extract_style(campaign_id: int, request: Request, url: str = Form(...),
     if not parsed:
         raise HTTPException(502, "AI 未能从该页面提炼出风格")
     name, summary = parsed[0]
-    existing_default = _default_style(session, campaign_id) is not None
+    existing_default = _default_style(session, brand.id) is not None
     style = Style(
-        campaign_id=campaign_id, name=name, summary=summary,
+        brand_id=brand.id, name=name, summary=summary,
         reference_url=url, source="url",
         is_default=not existing_default,
     )
@@ -578,8 +569,8 @@ def extract_style(campaign_id: int, request: Request, url: str = Form(...),
     return RedirectResponse(f"/writing?tab=library&highlight={style.id}", status_code=303)
 
 
-@router.post("/writing/styles/campaign/{campaign_id}/manual")
-async def manual_style(campaign_id: int, request: Request,
+@router.post("/writing/styles/manual")
+async def manual_style(request: Request,
                        note: str = Form(""),
                        files: list[UploadFile] = File([]),
                        session: Session = Depends(get_session)):
@@ -590,9 +581,9 @@ async def manual_style(campaign_id: int, request: Request,
     - 上传的原文件抽完文本即删除（不持久化保留，和 URL 提取不存网页快照对齐）。
     """
     auth.require_level(request, 1)
-    campaign = session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(404, "活动不存在")
+    brand = _first_brand(session)
+    if brand is None or brand.id is None:
+        raise HTTPException(404, "品牌不存在")
     note = (note or "").strip()
     # 过滤空文件名占位（浏览器多文件框未选时会发一个空 UploadFile）
     uploads = [f for f in files if f.filename]
@@ -603,7 +594,7 @@ async def manual_style(campaign_id: int, request: Request,
     filenames: list[str] = []
     for f in uploads:
         filenames.append(f.filename or "未命名")
-        path = storage.save_upload(f, subdir=f"writing/style-manual/{campaign_id}")
+        path = storage.save_upload(f, subdir=f"writing/style-manual/{brand.id}")
         try:
             t = docparse.extract_text(path).strip()
         finally:
@@ -630,9 +621,9 @@ async def manual_style(campaign_id: int, request: Request,
     if not parsed:
         raise HTTPException(502, "AI 未能从该内容提炼出风格")
     name, summary = parsed[0]
-    existing_default = _default_style(session, campaign_id) is not None
+    existing_default = _default_style(session, brand.id) is not None
     style = Style(
-        campaign_id=campaign_id, name=name, summary=summary,
+        brand_id=brand.id, name=name, summary=summary,
         reference_url="", source="manual",
         is_default=not existing_default,
     )
@@ -756,7 +747,7 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
             if article is None or topic is None:
                 return
             ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
-            style = _default_style(s, topic.campaign_id)
+            style = _default_style(s, topic.brand_id)
             style_text = style.summary if style else "无默认风格，使用品牌内容要求。"
             writing_experience = (
                 campaign_experience_context(
@@ -871,7 +862,7 @@ def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
                 if not article.body:
                     return  # 没正文，没法配图
                 ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
-                style = _default_style(s, topic.campaign_id)
+                style = _default_style(s, topic.brand_id)
 
                 slots = _parse_image_slots(article.body)
                 if not slots:
@@ -972,7 +963,7 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
                 if not article.body:
                     return
                 ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
-                style = _default_style(s, topic.campaign_id)
+                style = _default_style(s, topic.brand_id)
 
                 # 清理该 slot 的旧候选图
                 old_imgs = s.exec(

@@ -3,6 +3,19 @@
 本项目版本遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.0.1] - 2026-07-31
+
+### 变更
+- **③写作引擎风格库改为品牌级公共资产**：`Style` 从 `campaign_id` 迁移到 `brand_id`，品牌常青与所有 campaign 共用同一套风格。
+- AI 预设、网络抓取、URL 提取和手动上传均不再要求先创建 campaign；品牌建好即可维护风格库。
+- 全品牌只保留一个默认风格，文章写作、重写和配图统一按 `topic.brand_id` 注入该风格。
+- ⑦提示词展示同步为品牌级预设逻辑，明确禁止在公共风格中写入一次性活动信息。
+
+### 迁移
+- Alembic `i3d4e5f6a7b8` 会把旧风格经原 campaign 自动映射到所属品牌，保留风格 ID、默认状态及文章 `style_id` 关联。
+
+[1.0.1]: https://github.com/semiok/tnalpha/releases/tag/v1.0.1
+
 ## [0.9.0] - 2026-07-05
 
 ### 新增

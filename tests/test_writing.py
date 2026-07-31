@@ -136,10 +136,40 @@ def test_writing_home_shows_adopted_topic_even_with_article(owner_client, fresh_
 
 # ── 风格管理测试 ──
 
+def test_style_library_works_without_campaign(owner_client, fresh_db, monkeypatch):
+    """品牌建好后即可创建风格，不需要先造 campaign。"""
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *a, **k: "名称：品牌散文体\n总结：从身体感受切入，语气温和克制。",
+    )
+    with Session(fresh_db) as s:
+        brand = Brand(name="溯肤")
+        s.add(brand)
+        s.commit()
+        s.refresh(brand)
+        bid = brand.id
+
+    page = owner_client.get("/writing").text
+    assert "写作风格" in page
+    assert "还没有活动，先去①知识库创建 campaign" not in page
+
+    response = owner_client.post(
+        "/writing/styles/manual",
+        data={"note": "从身体感受切入，温和克制，不制造焦虑。"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with Session(fresh_db) as s:
+        style = s.exec(select(Style).where(Style.brand_id == bid)).one()
+        assert style.name == "品牌散文体"
+        assert style.is_default is True
+
+
 def test_capture_styles_creates_default_styles(owner_client, fresh_db, monkeypatch):
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        brand, _campaign, _topic = _seed_topic(s)
+        bid = brand.id
 
     monkeypatch.setattr(wroutes.sources, "gather", lambda names, query, **k: [
         {"title": "公众号爆款写法", "summary": "短句开场，史料结尾", "url": "https://x/1", "source": "mp"},
@@ -150,14 +180,14 @@ def test_capture_styles_creates_default_styles(owner_client, fresh_db, monkeypat
             return "名称：短句开场体\n总结：短句开场，史料结尾，节奏明快。"
         return "名称：钩子标题体\n总结：标题有钩子，段落很短，适合社媒。"
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_llm)
-    r = owner_client.post(f"/writing/styles/campaign/{cid}/capture", data={
+    r = owner_client.post("/writing/styles/capture", data={
         "query": "敦煌 文博 写作风格",
         "source": ["mp", "google"],
         "count": "5",
     }, follow_redirects=False)
     assert r.status_code == 303
     with Session(fresh_db) as s:
-        styles = s.exec(select(Style).where(Style.campaign_id == cid).order_by(Style.id)).all()
+        styles = s.exec(select(Style).where(Style.brand_id == bid).order_by(Style.id)).all()
         assert len(styles) == 2
         assert styles[0].is_default is True
         assert styles[0].source == "mp"
@@ -168,8 +198,8 @@ def test_capture_styles_creates_default_styles(owner_client, fresh_db, monkeypat
 def test_manual_style_with_files_and_note_creates_style(owner_client, fresh_db, monkeypatch):
     """手动上传：多文件 + 文字说明 → 抽文本拼接 + 说明注入 prompt → 落 source=manual 的风格。"""
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        brand, _campaign, _topic = _seed_topic(s)
+        bid = brand.id
 
     captured_prompts: list[str] = []
     def fake_llm(prompt, task="default", module="default", **k):
@@ -185,7 +215,7 @@ def test_manual_style_with_files_and_note_creates_style(owner_client, fresh_db, 
     monkeypatch.setattr(wroutes.docparse, "extract_text", lambda p: next(seq, ""))
 
     r = owner_client.post(
-        f"/writing/styles/campaign/{cid}/manual",
+        "/writing/styles/manual",
         data={"note": "这两篇是我们公众号过往爆款"},
         files=[
             ("files", ("a.pdf", io.BytesIO(b"hello a"), "application/pdf")),
@@ -196,7 +226,7 @@ def test_manual_style_with_files_and_note_creates_style(owner_client, fresh_db, 
     assert r.status_code == 303
     assert r.headers["location"].startswith("/writing?tab=library&highlight=")
     with Session(fresh_db) as s:
-        styles = s.exec(select(Style).where(Style.campaign_id == cid)).all()
+        styles = s.exec(select(Style).where(Style.brand_id == bid)).all()
         assert len(styles) == 1
         st = styles[0]
         assert st.source == "manual"
@@ -213,8 +243,8 @@ def test_manual_style_with_files_and_note_creates_style(owner_client, fresh_db, 
 def test_manual_style_text_only_when_files_extract_empty(owner_client, fresh_db, monkeypatch):
     """文件抽不出文本（如扫描件 PDF）时，回退用文字说明作为待分析正文。"""
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        brand, _campaign, _topic = _seed_topic(s)
+        bid = brand.id
 
     captured_prompts: list[str] = []
     def fake_llm(prompt, task="default", module="default", **k):
@@ -224,14 +254,14 @@ def test_manual_style_text_only_when_files_extract_empty(owner_client, fresh_db,
     monkeypatch.setattr(wroutes.docparse, "extract_text", lambda p: "")  # 全抽不出
 
     r = owner_client.post(
-        f"/writing/styles/campaign/{cid}/manual",
+        "/writing/styles/manual",
         data={"note": "我们希望的调性：克制、诗性、准确"},
         files=[("files", ("scan.pdf", io.BytesIO(b"binary"), "application/pdf"))],
         follow_redirects=False,
     )
     assert r.status_code == 303
     with Session(fresh_db) as s:
-        st = s.exec(select(Style).where(Style.campaign_id == cid)).first()
+        st = s.exec(select(Style).where(Style.brand_id == bid)).first()
         assert st is not None and st.source == "manual"
     # prompt 正文段是文字说明本身
     assert "我们希望的调性" in captured_prompts[0]
@@ -241,10 +271,9 @@ def test_manual_style_text_only_when_files_extract_empty(owner_client, fresh_db,
 def test_manual_style_requires_file_or_note(owner_client, fresh_db):
     """文件和文字都空 → 400。"""
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        _seed_topic(s)
     r = owner_client.post(
-        f"/writing/styles/campaign/{cid}/manual",
+        "/writing/styles/manual",
         data={"note": ""},  # 不发 files 字段 + 空 note
         follow_redirects=False,
     )
@@ -254,10 +283,9 @@ def test_manual_style_requires_file_or_note(owner_client, fresh_db):
 def test_manual_style_requires_editor_level(publisher_client, fresh_db):
     """发布者（level 0）无权访问手动上传风格。"""
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        _seed_topic(s)
     r = publisher_client.post(
-        f"/writing/styles/campaign/{cid}/manual",
+        "/writing/styles/manual",
         data={"note": "x"},
         follow_redirects=False,
     )
@@ -266,9 +294,9 @@ def test_manual_style_requires_editor_level(publisher_client, fresh_db):
 
 def test_set_default_style(owner_client, fresh_db):
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        a = Style(campaign_id=campaign.id, name="A", summary="a", is_default=True)
-        b = Style(campaign_id=campaign.id, name="B", summary="b", is_default=False)
+        brand, _campaign, _topic = _seed_topic(s)
+        a = Style(brand_id=brand.id, name="A", summary="a", is_default=True)
+        b = Style(brand_id=brand.id, name="B", summary="b", is_default=False)
         s.add(a)
         s.add(b)
         s.commit()
@@ -297,17 +325,17 @@ def test_preset_styles_creates_eight_when_no_default(owner_client, fresh_db, mon
     """情况B：无任何默认风格 → 删旧 preset + 生成 8 个新 preset（都不设默认）。"""
     monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(8))
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
+        brand, _campaign, _topic = _seed_topic(s)
         # 预先存在的旧 preset（应被删除）
-        s.add(Style(campaign_id=campaign.id, name="旧预设", summary="旧的", source="preset"))
+        s.add(Style(brand_id=brand.id, name="旧预设", summary="旧的", source="preset"))
         s.commit()
-        cid = campaign.id
+        bid = brand.id
 
-    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
     assert r.status_code == 303
     with Session(fresh_db) as s:
         presets = s.exec(
-            select(Style).where(Style.campaign_id == cid, Style.source == "preset").order_by(Style.id)
+            select(Style).where(Style.brand_id == bid, Style.source == "preset").order_by(Style.id)
         ).all()
         assert len(presets) == 8
         assert all(p.is_default is False for p in presets)
@@ -320,21 +348,21 @@ def test_preset_styles_keeps_default_preset_and_generates_seven(owner_client, fr
     """情况A：默认风格是 preset → 保留该默认 preset + 删其他 preset + 生成 7 个凑足 8。"""
     monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(7))
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        keep = Style(campaign_id=campaign.id, name="要保留的默认预设", summary="保留",
+        brand, _campaign, _topic = _seed_topic(s)
+        keep = Style(brand_id=brand.id, name="要保留的默认预设", summary="保留",
                      source="preset", is_default=True)
-        drop = Style(campaign_id=campaign.id, name="要删除的非默认预设", summary="删除", source="preset")
+        drop = Style(brand_id=brand.id, name="要删除的非默认预设", summary="删除", source="preset")
         s.add(keep); s.add(drop)
         s.commit()
         s.refresh(keep)
         keep_id = keep.id
-        cid = campaign.id
+        bid = brand.id
 
-    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
     assert r.status_code == 303
     with Session(fresh_db) as s:
         presets = s.exec(
-            select(Style).where(Style.campaign_id == cid, Style.source == "preset").order_by(Style.id)
+            select(Style).where(Style.brand_id == bid, Style.source == "preset").order_by(Style.id)
         ).all()
         assert len(presets) == 8
         # 保留的默认 preset 仍在且仍为默认
@@ -354,19 +382,19 @@ def test_preset_styles_keeps_non_preset_default_and_generates_eight(owner_client
     """默认风格非 preset（如网络抓取的）→ 该默认不被删 + 删旧 preset + 生成 8 个新 preset。"""
     monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(8))
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
+        brand, _campaign, _topic = _seed_topic(s)
         # 非 preset 的默认风格（应保留不动）
-        non_preset_default = Style(campaign_id=campaign.id, name="网络抓取的默认", summary="保留",
+        non_preset_default = Style(brand_id=brand.id, name="网络抓取的默认", summary="保留",
                                     source="google", is_default=True)
         # 旧 preset（应删除）
-        old_preset = Style(campaign_id=campaign.id, name="旧预设", summary="删", source="preset")
+        old_preset = Style(brand_id=brand.id, name="旧预设", summary="删", source="preset")
         s.add(non_preset_default); s.add(old_preset)
         s.commit()
         s.refresh(non_preset_default)
         keep_id = non_preset_default.id
-        cid = campaign.id
+        bid = brand.id
 
-    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
     assert r.status_code == 303
     with Session(fresh_db) as s:
         # 非 preset 默认保留
@@ -376,7 +404,7 @@ def test_preset_styles_keeps_non_preset_default_and_generates_eight(owner_client
         assert kept.is_default is True
         # preset 全部是新生成的 8 个，都不设默认
         presets = s.exec(
-            select(Style).where(Style.campaign_id == cid, Style.source == "preset")
+            select(Style).where(Style.brand_id == bid, Style.source == "preset")
         ).all()
         assert len(presets) == 8
         assert all(p.is_default is False for p in presets)
@@ -389,14 +417,14 @@ def test_preset_styles_llm_failure_returns_502(owner_client, fresh_db, monkeypat
         raise RuntimeError("LLM down")
     monkeypatch.setattr(wroutes.llm, "generate_text", boom)
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        brand, _campaign, _topic = _seed_topic(s)
+        bid = brand.id
 
-    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
     assert r.status_code == 502
     with Session(fresh_db) as s:
         presets = s.exec(
-            select(Style).where(Style.campaign_id == cid, Style.source == "preset")
+            select(Style).where(Style.brand_id == bid, Style.source == "preset")
         ).all()
         assert len(presets) == 0
 
@@ -405,19 +433,17 @@ def test_preset_styles_unparseable_output_returns_502(owner_client, fresh_db, mo
     """LLM 返回无法解析的格式 → 502。"""
     monkeypatch.setattr(wroutes.llm, "generate_text", lambda *a, **k: "思考中...这不是格式化输出")
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        _seed_topic(s)
 
-    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
     assert r.status_code == 502
 
 
 def test_preset_styles_requires_editor_level(publisher_client, fresh_db):
     """publisher(0) 无生成预设权限：返回 403。"""
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
-    r = publisher_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+        _seed_topic(s)
+    r = publisher_client.post("/writing/styles/preset", follow_redirects=False)
     assert r.status_code == 403
 
 
@@ -430,15 +456,15 @@ def test_preset_styles_default_count_is_eight(owner_client, fresh_db, monkeypatc
 
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
     with Session(fresh_db) as s:
-        _brand, campaign, _topic = _seed_topic(s)
-        cid = campaign.id
+        brand, _campaign, _topic = _seed_topic(s)
+        bid = brand.id
 
-    r = owner_client.post(f"/writing/styles/campaign/{cid}/preset", follow_redirects=False)
+    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
     assert r.status_code == 303
     assert "8 个差异化的写作风格" in seen["count_in_prompt"]
     with Session(fresh_db) as s:
         presets = s.exec(
-            select(Style).where(Style.campaign_id == cid, Style.source == "preset")
+            select(Style).where(Style.brand_id == bid, Style.source == "preset")
         ).all()
         assert len(presets) == 8
 
@@ -463,8 +489,8 @@ def test_generate_no_debate_no_review(owner_client, fresh_db, monkeypatch):
     monkeypatch.setattr(wroutes.llm, "text_model_info", lambda module="default": ("codex", "gpt-5.5"))
     monkeypatch.setattr(wroutes.llm, "image_model_info", lambda module="default": ("minimax-m3", "image-01"))
     with Session(fresh_db) as s:
-        _brand, campaign, topic = _seed_topic(s)
-        s.add(Style(campaign_id=campaign.id, name="默认风格", summary="短句开场，史料收束", is_default=True))
+        brand, campaign, topic = _seed_topic(s)
+        s.add(Style(brand_id=brand.id, name="默认风格", summary="短句开场，史料收束", is_default=True))
         s.commit()
         tid = topic.id
 
@@ -510,8 +536,8 @@ def test_regenerate_creates_new_article_keeps_old(owner_client, fresh_db, monkey
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
     monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
     with Session(fresh_db) as s:
-        _brand, campaign, topic = _seed_topic(s)
-        s.add(Style(campaign_id=campaign.id, name="默认风格", summary="短句开场", is_default=True))
+        brand, campaign, topic = _seed_topic(s)
+        s.add(Style(brand_id=brand.id, name="默认风格", summary="短句开场", is_default=True))
         s.commit()
         tid = topic.id
 
@@ -560,8 +586,8 @@ def test_generate_blocked_while_running(owner_client, fresh_db, monkeypatch):
     monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
     monkeypatch.setattr(wroutes.llm, "generate_images", lambda *a, **k: ["/x.png"] * 4)
     with Session(fresh_db) as s:
-        _brand, campaign, topic = _seed_topic(s)
-        s.add(Style(campaign_id=campaign.id, name="默认风格", summary="短句开场", is_default=True))
+        brand, campaign, topic = _seed_topic(s)
+        s.add(Style(brand_id=brand.id, name="默认风格", summary="短句开场", is_default=True))
         s.commit()
         tid = topic.id
 
