@@ -16,6 +16,8 @@
         <a href="/schedule/articles/{{ article.id }}/images.zip"
            class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium hover:bg-slate-200">下载全部图片</a>
         {% endif %}
+        <button type="button" onclick="tnToggleLayout()"
+                class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium hover:bg-slate-200">AI 排版</button>
         <button type="button" onclick="tnCloseModal()" class="text-slate-400 hover:text-slate-600">✕</button>
       </div>
     </div>
@@ -32,7 +34,7 @@
         </div>
       {% endif %}
       {% if body_segments %}
-        <div class="rounded-xl border border-slate-100 bg-white px-4 py-4">
+        <div id="view-original" class="rounded-xl border border-slate-100 bg-white px-4 py-4">
           <div class="text-xs text-slate-400 mb-2">发布正文</div>
           <article class="prose prose-sm max-w-none text-slate-700">
             {% for seg in body_segments %}
@@ -63,5 +65,80 @@
         </div>
       {% endif %}
     </div>
+    <div id="view-layout" class="hidden overflow-auto px-5 py-4 space-y-4 text-sm">
+      <div class="flex items-center gap-1 border-b border-slate-100">
+        <button type="button" onclick="tnLayoutTab('xhs')" id="tab-xhs"
+                class="px-4 py-2 text-xs font-medium border-b-2 border-brand-600 text-brand-700">小红书版</button>
+        <button type="button" onclick="tnLayoutTab('wechat')" id="tab-wechat"
+                class="px-4 py-2 text-xs font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-700">公众号版</button>
+      </div>
+      <div id="pane-xhs" class="space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2 text-xs text-slate-500">
+            <span>字数：{{ xhs.char_count }}</span>
+            {% if xhs.over_limit %}<span class="text-red-500 font-medium">⚠ 超过 1000 字，小红书正文建议精简</span>{% endif %}
+          </div>
+          <button type="button"
+                  onclick='navigator.clipboard.writeText({{ xhs.content|tojson }}).then(()=>tnToast("小红书版已复制"))'
+                  class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700">复制小红书版</button>
+        </div>
+        {% if xhs.image_hint %}
+        <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">{{ xhs.image_hint }}</div>
+        {% endif %}
+        <div class="rounded-xl border border-slate-100 bg-slate-50 px-4 py-4">
+          <div class="whitespace-pre-wrap text-slate-700 text-[14px] leading-7">{{ xhs.content }}</div>
+        </div>
+      </div>
+      <div id="pane-wechat" class="hidden space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="text-xs text-slate-500">复制后粘贴到公众号后台编辑器，样式自动保留</div>
+          <button type="button" onclick="tnCopyWechat()"
+                  class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700">复制公众号版</button>
+        </div>
+        <div class="rounded-xl border border-slate-100 bg-white px-4 py-4 overflow-auto">
+          <div id="wechat-rendered">{{ wechat_html|safe }}</div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
+<script>
+  function tnToggleLayout(){
+    const orig=document.getElementById('view-original');
+    const lay=document.getElementById('view-layout');
+    const isLayoutHidden=lay.classList.contains('hidden');
+    if(isLayoutHidden){
+      // 切到排版视图：隐藏原文区及其后所有兄弟（状态 chip、纲要、提示词等）
+      let el=orig; while(el){ el.classList.add('hidden'); el=el.nextElementSibling; }
+      lay.classList.remove('hidden');
+      tnLayoutTab('xhs');
+    }else{
+      // 切回原文视图
+      let el=orig; while(el){ el.classList.remove('hidden'); el=el.nextElementSibling; }
+      lay.classList.add('hidden');
+    }
+  }
+  function tnLayoutTab(which){
+    const xhs=document.getElementById('pane-xhs');
+    const wc=document.getElementById('pane-wechat');
+    const tx=document.getElementById('tab-xhs');
+    const tw=document.getElementById('tab-wechat');
+    if(which==='xhs'){
+      xhs.classList.remove('hidden'); wc.classList.add('hidden');
+      tx.classList.add('border-brand-600','text-brand-700'); tx.classList.remove('border-transparent','text-slate-500');
+      tw.classList.add('border-transparent','text-slate-500'); tw.classList.remove('border-brand-600','text-brand-700');
+    }else{
+      wc.classList.remove('hidden'); xhs.classList.add('hidden');
+      tw.classList.add('border-brand-600','text-brand-700'); tw.classList.remove('border-transparent','text-slate-500');
+      tx.classList.add('border-transparent','text-slate-500'); tx.classList.remove('border-brand-600','text-brand-700');
+    }
+  }
+  function tnCopyWechat(){
+    const node=document.getElementById('wechat-rendered');
+    const range=document.createRange(); range.selectNode(node);
+    const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    try{ document.execCommand('copy'); tnToast('公众号版已复制，粘贴到公众号后台即可'); }
+    catch(e){ tnToast('复制失败，请手动选择'); }
+    sel.removeAllRanges();
+  }
+</script>

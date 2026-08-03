@@ -133,6 +133,164 @@ def _body_segments_with_images(body: str, images: list[dict[str, str | int]]) ->
     return result
 
 
+# ── AI 排版：分平台输出 ──
+
+def _plain_body(body: str) -> str:
+    """去掉插图标记 + 开头的「标题：」「正文：」占位行，返回纯正文。"""
+    text = re.sub(r"\n?\[插图(?:位|位置)?[：:].+?\]\n?", "\n\n", body or "")
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    for ln in lines:
+        s = ln.strip()
+        if s in ("标题：", "正文：", "标题:", "正文:"):
+            continue
+        if s.startswith("标题：") or s.startswith("标题:"):
+            continue
+        cleaned.append(ln)
+    return "\n".join(cleaned).strip()
+
+
+# 小红书关键句加 emoji 的锚点词（命中即在该句首/尾加一个轻 emoji）
+_XHS_EMOJI_MAP = [
+    ("秘密", "🔍"), ("革命", "🔥"), ("极端", "⚡"), ("历史", "📜"),
+    ("第一次", "✨"), ("从未", "💫"), ("真正", "🌟"), ("发现", "💡"),
+    ("背后", "👀"), ("答案", "🎯"), ("为什么", "❓"), ("如何", "🤔"),
+    ("然而", "↩️"), ("但是", "⚡"), ("本质", "💎"), ("核心", "🔑"),
+    ("身体", "🌿"), ("舒适", "☁️"), ("东方", "🍵"), ("皮肤", "🌸"),
+    ("材料", "🧵"), ("设计", "✏️"), ("睡眠", "🌙"), ("温度", "🌡️"),
+]
+
+
+def _format_xhs(title: str, body: str, images: list[dict]) -> dict:
+    """小红书版：剥掉插图标记 → 长段切短句 → 关键句加 emoji → 文末补话题标签 → 超字数红字提示。"""
+    plain = _plain_body(body)
+    # 按段落切，每段再按句号/问号/感叹号切成短行
+    paragraphs = [p.strip() for p in plain.split("\n\n") if p.strip()]
+    lines: list[str] = []
+    for para in paragraphs:
+        sentences = re.split(r"(?<=[。！？])", para)
+        for s in sentences:
+            s = s.strip()
+            if not s:
+                continue
+            # 关键句加 emoji
+            for kw, emoji in _XHS_EMOJI_MAP:
+                if kw in s:
+                    s = f"{emoji} {s}"
+                    break
+            lines.append(s)
+        lines.append("")  # 段间空行
+    # 标签：从标题提取关键词
+    tags: list[str] = []
+    title_clean = re.sub(r"[，。？！,.?!:：""\"'（）()【】\[\]]+", " ", title)
+    for w in title_clean.split():
+        if len(w) >= 2 and w not in tags:
+            tags.append(w)
+    # 补几个通用标签
+    tags.extend(["#深度阅读", "#知识分享"])
+    tag_line = " ".join(f"#{t}#" for t in tags[:6])
+    content = "\n".join(lines).strip() + "\n\n" + tag_line
+    char_count = len(re.sub(r"\s", "", content))
+    over_limit = char_count > 1000
+    image_hint = ""
+    if images:
+        image_hint = f"📎 本文共 {len(images)} 张配图，请单独上传到小红书图集"
+    return {
+        "content": content,
+        "char_count": char_count,
+        "over_limit": over_limit,
+        "image_hint": image_hint,
+    }
+
+
+def _html_escape(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _format_wechat(title: str, body: str, images: list[dict]) -> str:
+    """公众号版：纯文本转带样式 HTML，插图标记替换成 <img>。"""
+    # 按插图标记拆分
+    pattern = re.compile(r"\[插图(?:位|位置)?[：:](.+?)\]")
+    # 构建 slot_index → image url 的映射
+    slot_urls: list[str] = []
+    for i, match in enumerate(pattern.finditer(body or "")):
+        if i < len(images):
+            slot_urls.append(images[i].get("url", ""))
+        else:
+            slot_urls.append("")
+
+    html_parts: list[str] = []
+    html_parts.append(
+        f'<section style="font-size:15px;line-height:1.8;color:#3f3f3f;letter-spacing:0.5px;">'
+    )
+    # 标题
+    html_parts.append(
+        f'<h1 style="font-size:20px;font-weight:bold;color:#1a1a1a;text-align:center;'
+        f'margin:0 0 20px 0;line-height:1.4;">{_html_escape(title)}</h1>'
+    )
+
+    last_end = 0
+    slot_idx = 0
+    for match in pattern.finditer(body or ""):
+        text = (body or "")[last_end:match.start()].strip()
+        if text:
+            # 去掉「标题：」「正文：」占位行
+            text = re.sub(r"\n?标题[：:][^\n]*\n?", "\n", text)
+            text = re.sub(r"\n?正文[：:]\s*\n?", "\n", text)
+            for block in text.split("\n\n"):
+                block = block.strip()
+                if not block:
+                    continue
+                # 小标题：短行且无句号
+                if len(block) <= 20 and not re.search(r"[。！？]", block):
+                    html_parts.append(
+                        f'<h2 style="font-size:17px;font-weight:bold;color:#1a1a1a;'
+                        f'border-left:3px solid #5a7a8a;padding-left:10px;margin:24px 0 12px 0;">'
+                        f'{_html_escape(block)}</h2>'
+                    )
+                else:
+                    html_parts.append(
+                        f'<p style="margin:0 0 16px 0;text-indent:2em;">{_html_escape(block)}</p>'
+                    )
+        # 插图
+        if slot_idx < len(slot_urls) and slot_urls[slot_idx]:
+            html_parts.append(
+                f'<figure style="margin:20px 0;text-align:center;">'
+                f'<img src="{slot_urls[slot_idx]}" style="max-width:100%;border-radius:4px;" />'
+                f'<figcaption style="font-size:13px;color:#999;margin-top:6px;">'
+                f'{_html_escape(match.group(1).strip())}</figcaption></figure>'
+            )
+        slot_idx += 1
+        last_end = match.end()
+
+    tail = (body or "")[last_end:].strip()
+    if tail:
+        tail = re.sub(r"\n?标题[：:][^\n]*\n?", "\n", tail)
+        tail = re.sub(r"\n?正文[：:]\s*\n?", "\n", tail)
+        for block in tail.split("\n\n"):
+            block = block.strip()
+            if not block:
+                continue
+            if len(block) <= 20 and not re.search(r"[。！？]", block):
+                html_parts.append(
+                    f'<h2 style="font-size:17px;font-weight:bold;color:#1a1a1a;'
+                    f'border-left:3px solid #5a7a8a;padding-left:10px;margin:24px 0 12px 0;">'
+                    f'{_html_escape(block)}</h2>'
+                )
+            else:
+                html_parts.append(
+                    f'<p style="margin:0 0 16px 0;text-indent:2em;">{_html_escape(block)}</p>'
+                )
+
+    # 分割线 + 尾注
+    html_parts.append(
+        '<hr style="border:none;border-top:1px solid #eee;margin:28px 0 16px 0;" />'
+    )
+    html_parts.append("</section>")
+    return "".join(html_parts)
+
+
 def _download_image_bytes(url: str) -> tuple[bytes, str]:
     if url.startswith("/writing/uploads/"):
         rel = unquote(url.removeprefix("/writing/uploads/"))
@@ -552,6 +710,8 @@ def article_preview(article_id: int, request: Request, session: Session = Depend
     publish_body = _publish_body(article.body)
     copy_text = "\n\n".join(part for part in [article.title, publish_body] if part)
     body_segments = _body_segments_with_images(article.body, images)
+    xhs = _format_xhs(article.title, article.body, images)
+    wechat_html = _format_wechat(article.title, article.body, images)
     return templates.TemplateResponse(request, "schedule/_article_preview.html", {
         "request": request,
         "article": article,
@@ -560,6 +720,8 @@ def article_preview(article_id: int, request: Request, session: Session = Depend
         "publish_body": publish_body,
         "body_segments": body_segments,
         "copy_text": copy_text,
+        "xhs": xhs,
+        "wechat_html": wechat_html,
     })
 
 
