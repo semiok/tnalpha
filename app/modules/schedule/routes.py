@@ -1,4 +1,5 @@
 """④排期版：审核通过文章 → 发布周排期 → 发布回填。"""
+import html
 import io
 import os
 import re
@@ -183,12 +184,12 @@ def _format_xhs(title: str, body: str, images: list[dict]) -> dict:
         lines.append("")  # 段间空行
     # 标签：从标题提取关键词
     tags: list[str] = []
-    title_clean = re.sub(r"[，。？！,.?!:：""\"'（）()【】\[\]]+", " ", title)
+    title_clean = re.sub(r'''[，。？！,.?!:："'（）()【】\[\]]+''', " ", title)
     for w in title_clean.split():
         if len(w) >= 2 and w not in tags:
             tags.append(w)
     # 补几个通用标签
-    tags.extend(["#深度阅读", "#知识分享"])
+    tags.extend(["深度阅读", "知识分享"])
     tag_line = " ".join(f"#{t}#" for t in tags[:6])
     content = "\n".join(lines).strip() + "\n\n" + tag_line
     char_count = len(re.sub(r"\s", "", content))
@@ -205,20 +206,33 @@ def _format_xhs(title: str, body: str, images: list[dict]) -> dict:
 
 
 def _html_escape(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return html.escape(s or "", quote=True)
+
+
+def _wechat_image_html(image: dict, caption: str) -> str:
+    url = _html_escape(str(image.get("url", "")))
+    if not url:
+        return ""
+    return (
+        '<figure style="margin:20px 0;text-align:center;">'
+        f'<img src="{url}" style="max-width:100%;border-radius:4px;" />'
+        '<figcaption style="font-size:13px;color:#999;margin-top:6px;">'
+        f'{_html_escape(caption)}</figcaption></figure>'
+    )
 
 
 def _format_wechat(title: str, body: str, images: list[dict]) -> str:
     """公众号版：纯文本转带样式 HTML，插图标记替换成 <img>。"""
     # 按插图标记拆分
     pattern = re.compile(r"\[插图(?:位|位置)?[：:](.+?)\]")
-    # 构建 slot_index → image url 的映射
-    slot_urls: list[str] = []
-    for i, match in enumerate(pattern.finditer(body or "")):
-        if i < len(images):
-            slot_urls.append(images[i].get("url", ""))
-        else:
-            slot_urls.append("")
+    # 按 slot_index 分组，一个插图位可以包含多张已选图片。
+    image_slots: dict[int, list[dict]] = {}
+    for image in images:
+        try:
+            image_slot = int(image.get("slot_index", 0))
+        except (TypeError, ValueError):
+            image_slot = 0
+        image_slots.setdefault(image_slot, []).append(image)
 
     html_parts: list[str] = []
     html_parts.append(
@@ -254,13 +268,8 @@ def _format_wechat(title: str, body: str, images: list[dict]) -> str:
                         f'<p style="margin:0 0 16px 0;text-indent:2em;">{_html_escape(block)}</p>'
                     )
         # 插图
-        if slot_idx < len(slot_urls) and slot_urls[slot_idx]:
-            html_parts.append(
-                f'<figure style="margin:20px 0;text-align:center;">'
-                f'<img src="{slot_urls[slot_idx]}" style="max-width:100%;border-radius:4px;" />'
-                f'<figcaption style="font-size:13px;color:#999;margin-top:6px;">'
-                f'{_html_escape(match.group(1).strip())}</figcaption></figure>'
-            )
+        for image in image_slots.get(slot_idx, []):
+            html_parts.append(_wechat_image_html(image, match.group(1).strip()))
         slot_idx += 1
         last_end = match.end()
 
@@ -282,6 +291,13 @@ def _format_wechat(title: str, body: str, images: list[dict]) -> str:
                 html_parts.append(
                     f'<p style="margin:0 0 16px 0;text-indent:2em;">{_html_escape(block)}</p>'
                 )
+
+    # 没有插图标记的旧文章，仍在正文后展示已选图片。
+    if slot_idx == 0:
+        for image_slot in sorted(image_slots):
+            for image in image_slots[image_slot]:
+                caption = str(image.get("label") or "文章配图")
+                html_parts.append(_wechat_image_html(image, caption))
 
     # 分割线 + 尾注
     html_parts.append(
