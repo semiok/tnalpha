@@ -15,6 +15,7 @@ DEFAULT_URL = "https://alpha.traditionow.ai"
 DEV_KEYCHAIN_SERVICE = "ai.traditionow.tnalpha.agent-api.dev"
 PROD_KEYCHAIN_SERVICE = "ai.traditionow.tnalpha.agent-api.prod"
 DEV_PLIST = Path.home() / "Library/LaunchAgents/ai.openclaw.tnalpha.plist"
+PROD_PLIST = Path.home() / "Library/LaunchAgents/ai.openclaw.tnalpha-app.plist"
 
 
 def _base_url() -> str:
@@ -23,6 +24,24 @@ def _base_url() -> str:
 
 def _is_local_url(base_url: str) -> bool:
     return base_url.startswith(("http://127.0.0.1", "http://localhost"))
+
+
+def _plist_token(path: Path) -> str:
+    try:
+        result = subprocess.run(
+            [
+                "/usr/libexec/PlistBuddy",
+                "-c",
+                "Print :EnvironmentVariables:TNALPHA_AGENT_API_TOKEN",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return ""
 
 
 def _token(base_url: str) -> str:
@@ -43,22 +62,13 @@ def _token(base_url: str) -> str:
     except (FileNotFoundError, subprocess.CalledProcessError):
         pass
     if _is_local_url(base_url):
-        try:
-            result = subprocess.run(
-                [
-                    "/usr/libexec/PlistBuddy",
-                    "-c",
-                    "Print :EnvironmentVariables:TNALPHA_AGENT_API_TOKEN",
-                    str(DEV_PLIST),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            if result.stdout.strip():
-                return result.stdout.strip()
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
+        value = _plist_token(DEV_PLIST)
+        if value:
+            return value
+    elif base_url == DEFAULT_URL:
+        value = _plist_token(PROD_PLIST)
+        if value:
+            return value
     raise SystemExit(
         "TN-Alpha agent token is unavailable. Configure TNALPHA_AGENT_API_TOKEN "
         f"in the environment or Keychain service {keychain_service!r}."
@@ -73,17 +83,16 @@ def _call(method: str, path: str, payload=None, query=None):
         if clean:
             url = f"{url}?{urlencode(clean)}"
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {_token(base_url)}",
-            "Content-Type": "application/json",
-            "X-TNAlpha-Actor": os.environ.get("TNALPHA_AGENT_ACTOR", "openloomi-admin"),
-            "X-TNAlpha-Org": os.environ.get("TNALPHA_AGENT_ORG", "gusu-local"),
-        },
-    )
+    headers = {
+        "Authorization": f"Bearer {_token(base_url)}",
+        "Content-Type": "application/json",
+        "User-Agent": "OpenLoomi-TNAlpha/1.0",
+        "X-TNAlpha-Actor": os.environ.get("TNALPHA_AGENT_ACTOR", "openloomi-admin"),
+    }
+    org_id = os.environ.get("TNALPHA_AGENT_ORG", "").strip()
+    if org_id:
+        headers["X-TNAlpha-Org"] = org_id
+    request = Request(url, data=data, method=method, headers=headers)
     try:
         with urlopen(request, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))

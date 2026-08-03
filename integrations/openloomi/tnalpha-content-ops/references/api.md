@@ -12,8 +12,10 @@ The client resolves credentials in this order:
 3. Default Keychain service `ai.traditionow.tnalpha.agent-api.prod` for remote
    URLs, or `ai.traditionow.tnalpha.agent-api.dev` for localhost.
 
-Only localhost may fall back to the dev LaunchAgent. This prevents a dev token
-from being sent to the production endpoint accidentally.
+On the maintainer Mac, localhost may fall back to the dev LaunchAgent and the
+exact default production URL may fall back to the permission-restricted prod
+LaunchAgent. No plist fallback is used for any other remote URL. This prevents a
+dev or prod token from being sent to an arbitrary endpoint accidentally.
 
 Implemented endpoints:
 
