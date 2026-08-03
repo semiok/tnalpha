@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.schedule import schedule
+from app.modules.schedule import routes as schedule_routes
 from app.modules.schedule.models import ScheduleMetric, ScheduleSetting, ScheduleSlot, ScheduleWeek
 from app.modules.topic.models import Topic
 from app.modules.writing.models import Article, ArticleImage
@@ -167,6 +168,44 @@ def test_schedule_page_lists_generated_articles_and_preview(owner_client, fresh_
     assert zipped.headers["content-type"] == "application/zip"
     with zipfile.ZipFile(io.BytesIO(zipped.content)) as zf:
         assert zf.read(zf.namelist()[0]) == b"png-bytes"
+
+
+def test_platform_layout_formats_tags_and_maps_images_by_slot():
+    xhs = schedule_routes._format_xhs(
+        "夏夜里的舒适，从身体开始",
+        "标题：夏夜\n\n正文：\n\n身体真正放松下来。\n\n[插图：面料细节]\n\n这是舒适的核心。",
+        [{"url": "/writing/uploads/a.jpg", "slot_index": 0}],
+    )
+    assert "#深度阅读#" in xhs["content"]
+    assert "#知识分享#" in xhs["content"]
+    assert "##深度阅读#" not in xhs["content"]
+    assert "[插图" not in xhs["content"]
+
+    wechat = schedule_routes._format_wechat(
+        "标题 <测试>",
+        "第一段\n\n[插图：第一组]\n\n第二段\n\n[插图：第二组]\n\n结尾",
+        [
+            {"url": "/writing/uploads/slot-1.jpg", "slot_index": 1},
+            {"url": "/writing/uploads/slot-0-a.jpg", "slot_index": 0},
+            {"url": '/writing/uploads/slot-0-b.jpg?name="bad"', "slot_index": 0},
+        ],
+    )
+    first = wechat.find("slot-0-a.jpg")
+    second_in_first_slot = wechat.find("slot-0-b.jpg")
+    second_slot = wechat.find("slot-1.jpg")
+    assert 0 <= first < second_in_first_slot < second_slot
+    assert "&quot;bad&quot;" in wechat
+    assert "标题 &lt;测试&gt;" in wechat
+
+
+def test_wechat_layout_appends_images_when_article_has_no_markers():
+    wechat = schedule_routes._format_wechat(
+        "无插图标记",
+        "只有正文。",
+        [{"url": "/writing/uploads/fallback.jpg", "slot_index": 0, "label": "主图"}],
+    )
+    assert "fallback.jpg" in wechat
+    assert "主图" in wechat
 
 
 def test_schedule_weeks_show_latest_first_and_nearest_last(owner_client, fresh_db):
