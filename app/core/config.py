@@ -7,6 +7,10 @@ DATABASE_URL = os.environ.get("TNALPHA_DATABASE_URL", "sqlite:///./tnalpha.db")
 # cookie 签名密钥（生产必须用 env 覆盖，否则可伪造）
 SECRET_KEY = os.environ.get("TNALPHA_SECRET_KEY", "tnalpha-dev-secret-change-me")
 
+# OpenLoomi / agent machine access. Empty means disabled; never commit a real token.
+AGENT_API_TOKEN = os.environ.get("TNALPHA_AGENT_API_TOKEN", "")
+AGENT_API_ORG_ID = os.environ.get("TNALPHA_AGENT_API_ORG_ID", "tnalpha-local")
+
 # 文件上传根目录
 DATA_DIR = os.environ.get("TNALPHA_DATA_DIR", "data")
 
