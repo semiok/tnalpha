@@ -17,6 +17,7 @@ from app.modules.knowledge import routes as knowledge_routes
 from app.modules.permissions import routes as permissions_routes
 from app.modules.prompts import routes as prompts_routes
 from app.modules.schedule import routes as schedule_routes
+from app.modules.skill_distribution import routes as skill_distribution_routes
 from app.modules.topic import routes as topic_routes
 from app.modules.writing import routes as writing_routes
 
@@ -36,7 +37,7 @@ app = FastAPI(title="TN-Alpha", version=__version__, lifespan=lifespan)
 async def require_login(request: Request, call_next):
     """登录门 + 角色注入：每请求求角色塞 state.role/level；非公开路径未登录跳 /login。"""
     # Agent API uses Bearer-token auth and returns JSON errors instead of login redirects.
-    if request.url.path.startswith("/api/v1"):
+    if request.url.path.startswith(("/api/v1", "/skills/")):
         return await call_next(request)
 
     role = auth.current_role(request)
@@ -68,6 +69,7 @@ app.include_router(feedback_routes.router)
 app.include_router(permissions_routes.router)
 app.include_router(prompts_routes.router)
 app.include_router(agent_api_routes.router)
+app.include_router(skill_distribution_routes.router)
 
 
 @app.get("/health")

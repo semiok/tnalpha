@@ -1,4 +1,4 @@
-"""OpenLoomi agent API authentication, reads, writes and audit coverage."""
+"""Agent API authentication, reads, writes and audit coverage."""
 from sqlmodel import Session, select
 
 from app.core import config
@@ -7,13 +7,13 @@ from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.models import Topic
 
 
-TOKEN = "test-openloomi-agent-token"
+TOKEN = "test-tnalpha-agent-token"
 
 
 def _headers(**extra):
     return {
         "Authorization": f"Bearer {TOKEN}",
-        "X-TNAlpha-Actor": "openloomi-test-admin",
+        "X-TNAlpha-Actor": "agent-test-admin",
         "X-TNAlpha-Org": "tnalpha-test",
         **extra,
     }
@@ -31,7 +31,7 @@ def test_agent_api_reports_admin_identity_and_capabilities(anon_client, monkeypa
     me = anon_client.get("/api/v1/me", headers=_headers())
     assert me.status_code == 200
     assert me.json() == {
-        "actor_id": "openloomi-test-admin",
+        "actor_id": "agent-test-admin",
         "org_id": "tnalpha-test",
         "role": "admin0",
         "role_label": "管理员",
@@ -76,10 +76,10 @@ def test_agent_api_creates_exact_manual_topic_and_audit(anon_client, fresh_db, m
         session.refresh(campaign)
         brand_id, campaign_id = brand.id, campaign.id
 
-    title = "OpenLoomi 自然语言新增的测试选题"
+    title = "外部 Agent 自然语言新增的测试选题"
     response = anon_client.post(
         "/api/v1/topics/manual",
-        headers=_headers(**{"X-Request-ID": "loomi-test-001"}),
+        headers=_headers(**{"X-Request-ID": "agent-test-001"}),
         json={
             "brand_id": brand_id,
             "campaign_id": campaign_id,
@@ -95,8 +95,8 @@ def test_agent_api_creates_exact_manual_topic_and_audit(anon_client, fresh_db, m
         topic = session.exec(select(Topic).where(Topic.title == title)).one()
         audit = session.exec(select(AgentAuditLog)).one()
         assert topic.source == "added"
-        assert audit.request_id == "loomi-test-001"
-        assert audit.actor_id == "openloomi-test-admin"
+        assert audit.request_id == "agent-test-001"
+        assert audit.actor_id == "agent-test-admin"
         assert audit.action == "topics.create_manual"
         assert audit.resource_id == str(topic.id)
 

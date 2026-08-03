@@ -1,0 +1,89 @@
+openapi: 3.1.0
+info:
+  title: TN-Alpha Agent API
+  version: 1.0.0
+  description: Stable business API consumed by the tnalpha-content-ops Skill.
+servers:
+  - url: https://alpha.traditionow.ai
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    ManualTopicInput:
+      type: object
+      required: [brand_id, title]
+      properties:
+        brand_id: {type: integer}
+        campaign_id: {type: [integer, "null"]}
+        title: {type: string, minLength: 1, maxLength: 300}
+        outline: {type: string, maxLength: 5000, default: ""}
+paths:
+  /api/v1/health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        "200": {description: Service health}
+  /api/v1/me:
+    get:
+      operationId: getIdentity
+      responses:
+        "200": {description: Connected Agent identity}
+        "401": {description: Invalid credential}
+  /api/v1/capabilities:
+    get:
+      operationId: listCapabilities
+      responses:
+        "200": {description: Allowed and restricted actions}
+  /api/v1/brands:
+    get:
+      operationId: listBrands
+      responses:
+        "200": {description: Brands visible to the connected account}
+  /api/v1/brands/{brand_id}/campaigns:
+    get:
+      operationId: listCampaigns
+      parameters:
+        - {name: brand_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        "200": {description: Campaigns for a brand}
+        "404": {description: Brand not found}
+  /api/v1/brands/{brand_id}/overview:
+    get:
+      operationId: getBrandOverview
+      parameters:
+        - {name: brand_id, in: path, required: true, schema: {type: integer}}
+      responses:
+        "200": {description: Brand content operations overview}
+        "404": {description: Brand not found}
+  /api/v1/topics:
+    get:
+      operationId: listTopics
+      parameters:
+        - {name: brand_id, in: query, schema: {type: integer}}
+        - {name: campaign_id, in: query, schema: {type: integer}}
+        - {name: status, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200}}
+      responses:
+        "200": {description: Matching topics}
+  /api/v1/topics/manual:
+    post:
+      operationId: createManualTopic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ManualTopicInput"}
+      responses:
+        "201": {description: Candidate topic created}
+        "409": {description: Duplicate topic}
+        "422": {description: Invalid input}
+  /api/v1/audit:
+    get:
+      operationId: listAuditEvents
+      responses:
+        "200": {description: Recent Agent API audit events}
