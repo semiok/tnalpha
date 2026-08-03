@@ -1,4 +1,4 @@
-"""Versioned machine API for OpenLoomi's TN-Alpha digital employee."""
+"""Versioned machine API for authorized TN-Alpha Agent clients."""
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -52,9 +52,9 @@ def require_agent(request: Request) -> AgentPrincipal:
     scheme, _, supplied = authorization.partition(" ")
     if scheme.lower() != "bearer" or not supplied or not hmac.compare_digest(supplied, configured):
         raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-    actor_id = request.headers.get("x-tnalpha-actor", "openloomi-admin").strip()[:200]
+    actor_id = request.headers.get("x-tnalpha-actor", "tnalpha-agent").strip()[:200]
     org_id = request.headers.get("x-tnalpha-org", config.AGENT_API_ORG_ID).strip()[:200]
-    return AgentPrincipal(actor_id=actor_id or "openloomi-admin", org_id=org_id or config.AGENT_API_ORG_ID)
+    return AgentPrincipal(actor_id=actor_id or "tnalpha-agent", org_id=org_id or config.AGENT_API_ORG_ID)
 
 
 def _status_counts(rows) -> dict[str, int]:

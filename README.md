@@ -41,3 +41,26 @@
 
 `docs/prototype.html` — 单文件，Tailwind + Alpine，含六模块关键页 + 每屏功能标注。
 本地服务：launchd `ai.openclaw.tnalpha`（python http.server :8810，serve docs/）。
+
+## Agent Skill
+
+TN-Alpha 对外 Agent 能力的唯一源代码位于
+[`skills/tnalpha-content-ops`](skills/tnalpha-content-ops)。OpenRice、Codex、Claude
+及其他兼容 Agent Skills 的平台应从 TN-Alpha 安装，不维护各自的副本。
+
+- 生产安装清单：`https://alpha.traditionow.ai/skills/tnalpha-content-ops/manifest.json`
+- Skill 注册表：`https://alpha.traditionow.ai/skills/registry.json`
+- 开发源：本仓库 `main` 分支的 `skills/tnalpha-content-ops`
+
+安装器读取清单后下载版本化 ZIP，并校验其中的 SHA-256。首次使用时在本机执行：
+
+```bash
+python3 scripts/tnalpha_client.py configure \
+  --url https://alpha.traditionow.ai \
+  --account YOUR_ACCOUNT \
+  --org YOUR_ORG
+python3 scripts/tnalpha_client.py status
+```
+
+非敏感连接信息写入 `~/.config/tnalpha/agent.json`；macOS 凭据进入 Keychain，
+CI 或其他平台通过 `TNALPHA_AGENT_API_TOKEN` 注入。Skill 和仓库均不保存凭据。

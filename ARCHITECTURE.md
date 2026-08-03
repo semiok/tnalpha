@@ -35,11 +35,16 @@ tnalpha/
 │  ├─ modules/           各模块（每人一个子目录）
 │  │  ├─ knowledge/  ①   topic/  ②   writing/  ③
 │  │  ├─ schedule/   ④   feedback/  ⑤   （权限在 core/auth）
+│  │  ├─ agent_api/      外部 Agent 的鉴权、审计与受限业务 API
+│  │  └─ skill_distribution/  Skill 注册表、清单与版本化安装包
 │  └─ templates/
 │     ├─ base.html       固定设计 token
 │     ├─ components/ui.html  组件宏库（所有模块复用）
 │     └─ <模块>/         各模块模板
 ├─ migrations/           Alembic
+├─ skills/               TN-Alpha 对外 Skill 的唯一权威源
+│  ├─ registry.json      可安装 Skill 注册表
+│  └─ tnalpha-content-ops/  通用 Agent Skill + API 客户端
 ├─ tests/                测试
 ├─ CLAUDE.md DESIGN.md CONTRIBUTING.md 需求文档.md
 ```

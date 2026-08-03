@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "publisher": "TN-Alpha",
+  "skills": [
+    {
+      "id": "tnalpha-content-ops",
+      "name": "TN-Alpha Content Operations",
+      "version": "1.0.0",
+      "manifest": "tnalpha-content-ops/skill.json",
+      "categories": ["content-operations", "research"],
+      "visibility": "external",
+      "git": {
+        "repository": "https://github.com/semiok/tnalpha.git",
+        "ref": "main",
+        "path": "skills/tnalpha-content-ops"
+      }
+    }
+  ]
+}

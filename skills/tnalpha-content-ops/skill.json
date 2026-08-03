@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "tnalpha-content-ops",
+  "name": "TN-Alpha Content Operations",
+  "description": "Inspect TN-Alpha brands, campaigns, topics and content status, or create an exact manual candidate topic.",
+  "version": "1.0.0",
+  "publisher": "TN-Alpha",
+  "entry": "SKILL.md",
+  "license": "Proprietary",
+  "visibility": "external",
+  "categories": ["content-operations", "research"],
+  "runtime": {
+    "python": ">=3.10",
+    "supportedAgents": ["codex", "claude", "agent-skills"],
+    "platforms": ["darwin", "linux", "win32"]
+  },
+  "permissions": {
+    "filesystem": "config-only",
+    "network": ["alpha.traditionow.ai"],
+    "shell": false,
+    "externalWrite": true,
+    "delete": false
+  },
+  "approval": {
+    "read": "not-required",
+    "externalWrite": "required",
+    "delete": "unavailable",
+    "publish": "unavailable"
+  },
+  "dependencies": {
+    "skills": [],
+    "mcpServers": [],
+    "executables": ["python3"]
+  },
+  "configuration": {
+    "command": "python3 scripts/tnalpha_client.py configure",
+    "statusCommand": "python3 scripts/tnalpha_client.py status",
+    "disconnectCommand": "python3 scripts/tnalpha_client.py disconnect",
+    "credentialStorage": ["macos-keychain", "environment"]
+  }
+}

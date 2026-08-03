@@ -1,0 +1,6 @@
+interface:
+  display_name: "TN-Alpha Content Operations"
+  short_description: "Inspect and operate TN-Alpha content workflows"
+  default_prompt: "Use $tnalpha-content-ops to inspect the current TN-Alpha content workflow status."
+policy:
+  allow_implicit_invocation: true

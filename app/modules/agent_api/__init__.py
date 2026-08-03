@@ -1,1 +1,1 @@
-"""Machine API used by OpenLoomi and other controlled agent clients."""
+"""Machine API used by controlled external Agent clients."""
