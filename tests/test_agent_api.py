@@ -14,7 +14,7 @@ def _headers(**extra):
     return {
         "Authorization": f"Bearer {TOKEN}",
         "X-TNAlpha-Actor": "openloomi-test-admin",
-        "X-TNAlpha-Org": "gusu-test",
+        "X-TNAlpha-Org": "tnalpha-test",
         **extra,
     }
 
@@ -32,7 +32,7 @@ def test_agent_api_reports_admin_identity_and_capabilities(anon_client, monkeypa
     assert me.status_code == 200
     assert me.json() == {
         "actor_id": "openloomi-test-admin",
-        "org_id": "gusu-test",
+        "org_id": "tnalpha-test",
         "role": "admin0",
         "role_label": "管理员",
         "access": "highest",
