@@ -38,7 +38,7 @@ def test_agent_api_reports_admin_identity_and_capabilities(anon_client, monkeypa
         "access": "highest",
     }
     capabilities = anon_client.get("/api/v1/capabilities", headers=_headers()).json()
-    assert len(capabilities["modules"]) == 7
+    assert len(capabilities["modules"]) == 8
     assert "topics.create_manual" in capabilities["implemented_actions"]
     assert "publish.execute" in capabilities["restricted_actions"]
 

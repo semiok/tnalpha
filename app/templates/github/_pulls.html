@@ -1,0 +1,20 @@
+{# PR 列表片段（HTMX 刷新用） #}
+{% from "components/ui.html" import chip, empty_state %}
+{% if pr_error %}
+<div class="text-rose-600 text-sm bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-3">{{ pr_error }}</div>
+{% endif %}
+{% if pulls %}
+<div class="space-y-2">
+  {% for pr in pulls %}
+  <div class="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-100 hover:bg-slate-50">
+    {{ chip("#" ~ pr.number, "brand") }}
+    <a href="{{ pr.html_url }}" target="_blank" class="text-sm font-medium text-slate-700 hover:text-brand-600">{{ pr.title }}</a>
+    <span class="text-xs text-slate-400">{{ pr.head }} → {{ pr.base }}</span>
+    <span class="ml-auto text-xs text-slate-400">{{ pr.user }}</span>
+    {{ chip(pr.state, "emerald" if pr.state == "open" else "slate") }}
+  </div>
+  {% endfor %}
+</div>
+{% elif not pr_error %}
+{{ empty_state("暂无 Pull Request") }}
+{% endif %}

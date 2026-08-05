@@ -28,16 +28,17 @@ MODULES = {
     "feedback": {"num": "⑤", "label": "数据反馈", "href": "/feedback"},
     "permissions": {"num": "⑥", "label": "权限", "href": "/permissions"},
     "prompts": {"num": "⑦", "label": "提示词展示", "href": "/prompts"},
+    "github": {"num": "⑧", "label": "Git 协作", "href": "/github"},
 }
 MODULE_VIEW: dict[str, set[str]] = {
     "admin0": set(MODULES),
-    "owner": {"knowledge", "topic", "writing", "schedule", "feedback"},
+    "owner": {"knowledge", "topic", "writing", "schedule", "feedback", "github"},
     "editor": {"knowledge", "topic", "writing", "schedule", "feedback"},
     "publisher": {"knowledge", "topic", "writing", "schedule", "feedback"},
 }
 MODULE_WRITE: dict[str, set[str]] = {
     "admin0": set(MODULES),
-    "owner": {"knowledge", "topic", "writing", "schedule", "feedback"},
+    "owner": {"knowledge", "topic", "writing", "schedule", "feedback", "github"},
     "editor": {"topic", "writing", "schedule", "feedback"},
     "publisher": {"schedule", "feedback"},
 }
@@ -85,6 +86,8 @@ def module_for_path(path: str) -> str:
         return "permissions"
     if path.startswith("/prompts"):
         return "prompts"
+    if path.startswith("/github"):
+        return "github"
     return ""
 
 

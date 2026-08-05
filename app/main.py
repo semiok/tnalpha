@@ -13,6 +13,7 @@ from app.core import auth, auth_routes, runtime, settings_routes
 from app.core.db import init_db
 from app.modules.feedback import routes as feedback_routes
 from app.modules.agent_api import routes as agent_api_routes
+from app.modules.github import routes as github_routes
 from app.modules.knowledge import routes as knowledge_routes
 from app.modules.permissions import routes as permissions_routes
 from app.modules.prompts import routes as prompts_routes
@@ -68,6 +69,7 @@ app.include_router(schedule_routes.router)
 app.include_router(feedback_routes.router)
 app.include_router(permissions_routes.router)
 app.include_router(prompts_routes.router)
+app.include_router(github_routes.router)
 app.include_router(agent_api_routes.router)
 app.include_router(skill_distribution_routes.router)
 

@@ -58,6 +58,9 @@ IMAGE_QUALITY = os.environ.get("TNALPHA_IMAGE_QUALITY", "low")
 IMAGE_FORMAT = os.environ.get("TNALPHA_IMAGE_FORMAT", "png")
 IMAGE_TIMEOUT = int(os.environ.get("TNALPHA_IMAGE_TIMEOUT", "400"))
 
+# ── GitHub 集成（⑧Git 协作：推送代码 + 创建 PR）──
+GITHUB_TOKEN = os.environ.get("TNALPHA_GITHUB_TOKEN", "")
+
 # ── 热点搜索源（core/sources/，②选题库用）──
 # 全部自包含在 tnalpha 内（不依赖 OpenClaw）；key 走 env，未配则对应源 enabled=False（UI 灰掉）。
 GEMINI_API_KEY = os.environ.get("TNALPHA_GEMINI_API_KEY", "")          # Google 搜索（gemini grounding，免费）

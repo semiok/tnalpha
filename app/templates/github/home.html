@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, button, card_open, card_close, chip, field, text_input, textarea, select_input, empty_state, notice %}
+
+{% block title %}Git 协作 · TN-Alpha{% endblock %}
+
+{% block content %}
+{{ page_header("⑧Git 协作", "推送代码 & 创建 PR") }}
+
+{% if status.error %}
+{{ notice("Git 错误：" ~ status.error, "amber") }}
+{% endif %}
+
+{# ── 仓库信息 ── #}
+{% if repo_owner %}
+<div class="text-xs text-slate-400 mb-4">
+  仓库：<a href="https://github.com/{{ repo_owner }}/{{ repo_name }}" target="_blank" class="text-brand-600 hover:underline">{{ repo_owner }}/{{ repo_name }}</a>
+  {% if not token_configured %}<span class="ml-2 text-amber-600">⚠ 未配置 GitHub Token，PR 功能不可用（设 TNALPHA_GITHUB_TOKEN）</span>{% endif %}
+</div>
+{% endif %}
+
+{# ── 当前分支 ── #}
+{{ card_open("当前分支", actions=button("刷新", "secondary", hx_get="/github", hx_target="body", hx_swap="outerHTML") if request.state.can_write_github else "") }}
+<div class="flex items-center gap-3">
+  <span class="text-lg font-mono font-semibold text-brand-700">{{ status.current_branch or "—" }}</span>
+  {% if status.ahead > 0 %}{{ chip("↑ " ~ status.ahead ~ " 待推送", "amber") }}{% endif %}
+  {% if status.behind > 0 %}{{ chip("↓ " ~ status.behind ~ " 落后", "rose") }}{% endif %}
+  {% if status.clean and not status.ahead and not status.behind %}{{ chip("干净", "emerald") }}{% endif %}
+</div>
+{{ card_close() }}
+
+{# ── 分支管理 ── #}
+{% if request.state.can_write_github %}
+{{ card_open("分支管理") }}
+<div class="flex flex-wrap items-end gap-4">
+  <div>
+    <span class="block text-sm text-slate-600 mb-1">切换分支</span>
+    <form action="/github/checkout" method="post" class="inline-flex gap-2">
+      <select name="name" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+        {% for b in branches %}
+        <option value="{{ b.name }}" {{ 'selected' if b.current else '' }}>{{ b.name }}{{ ' (当前)' if b.current else '' }}</option>
+        {% endfor %}
+      </select>
+      {{ button("切换", "secondary", type="submit") }}
+    </form>
+  </div>
+  <div>
+    <span class="block text-sm text-slate-600 mb-1">新建分支</span>
+    <form action="/github/branch" method="post" class="inline-flex gap-2">
+      {{ text_input("name", placeholder="feature/xxx", required=True) }}
+      <select name="base" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+        <option value="">基于当前分支</option>
+        {% for b in branches %}
+        <option value="{{ b.name }}">{{ b.name }}</option>
+        {% endfor %}
+      </select>
+      {{ button("创建", "secondary", type="submit") }}
+    </form>
+  </div>
+</div>
+{{ card_close() }}
+{% endif %}
+
+{# ── 变更文件 + 提交推送 ── #}
+{{ card_open("变更文件 (" ~ status.files|length ~ ")") }}
+{% if status.files %}
+<form action="/github/commit-push" method="post" id="commit-form">
+  <div class="space-y-1 mb-4 max-h-60 overflow-y-auto">
+    {% for f in status.files %}
+    <label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 cursor-pointer">
+      <input type="checkbox" name="files" value="{{ f.path }}" class="rounded" {% if f.staged %}checked{% endif %}>
+      <span class="font-mono text-xs w-6 text-center {% if f.staged %}text-emerald-600{% else %}text-slate-300{% endif %}">{{ f.status or '?' }}</span>
+      <span class="text-sm text-slate-700">{{ f.path }}</span>
+    </label>
+    {% endfor %}
+  </div>
+
+  {% if request.state.can_write_github %}
+  <div class="border-t border-slate-100 pt-3">
+    <label class="flex items-center gap-2 mb-3 text-sm text-slate-500">
+      <input type="checkbox" name="stage_all" value="1" class="rounded"> 暂存全部变更（忽略上方选择）
+    </label>
+    <div class="flex flex-col gap-2">
+      {{ textarea("message", placeholder="提交信息（必填）", rows=2) }}
+      <div class="flex gap-2">
+        <button type="submit" formaction="/github/stage" class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-slate-100 text-slate-700 hover:bg-slate-200">暂存选中</button>
+        <button type="submit" formaction="/github/commit" class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-slate-100 text-slate-700 hover:bg-slate-200">仅提交</button>
+        <button type="submit" formaction="/github/push" class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-slate-100 text-slate-700 hover:bg-slate-200">仅推送</button>
+        <button type="submit" formaction="/github/commit-push" class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700">提交并推送</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</form>
+{% else %}
+{{ empty_state("工作区干净，无变更文件") }}
+{% endif %}
+{{ card_close() }}
+
+{# ── 最近提交 ── #}
+{{ card_open("最近提交") }}
+{% if status.commits %}
+<div class="space-y-1">
+  {% for c in status.commits %}
+  <div class="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-slate-50">
+    <code class="text-xs text-brand-600 font-mono">{{ c.short_hash }}</code>
+    <span class="text-sm text-slate-700 flex-1 truncate">{{ c.message }}</span>
+    <span class="text-xs text-slate-400">{{ c.author }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+{{ empty_state("无提交记录") }}
+{% endif %}
+{{ card_close() }}
+
+{# ── 创建 PR ── #}
+{% if request.state.can_write_github %}
+{{ card_open("创建 Pull Request") }}
+{% if not token_configured %}
+{{ notice("未配置 GitHub Token，无法创建 PR。请设置环境变量 TNALPHA_GITHUB_TOKEN。", "amber") }}
+{% else %}
+<form action="/github/pr" method="post" class="space-y-3">
+  <div class="flex gap-3">
+    <div class="flex-1">
+      <span class="block text-sm text-slate-600 mb-1">源分支 (head)</span>
+      <select name="head" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+        {% for b in api_branches %}
+        <option value="{{ b }}">{{ b }}</option>
+        {% endfor %}
+        {% for b in branches %}
+        {% if b.name not in api_branches %}<option value="{{ b.name }}">{{ b.name }}（本地）</option>{% endif %}
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex-1">
+      <span class="block text-sm text-slate-600 mb-1">目标分支 (base)</span>
+      <select name="base" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
+        {% for b in api_branches %}
+        <option value="{{ b }}" {{ 'selected' if b == 'main' else '' }}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  {{ field("PR 标题", "title", placeholder="feat: 新增 xxx 功能", required=True) }}
+  <label class="block mb-3">
+    <span class="block text-sm text-slate-600 mb-1">PR 描述（可选）</span>
+    {{ textarea("body", placeholder="变更说明...", rows=3) }}
+  </label>
+  {{ button("创建 PR", "primary", type="submit") }}
+</form>
+{% endif %}
+{{ card_close() }}
+{% endif %}
+
+{# ── PR 列表 ── #}
+{{ card_open("Pull Requests", actions='<button type="button" class="text-xs text-slate-500 hover:text-brand-600" hx-get="/github/pulls" hx-target="#pr-list" hx-swap="innerHTML">刷新</button>') }}
+<div id="pr-list" hx-get="/github/pulls" hx-trigger="load" hx-swap="innerHTML">
+  {% include "github/_pulls.html" %}
+</div>
+{{ card_close() }}
+
+{% endblock %}
