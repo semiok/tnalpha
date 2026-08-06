@@ -93,6 +93,22 @@
           <div class="text-sm font-medium text-slate-700">{{ t.title }}</div>
         </div>
 
+        {% if default_style %}
+        <div class="rounded-lg bg-brand-50/50 border border-brand-100 px-3 py-2">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-brand-600 font-medium">写作风格</span>
+            <span class="text-xs text-slate-400">·品牌默认</span>
+          </div>
+          <div class="text-sm font-medium text-slate-700 mt-0.5">{{ default_style.name }}</div>
+          <p class="text-xs text-slate-500 mt-1 line-clamp-3">{{ default_style.summary }}</p>
+        </div>
+        {% else %}
+        <div class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+          <div class="text-xs text-slate-400">写作风格</div>
+          <div class="text-sm text-slate-500 mt-0.5">未设默认风格，AI 将按品牌要求自行决定文风</div>
+        </div>
+        {% endif %}
+
         <div>
           <label class="block text-sm font-medium text-slate-600 mb-2">发布平台</label>
           <div class="flex gap-2">

@@ -20,3 +20,7 @@ skills-lock.json
 
 # 根目录临时截图
 /*.png
+
+# 密钥文件（切勿提交）
+.gh_token
+.linear_token

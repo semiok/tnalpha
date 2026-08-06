@@ -391,6 +391,17 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
         ),
         PromptItem(
             "③写作引擎",
+            "手动上传提炼写作风格",
+            "app/modules/writing/routes.py::_manual_style_prompt",
+            writing_prompts._manual_style_prompt(
+                [value("{filename}", "示例文档.pdf"), value("{filename_2}", "品牌过往文章.docx")],
+                value("{user_note}", "用户填写的文字说明（可选），如：这几篇是品牌过往高表现文章。"),
+                value("{extracted_text}", "这里会注入从上传文件抽出的正文，按文件顺序拼接。"),
+            ),
+            "上传文件抽文本后喂给 LLM 提炼风格；文字说明作为分析意图注入，无文件时文字说明本身作为正文。",
+        ),
+        PromptItem(
+            "③写作引擎",
             "搜索命中提炼写作风格",
             "app/modules/writing/routes.py::_extract_from_hit_prompt",
             writing_prompts._extract_from_hit_prompt({
