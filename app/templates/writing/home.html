@@ -90,13 +90,16 @@
                   {% if style.is_default %}{{ chip("品牌默认", "brand") }}{% endif %}
                   {{ chip(style_sources.get(style.source, style.source), "slate") }}
                   {% if highlight and style.id == highlight %}<span class="text-xs text-brand-500">刚提取</span>{% endif %}
+                  {% if style.source == "manual" and style_source_files.get(style.id) %}
+                  <span class="text-xs text-slate-400 truncate max-w-[200px]" title="{{ style_source_files[style.id] | join('、') }}">📄 {{ style_source_files[style.id] | join("、") }}</span>
+                  {% elif style.source == "url" and style.reference_url %}
+                  <a href="{{ style.reference_url }}" target="_blank" rel="noopener" class="text-xs text-brand-500 hover:text-brand-600 truncate max-w-[200px] inline-block align-middle" title="{{ style.reference_url }}">{{ style.reference_url }}</a>
+                  {% elif style.source in ("google", "mp", "sonar") and style.reference_url %}
+                  <a href="{{ style.reference_url }}" target="_blank" rel="noopener" class="text-xs text-brand-500 hover:text-brand-600 truncate max-w-[200px] inline-block align-middle" title="{{ style.reference_url }}">{{ style.reference_url }}</a>
+                  {% endif %}
                 </div>
                 <p x-show="open" x-cloak class="text-xs text-slate-600 mt-1.5 whitespace-pre-line leading-relaxed">{{ style.summary }}</p>
                 <p x-show="!open" class="text-xs text-slate-500 mt-1 line-clamp-2">{{ style.summary }}</p>
-                {% if style.reference_url %}
-                  <a href="{{ style.reference_url }}" target="_blank" rel="noopener"
-                     class="inline-block text-xs text-brand-500 hover:text-brand-600 mt-1.5">查看原文 ↗</a>
-                {% endif %}
                 {% if request.state.can_write_writing %}
                   <div class="flex gap-2 mt-2">
                     {% if not style.is_default %}
@@ -197,6 +200,74 @@
                 <span x-show="uploading" x-cloak class="text-xs text-slate-400">正在解析文档并提炼风格，请稍候…</span>
               </div>
             </form>
+
+            <div class="border-t border-slate-100 pt-3 mt-2" x-data="{reextracting:false}">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium text-slate-500">历史上传文档</span>
+                <span class="text-xs text-slate-400">{{ style_docs | length }} 个文档</span>
+              </div>
+              <div class="space-y-1.5 max-h-72 overflow-y-auto">
+                {% for doc in style_docs %}
+                <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm" x-data="{showText:false}">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      {% if request.state.can_write_writing and style_docs %}
+                      <input type="checkbox" name="doc_ids" value="{{ doc.id }}"
+                             form="reextract-form"
+                             class="shrink-0 rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+                      {% endif %}
+                      <span class="truncate text-slate-700">📄 {{ doc.filename }}</span>
+                    </div>
+                    <span class="flex items-center gap-2 text-xs shrink-0">
+                      <a href="/writing/styles/docs/{{ doc.id }}/download" class="text-brand-600 hover:text-brand-700">下载</a>
+                      {% if request.state.can_write_writing %}
+                      <form method="post" action="/writing/styles/docs/{{ doc.id }}/delete" class="inline"
+                            onsubmit="return confirm('删除文档「{{ doc.filename }}」？')">
+                        <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+                      </form>
+                      {% endif %}
+                    </span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2 mt-0.5 text-xs text-slate-400">
+                    <span class="ml-6">{{ doc.created_at | cn_time }}</span>
+                    {% if doc.style_id and style_map.get(doc.style_id) %}
+                    <span>→ 提炼出风格「<a href="/writing?tab=library&highlight={{ doc.style_id }}" class="text-brand-600 hover:text-brand-700">{{ style_map[doc.style_id].name }}</a>」</span>
+                    {% endif %}
+                  </div>
+                  {% if doc.note %}
+                  <div class="text-xs text-slate-500 mt-0.5 truncate ml-6">📝 {{ doc.note }}</div>
+                  {% endif %}
+                  {% if doc.extracted_text %}
+                  <button @click="showText=!showText" type="button"
+                          class="text-xs text-brand-500 hover:text-brand-600 hover:underline mt-0.5 ml-6">
+                    <span x-text="showText ? '收起正文' : '查看抽出正文'"></span>
+                  </button>
+                  <p x-show="showText" x-cloak class="text-xs text-slate-500 mt-1 whitespace-pre-line max-h-40 overflow-y-auto bg-slate-100 rounded p-2 ml-6">{{ doc.extracted_text[:2000] }}</p>
+                  {% endif %}
+                </div>
+                {% else %}
+                <div class="text-xs text-slate-400 py-2 text-center">还没有上传过文档。</div>
+                {% endfor %}
+              </div>
+              {% if request.state.can_write_writing and style_docs %}
+              <form id="reextract-form" method="post" action="/writing/styles/reextract" class="mt-3 space-y-2"
+                    @submit="reextracting=true">
+                <label class="block">
+                  <span class="block text-xs text-slate-500 mb-1">文字说明（可选，补充提炼意图）</span>
+                  <input type="text" name="note" placeholder="如：这次重点提炼标题钩子和段落节奏"
+                         class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+                </label>
+                <button type="submit" :disabled="reextracting"
+                        class="px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-60 disabled:cursor-wait">
+                  <span x-show="!reextracting">从选中文档重新提炼风格</span>
+                  <span x-show="reextracting" x-cloak class="inline-flex items-center gap-2">
+                    <span class="w-3.5 h-3.5 rounded-full border-2 border-slate-300 border-t-white animate-spin"></span>
+                    提炼中
+                  </span>
+                </button>
+              </form>
+              {% endif %}
+            </div>
           </div>
         </div>
         {% endif %}

@@ -94,3 +94,19 @@ class ArticleImage(SQLModel, table=True):
     is_selected: bool = False  # 用户是否选中此图
     image_provider: str = ""    # 生成/上传此图的 provider；手动上传为 manual
     image_model: str = ""       # 生成此图的模型；手动上传为 upload
+
+
+class StyleDoc(SQLModel, table=True):
+    """手动上传·风格提炼文档历史记录。
+
+    每次手动上传一个文件 → 一条 StyleDoc；同批次多文件共享同一 style_id（提炼出的风格）。
+    持久化保留上传原文件（file_path）和抽出文本（extracted_text），供回溯查看。
+    """
+    id: int | None = Field(default=None, primary_key=True)
+    brand_id: int = Field(foreign_key="brand.id", index=True)
+    style_id: int | None = Field(default=None, foreign_key="style.id", index=True)
+    filename: str               # 原始文件名
+    file_path: str              # 持久化存储路径（DATA_DIR 下）
+    extracted_text: str = ""    # 上传时抽出的正文
+    note: str = ""              # 用户填写的文字说明（同批次共享）
+    created_at: datetime = Field(default_factory=_now)

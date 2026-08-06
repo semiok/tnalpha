@@ -20,7 +20,7 @@ from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
 from app.modules.writing.debate import clean_llm_output, knowledge_context_block, rewrite_prompt, run_ai_review, run_debate, run_review
-from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, _now
+from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, StyleDoc, _now
 
 router = APIRouter()
 templates = create_templates()
@@ -184,12 +184,12 @@ def _preset_prompt(brand: Brand, ctx: KnowledgeContext, count: int) -> str:
 【品牌资料综合】
 {ctx.doc_digest or "（无）"}
 
-请预设 {count} 个差异化的写作风格，每个风格包含名称和总结（段落结构/语气调性/用词偏好/节奏，100-200字）。
+请预设 {count} 个差异化的写作风格，每个风格包含名称和总结。
 这些风格属于品牌公共风格库，不绑定具体 campaign，不要写入活动名称、时间节点或一次性素材。
 严格按以下格式输出，每个风格之间用空行分隔，不要输出思考过程、分析步骤或其他任何内容：
 
 名称：风格名称
-总结：段落结构、语气调性、用词偏好等总结
+总结：对该风格的写作特征进行全面描述
 
 名称：另一个风格
 总结：...
@@ -221,7 +221,7 @@ def _parse_styles(text: str) -> list[tuple[str, str]]:
             elif summary_lines and ln:
                 summary_lines.append(ln)
         if name and summary_lines:
-            out.append((name[:80], "\n".join(summary_lines)[:1200]))
+            out.append((name[:80], "\n".join(summary_lines)))
     return out
 
 
@@ -237,9 +237,8 @@ def _extract_style_prompt(url: str, text: str) -> str:
 
 直接按以下格式输出，不要输出思考过程、分析步骤或其他任何内容：
 名称：用一个短语概括这种风格
-总结：段落结构、语气调性、用词偏好、节奏等（100-200字）
+总结：对该风格的写作特征进行全面描述
 """
-
 
 def _manual_style_prompt(filenames: list[str], note: str, text: str) -> str:
     """手动上传 prompt：从用户上传的文档正文（可带文字说明）提炼一个可复用的写作风格。
@@ -258,7 +257,7 @@ def _manual_style_prompt(filenames: list[str], note: str, text: str) -> str:
 
 直接按以下格式输出，不要输出思考过程、分析步骤或其他任何内容：
 名称：用一个短语概括这种风格
-总结：段落结构、语气调性、用词偏好、节奏等（100-200字）
+总结：对该风格的写作特征进行全面描述
 """
 
 
@@ -355,6 +354,24 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         preset_styles = [st for st in all_styles if st.source == "preset"]
         styles = [st for st in all_styles if st.source != "preset"]
         has_default_style = any(st.is_default for st in all_styles)
+        default_style = next((st for st in all_styles if st.is_default), None)
+        # 手动上传历史文档（按上传时间倒序，供「手动上传」tab 展示）
+        style_docs = session.exec(
+            select(StyleDoc).where(StyleDoc.brand_id == brand.id)
+            .order_by(StyleDoc.created_at.desc(), StyleDoc.id.desc())
+        ).all()
+        style_map = {st.id: st for st in all_styles}
+        # 手动上传风格的来源文件名映射：style_id → [filename, ...]
+        style_source_files: dict[int, list[str]] = {}
+        if style_docs:
+            for doc in style_docs:
+                if doc.style_id:
+                    style_source_files.setdefault(doc.style_id, []).append(doc.filename)
+    else:
+        style_docs = []
+        style_map = {}
+        style_source_files = {}
+        default_style = None
     cmap = {c.id: c.name for c in campaigns}
     return templates.TemplateResponse(request, "writing/home.html", {
         "brand": brand,
@@ -369,12 +386,16 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         "styles": styles,
         "preset_styles": preset_styles,
         "has_default_style": has_default_style,
+        "default_style": default_style,
         "style_sources": STYLE_SOURCES,
         "catalog": sources.catalog(),
         "tab": tab,
         "highlight": highlight,
         "level": getattr(request.state, "level", 0),
         "platforms": PLATFORMS,
+        "style_docs": style_docs,
+        "style_map": style_map,
+        "style_source_files": style_source_files,
     })
 
 
@@ -396,7 +417,7 @@ def _extract_from_hit_prompt(hit: dict) -> str:
 
 直接按以下格式输出，不要输出思考过程、分析步骤或其他任何内容：
 名称：用一个短语概括这种风格
-总结：段落结构、语气调性、用词偏好、节奏等（100-200字）
+总结：对该风格的写作特征进行全面描述
 """
 
 
@@ -578,7 +599,7 @@ async def manual_style(request: Request,
     → 抽文本喂 LLM 提炼写作风格 → 落入风格库（source=manual）。
 
     - 文件和文字至少有一项；同时存在时，文字作为这些文件的说明注入 prompt。
-    - 上传的原文件抽完文本即删除（不持久化保留，和 URL 提取不存网页快照对齐）。
+    - 上传原文件持久化保留（存入 StyleDoc 记录），供历史回溯查看。
     """
     auth.require_level(request, 1)
     brand = _first_brand(session)
@@ -589,20 +610,16 @@ async def manual_style(request: Request,
     uploads = [f for f in files if f.filename]
     if not uploads and not note:
         raise HTTPException(400, "请上传文件或填写文字说明")
-    # 抽文本：每文件单独抽，按文件名顺序拼接
+    # 抽文本：每文件单独抽，按文件名顺序拼接；同时落盘持久化
     text_parts: list[str] = []
     filenames: list[str] = []
+    saved_docs: list[dict] = []  # [{path, filename, text}, ...]
     for f in uploads:
-        filenames.append(f.filename or "未命名")
+        fn = f.filename or "未命名"
+        filenames.append(fn)
         path = storage.save_upload(f, subdir=f"writing/style-manual/{brand.id}")
-        try:
-            t = docparse.extract_text(path).strip()
-        finally:
-            # 抽完即删，不堆积文件
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        t = docparse.extract_text(path).strip()
+        saved_docs.append({"path": path, "filename": fn, "text": t})
         if t:
             text_parts.append(t)
     text = "\n\n".join(text_parts)
@@ -611,6 +628,97 @@ async def manual_style(request: Request,
         if not note:
             raise HTTPException(
                 400, "未能从上传文件中抽出文本（可能是扫描件 PDF），请补填文字说明")
+        text = note
+    try:
+        raw = llm.generate_text(_manual_style_prompt(filenames, note, text),
+                                task="writing_style_manual", module="writing", fallback=False)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    parsed = _parse_styles(raw)
+    if not parsed:
+        raise HTTPException(502, "AI 未能从该内容提炼出风格")
+    name, summary = parsed[0]
+    existing_default = _default_style(session, brand.id) is not None
+    style = Style(
+        brand_id=brand.id, name=name, summary=summary,
+        reference_url="", source="manual",
+        is_default=not existing_default,
+    )
+    session.add(style)
+    session.commit()
+    session.refresh(style)
+    # 持久化上传文档历史记录
+    for doc in saved_docs:
+        session.add(StyleDoc(
+            brand_id=brand.id, style_id=style.id,
+            filename=doc["filename"], file_path=doc["path"],
+            extracted_text=doc["text"], note=note,
+        ))
+    session.commit()
+    return RedirectResponse(f"/writing?tab=library&highlight={style.id}", status_code=303)
+
+
+@router.get("/writing/styles/docs/{doc_id}/download")
+def download_style_doc(doc_id: int, session: Session = Depends(get_session)):
+    """下载手动上传的风格文档原文件。"""
+    doc = session.get(StyleDoc, doc_id)
+    if doc is None or not os.path.exists(doc.file_path):
+        raise HTTPException(404, "文档不存在")
+    return FileResponse(doc.file_path, filename=doc.filename)
+
+
+@router.post("/writing/styles/docs/{doc_id}/delete")
+def delete_style_doc(doc_id: int, request: Request,
+                     session: Session = Depends(get_session)):
+    """删除手动上传的历史文档记录及磁盘文件。"""
+    auth.require_level(request, 1)
+    doc = session.get(StyleDoc, doc_id)
+    if doc is None:
+        raise HTTPException(404, "文档不存在")
+    try:
+        os.remove(doc.file_path)
+    except OSError:
+        pass
+    session.delete(doc)
+    session.commit()
+    return RedirectResponse("/writing?tab=new", status_code=303)
+
+
+@router.post("/writing/styles/reextract")
+async def reextract_style(request: Request,
+                          note: str = Form(""),
+                          doc_ids: list[int] = Form([]),
+                          session: Session = Depends(get_session)):
+    """从历史文档中重新提炼风格：选中已上传的 StyleDoc → 取 extracted_text → 喂 LLM 提炼。
+    不新建 StyleDoc（同一文档可多次提炼不同风格），只创建新的 Style 记录。
+    """
+    auth.require_level(request, 1)
+    brand = _first_brand(session)
+    if brand is None or brand.id is None:
+        raise HTTPException(404, "品牌不存在")
+    note = (note or "").strip()
+    if not doc_ids:
+        raise HTTPException(400, "请至少选择一个历史文档")
+    docs = session.exec(
+        select(StyleDoc).where(
+            StyleDoc.id.in_(doc_ids),
+            StyleDoc.brand_id == brand.id,
+        ).order_by(StyleDoc.id)
+    ).all()
+    if not docs:
+        raise HTTPException(404, "选中的文档不存在")
+    # 拼接抽出文本 + 文件名
+    text_parts: list[str] = []
+    filenames: list[str] = []
+    for doc in docs:
+        filenames.append(doc.filename)
+        if doc.extracted_text:
+            text_parts.append(doc.extracted_text)
+    text = "\n\n".join(text_parts)
+    if not text:
+        if not note:
+            raise HTTPException(
+                400, "选中的文档没有抽出文本（可能是扫描件 PDF），请补填文字说明")
         text = note
     try:
         raw = llm.generate_text(_manual_style_prompt(filenames, note, text),
@@ -672,6 +780,7 @@ def generate_article(topic_id: int, request: Request,
                 .order_by(Article.updated_at.desc(), Article.id.desc())
             ).all()
             campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all()
+            ds = _default_style(session, topic.brand_id)
             return templates.TemplateResponse(request, "writing/_topic_card.html", {
                 "request": request,
                 "t": topic,
@@ -682,6 +791,7 @@ def generate_article(topic_id: int, request: Request,
                 "level": getattr(request.state, "level", 0),
                 "topic_articles": {topic.id: all_articles},
                 "platforms": PLATFORMS,
+                "default_style": ds,
                 "block_message": "当前已有生成中的图文，请等待完成后再生成新的。",
             })
         return RedirectResponse("/writing", status_code=303)
@@ -713,6 +823,7 @@ def generate_article(topic_id: int, request: Request,
             .where(Article.topic_id == topic.id)
             .order_by(Article.updated_at.desc(), Article.id.desc())
         ).all()
+        ds = _default_style(session, topic.brand_id)
         return templates.TemplateResponse(request, "writing/_generate_response.html", {
             "request": request,
             "t": topic,
@@ -725,6 +836,7 @@ def generate_article(topic_id: int, request: Request,
             "topic_articles": {topic.id: all_articles},
             "records": [],
             "oob": True,
+            "default_style": ds,
             "display_phase": None,
             "platforms": PLATFORMS,
         })
