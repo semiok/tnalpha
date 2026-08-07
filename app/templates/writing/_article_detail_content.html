@@ -30,6 +30,13 @@
   {# 顶部标题栏 #}
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div class="min-w-0 flex-1">
+      {% if article.status in ("辩论中", "写作中", "重写中") %}
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+        <span class="text-lg font-semibold text-slate-500">标题生成中</span>
+      </div>
+      <div class="mt-0.5 text-xs text-slate-400">{{ campaign_name }}</div>
+      {% else %}
       <h1 x-ref="titleArea"
           class="text-lg font-semibold text-slate-800 outline-none rounded {{ 'bg-amber-50 px-2 py-1 -mx-2 focus:bg-amber-100 border border-amber-200' if false else '' }}"
           {% if article.status == "待审核" and request.state.can_write_writing %}
@@ -39,6 +46,7 @@
       <div class="mt-0.5 text-xs text-slate-400">
         {{ campaign_name }} · 来源选题：{{ topic.title }}
       </div>
+      {% endif %}
     </div>
     <div class="flex items-center gap-2 shrink-0">
       {{ chip(article.status, "rose" if article.status == "已删除" else ("amber" if article.status in ("辩论中", "写作中", "重写中", "待配图") else "emerald")) }}
