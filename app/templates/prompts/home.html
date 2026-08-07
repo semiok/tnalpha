@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% from "components/ui.html" import page_header, chip %}
 {% block content %}
-  {{ page_header("⑦模块", "提示词展示", [("首页", "/")]) }}
+  {{ page_header("⑦模块", "提示词管理", [("首页", "/")]) }}
 
   <section class="mb-5 rounded-xl border border-slate-200 bg-white p-5">
     <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
       <div>
         <div class="text-sm font-semibold text-slate-700">提示词注入点</div>
         <div class="mt-1 text-xs text-slate-400">
-          只读展示，不调用模型；模板视图显示通用占位符，当前预览会把 dev 数据拼进去。
+          可编辑、保存、恢复默认。模板视图中的 {变量} 会在运行时动态替换为真实数据。
         </div>
       </div>
       <div class="flex flex-wrap items-center gap-2">
@@ -25,9 +25,9 @@
     </div>
     <div class="mt-4 rounded-lg border {{ 'border-brand-100 bg-brand-50 text-brand-700' if mode == 'template' else 'border-amber-100 bg-amber-50 text-amber-700' }} px-3 py-2 text-xs">
       {% if mode == 'template' %}
-        当前显示的是通用模板：花括号里的内容，例如 {campaign_digest}、{pool_experiences}，会在真实运行时按所选品牌、campaign、选题、文章动态替换。
+        当前显示通用模板：花括号 {variable} 是动态变量，运行时自动替换为真实数据。可直接编辑文字和结构，保存后立即生效。
       {% else %}
-        当前显示的是 dev 数据预览：里面出现具体 campaign 或选题，是为了观察真实注入效果，不代表写死。
+        当前显示 dev 数据预览：已用真实数据填充。如需编辑提示词，请切换到「通用模板」模式。
       {% endif %}
     </div>
   </section>
@@ -42,23 +42,112 @@
 
       <div class="space-y-3">
         {% for item in group.items %}
-        <details class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3" {% if loop.first %}open{% endif %}>
-          <summary class="cursor-pointer select-none list-none">
-            <div class="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-              <div class="min-w-0">
-                <div class="font-semibold text-brand-700">{{ item.action }}</div>
-                <div class="mt-1 font-mono text-[11px] text-slate-400 break-all">{{ item.source }}</div>
+        <div id="{{ item.key }}" class="rounded-xl border px-4 py-3 transition {{ 'border-amber-200 bg-amber-50/40' if item.customized else 'border-slate-200 bg-slate-50' }}"
+             x-data="{editing: false}">
+          {# ── 标题行 ── #}
+          <div class="flex flex-col gap-1.5 md:flex-row md:items-center md:justify-between">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-semibold text-brand-700">{{ item.action }}</span>
+                {% if item.customized %}
+                <span class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>已自定义
+                </span>
+                {% else %}
+                <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-400">默认</span>
+                {% endif %}
               </div>
-              {% if item.note %}
-              <div class="text-xs text-slate-500 md:max-w-xs">{{ item.note }}</div>
+              <div class="mt-1 font-mono text-[11px] text-slate-400 break-all">{{ item.source }}</div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              {% if item.key and mode == 'template' and request.state.can_write_prompts is defined and request.state.can_write_prompts %}
+              <button x-show="!editing" @click="editing = true" type="button"
+                      class="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-brand-300 hover:text-brand-600 transition">
+                ✏️ 编辑
+              </button>
+              {% endif %}
+              {% if item.customized and request.state.can_write_prompts is defined and request.state.can_write_prompts %}
+              <form method="post" action="/prompts/{{ item.key }}/reset?mode={{ mode }}"
+                    onsubmit="return confirm('确认恢复默认？当前自定义内容将丢失。');">
+                <button type="submit" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-600 hover:bg-rose-100 transition">
+                  ↺ 恢复默认
+                </button>
+              </form>
               {% endif %}
             </div>
-          </summary>
-          <pre class="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-4 text-xs leading-6 text-slate-700">{{ item.prompt }}</pre>
-        </details>
+          </div>
+
+          {% if item.note %}
+          <div class="mt-1.5 text-xs text-slate-500">{{ item.note }}</div>
+          {% endif %}
+
+          {# ── 查看模式 ── #}
+          <pre x-show="!editing" class="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-4 text-xs leading-6 text-slate-700">{{ item.prompt }}</pre>
+
+          {# ── 编辑模式 ── #}
+          {% if item.key and mode == 'template' and request.state.can_write_prompts is defined and request.state.can_write_prompts %}
+          <form x-show="editing" x-cloak method="post" action="/prompts/{{ item.key }}/save?mode={{ mode }}"
+                class="mt-3 space-y-2">
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-700">
+              {花括号} 中的内容是动态变量，运行时自动替换。修改文字和结构不影响变量注入。
+            </div>
+            <textarea name="template" rows="16"
+                      class="w-full rounded-lg border border-slate-200 bg-white p-4 text-xs leading-6 text-slate-700 font-mono focus:border-brand-400 focus:outline-none resize-y">{{ item.prompt }}</textarea>
+            <div class="flex items-center gap-2">
+              <button type="submit"
+                      class="rounded-lg bg-brand-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 transition">
+                💾 保存
+              </button>
+              <button type="button" @click="editing = false"
+                      class="rounded-lg border border-slate-200 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition">
+                取消
+              </button>
+            </div>
+          </form>
+          {% endif %}
+        </div>
         {% endfor %}
       </div>
     </section>
     {% endfor %}
   </div>
+
+  {# ── 写作要求展示区 ── #}
+  <section class="mt-5 rounded-xl border border-slate-200 bg-white p-5">
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <div>
+        <h2 class="text-base font-semibold text-slate-800">写作要求</h2>
+        <p class="mt-1 text-xs text-slate-400">用户在生成图文弹窗中保存的写作要求，生成时注入 prompt 头部作为最高优先级知识。</p>
+      </div>
+      <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500 shrink-0">{{ writing_reqs | length }} 条</span>
+    </div>
+
+    {% if writing_reqs %}
+    <div class="space-y-2">
+      {% for req in writing_reqs %}
+      <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium text-slate-700">{{ req.content[:20] }}{% if req.content|length > 20 %}…{% endif %}</span>
+              <span class="text-[11px] text-slate-400">{{ req.created_at.strftime('%Y-%m-%d %H:%M') if req.created_at else '' }}</span>
+            </div>
+            <p class="mt-1.5 text-xs text-slate-600 whitespace-pre-line leading-relaxed">{{ req.content }}</p>
+          </div>
+          {% if request.state.can_write_writing is defined and request.state.can_write_writing %}
+          <form method="post" action="/writing/reqs/{{ req.id }}/delete" class="shrink-0"
+                onsubmit="return confirm('删除这条写作要求？');">
+            <button type="submit" class="text-xs text-rose-400 hover:text-rose-600">删除</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-sm text-slate-400 py-4 text-center">
+      还没有保存的写作要求。在生成图文弹窗中输入后点击「保存为常用」即可。
+    </div>
+    {% endif %}
+  </section>
 {% endblock %}

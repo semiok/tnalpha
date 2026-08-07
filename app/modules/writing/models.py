@@ -121,6 +121,5 @@ class WritingReq(SQLModel, table=True):
     """
     id: int | None = Field(default=None, primary_key=True)
     brand_id: int = Field(foreign_key="brand.id", index=True)
-    title: str                   # 用户给这个要求起的名字
     content: str                 # 写作要求正文
     created_at: datetime = Field(default_factory=_now)

@@ -284,13 +284,13 @@
             <button @click="open=!open" type="button"
                     class="text-sm font-medium text-slate-700 hover:text-brand-600 flex items-center gap-1">
               <span x-text="open ? '▾' : '▸'" class="text-xs text-slate-400"></span>
-              {{ req.title }}
+              {{ req.content[:20] }}{% if req.content|length > 20 %}…{% endif %}
             </button>
             <span class="flex items-center gap-2 text-xs shrink-0">
               <span class="text-slate-400">{{ req.created_at | cn_time }}</span>
               {% if request.state.can_write_writing %}
               <form method="post" action="/writing/reqs/{{ req.id }}/delete" class="inline"
-                    onsubmit="return confirm('删除写作要求「{{ req.title }}」？')">
+                    onsubmit="return confirm('删除这条写作要求？')"
                 <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
               </form>
               {% endif %}
