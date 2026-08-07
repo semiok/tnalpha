@@ -139,7 +139,7 @@ def _debate_prompt(role_key: str, role_name: str, role_stance: str,
 【前序辩论记录】
 {history}
 
-请从你的角色立场出发，对这篇选题的切入角度、结构、素材、受众钩子提出观点（可支持、反对或补充）。
+请从你的角色立场出发，对这篇选题的文章标题、切入角度、结构、素材、受众钩子提出观点（可支持、反对或补充）。文章标题应区别于选题标题，需更有吸引力、更贴合最终成文。
 直接输出你的发言，{char_limit}字以内，不要输出思考过程或分析步骤。"""
     return resolve("writing:debate_prompt", default,
                    role_stance=role_stance, topic=topic,
@@ -206,11 +206,12 @@ def _synthesize_debate(records: list[DebateRecord], topic: Topic, ctx: Knowledge
 {history}
 
 请输出一份写作简报，包含：
-1. 推荐切入角度
-2. 文章结构建议（开头/中段/结尾各怎么写）
-3. 必须包含的核心素材
-4. 调性与文风要求
-5. 配图方向
+1. 推荐文章标题（综合各方意见，给出1个最优标题，需区别于选题标题，更有吸引力）
+2. 推荐切入角度
+3. 文章结构建议（开头/中段/结尾各怎么写）
+4. 必须包含的核心素材
+5. 调性与文风要求
+6. 配图方向
 
 直接输出简报内容，不要输出思考过程。"""
     try:
