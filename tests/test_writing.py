@@ -1269,6 +1269,26 @@ def test_generate_rejects_candidate_topic(owner_client, fresh_db):
 
 # ── 文章库管理测试 ──
 
+
+def test_article_library_allows_long_source_titles_to_wrap(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        topic.title = "A Little Outside. Five-Minute Sun. " * 8
+        s.add(Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title="出去一点点，也算出发",
+            body="正文",
+            status="待审核",
+        ))
+        s.commit()
+
+    page = owner_client.get("/writing").text
+    assert 'id="article-library" class="min-w-0"' in page
+    assert "line-clamp-2 break-words pl-4" in page
+    assert "text-slate-400 truncate pl-4" not in page
+
+
 def test_article_library_hides_deleted_by_default_and_can_restore(owner_client, fresh_db):
     with Session(fresh_db) as s:
         _brand, campaign, topic = _seed_topic(s)
