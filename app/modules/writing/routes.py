@@ -2188,7 +2188,7 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 
 {enforce}
 
-请严格按照辩论简报的切入角度和结构建议写作。请输出：
+请严格按照辩论简报的切入角度和结构建议写作。标题请采用辩论简报中推荐的文章标题（可微调），不要直接照搬选题标题。请输出：
 标题：...
 
 正文：...
