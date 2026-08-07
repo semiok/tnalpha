@@ -50,7 +50,7 @@ def test_feedback_requires_login(anon_client):
 def test_admin0_seven_module_nav(admin0_client):
     for page in ("/", "/topics", "/permissions", "/prompts"):
         html = admin0_client.get(page).text
-        for label in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈", "⑥权限", "⑦提示词展示"):
+        for label in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈", "⑥权限", "⑦提示词管理"):
             assert label in html
 
 
@@ -59,7 +59,7 @@ def test_owner_nav_hides_admin_modules(owner_client):
     for label in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈"):
         assert label in html
     assert "⑥权限" not in html
-    assert "⑦提示词展示" not in html
+    assert "⑦提示词管理" not in html
     assert owner_client.get("/permissions").status_code == 403
     assert owner_client.get("/prompts").status_code == 403
 

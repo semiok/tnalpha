@@ -39,7 +39,12 @@ def upgrade() -> None:
     if "article" in tables:
         columns = {col["name"] for col in inspector.get_columns("article")}
         if "writing_req" not in columns:
-            op.add_column("article", sa.Column("writing_req", sa.String(), nullable=True))
+            op.add_column(
+                "article",
+                sa.Column(
+                    "writing_req", sa.String(), nullable=False, server_default=""
+                ),
+            )
 
 
 def downgrade() -> None:

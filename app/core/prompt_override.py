@@ -93,7 +93,7 @@ def resolve(key: str, default: str, **variables: Any) -> str:
     template = override if override is not None else default
     try:
         return template.format(**variables)
-    except (KeyError, ValueError, IndexError):
+    except (AttributeError, KeyError, ValueError, IndexError):
         return _safe_substitute(template, variables)
 
 

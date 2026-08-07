@@ -261,7 +261,7 @@ def test_readonly_renders_prototype_shell(owner_client):
     home = owner_client.get("/").text
     for tab in ("①知识库", "②选题库", "③写作引擎", "④排期版", "⑤数据反馈"):
         assert tab in home
-    assert "⑥权限" not in home and "⑦提示词展示" not in home
+    assert "⑥权限" not in home and "⑦提示词管理" not in home
     assert "敦煌IP" in home and "敦煌当代美术展" in home   # ①知识库那屏内容
     assert "模型配置" not in home and "退出登录" in home
     assert 'action="/brands"' not in home               # 不是动态首页

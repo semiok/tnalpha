@@ -290,7 +290,7 @@
               <span class="text-slate-400">{{ req.created_at | cn_time }}</span>
               {% if request.state.can_write_writing %}
               <form method="post" action="/writing/reqs/{{ req.id }}/delete" class="inline"
-                    onsubmit="return confirm('删除这条写作要求？')"
+                    onsubmit="return confirm('删除这条写作要求？')">
                 <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
               </form>
               {% endif %}
