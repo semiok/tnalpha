@@ -75,7 +75,7 @@
          class="absolute inset-0 bg-slate-900/50"
          @click="modalOpen = false"></div>
     <div x-show="modalOpen" x-transition
-         class="relative w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden">
+         class="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden">
       <div class="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 shrink-0">
         <h3 class="text-base font-semibold text-slate-800">生成图文设置</h3>
         <button @click="modalOpen = false" type="button"
@@ -112,7 +112,7 @@
           <div class="flex items-center justify-between">
             <span class="text-xs font-medium text-slate-500">写作要求（最高优先级）</span>
             {% if writing_reqs %}
-            <select class="text-xs border border-slate-200 rounded px-2 py-1 bg-white max-w-[180px] truncate"
+            <select class="text-xs border border-slate-200 rounded px-2 py-1 bg-white max-w-[240px] truncate"
                     @change="if($event.target.value){writingReq=$event.target.value}; $event.target.selectedIndex=0">
               <option value="">从已保存选择…</option>
               {% for req in writing_reqs %}
