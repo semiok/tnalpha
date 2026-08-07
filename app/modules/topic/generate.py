@@ -9,6 +9,7 @@ import re
 from sqlmodel import Session, select
 
 from app.core import llm, sources
+from app.core.prompt_override import resolve
 from app.modules.feedback.experience import campaign_experience_context
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext, TopicCandidate
@@ -110,45 +111,71 @@ def _format_rejection_experiences(topics: list[Topic]) -> str:
 def _topics_prompt(kc: KnowledgeContext, existing_titles: list[str], count: int,
                    hot_hits: list[dict] | None = None,
                    campaign_experience: str = "") -> str:
-    parts = [
-        f"你是内容选题策划。基于以下知识库信息，生成 {count} 个**全新**的内容选题。\n",
-        f"【品牌调性·约束】\n{kc.brand_prompt or '（未填）'}\n",
-        f"【内容要求·约束】\n{kc.content_notes or '（未填）'}\n",
-        f"【品牌内容定义（已蒸馏，直接据此）】\n{kc.doc_digest or '（暂无）'}\n",
-    ]
+    brand_prompt_text = kc.brand_prompt or "（未填）"
+    content_notes_text = kc.content_notes or "（未填）"
+    doc_digest_text = kc.doc_digest or "（暂无）"
+    hot_hits_section = ""
     if hot_hits:   # 实时热点参考（联网搜索命中）：借势蹭点，但须与品牌调性/内容定义相关，别硬蹭
-        parts.append(
-            "【实时热点参考（联网搜索）】\n" + _format_hits(hot_hits)
+        hot_hits_section = (
+            "\n【实时热点参考（联网搜索）】\n" + _format_hits(hot_hits)
             + "\n→ 可借这些热点/时事切入选题以增强时效与传播，但**必须贴合上面的品牌调性与内容定义**，"
             "不相关的热点不要硬蹭。\n")
+    campaign_digest_section = ""
     if kc.has_campaign:   # 活动选题：优先从简报③选题方向出发
-        parts.append(
+        campaign_digest_section = (
+            "\n"
             f"【本次活动·选题简报】\n{kc.campaign_digest}\n"
             "→ 这是高时效活动选题：**优先采纳/细化简报里③选题方向**（已标受众·时效），"
             "配④关键素材，按②时效节点定发布时机。\n")
+    campaign_experience_section = ""
     if campaign_experience:
-        parts.append(
-            "【Campaign 总体经验包】\n" + campaign_experience
+        campaign_experience_section = (
+            "\n【Campaign 总体经验包】\n" + campaign_experience
             + "\n→ 这是选题和写作共用的统一经验包。选题生成时优先吸收选题切口、历史不采纳原因、"
             "发布复盘中的表现判断；不要机械复刻旧标题，要迁移打法。\n")
+    pool_materials_section = ""
     if kc.pool_materials:
-        parts.append("【补充素材】\n" + "\n---\n".join(kc.pool_materials) + "\n")
+        pool_materials_section = "\n【补充素材】\n" + "\n---\n".join(kc.pool_materials) + "\n"
+    existing_titles_section = ""
     if existing_titles:
-        parts.append("【已有选题，必须避免重复或近似】\n"
-                     + "\n".join(f"- {t}" for t in existing_titles) + "\n")
-    parts.append(
-        f"\n为每个选题，严格按以下纯文本格式输出，不要 JSON、不要代码块、不要开场白/总结、"
-        f"不要访问任何工具或数据库，直接写：\n\n"
-        f"标题：一句话标题\n"
-        f"纲要：100-200字，写什么、核心切入点、可用素材\n"
-        f"受众：目标受众（如 城市青年/亲子）\n"
-        f"时效：强 / 中 / 弱\n"
-        f"素材：关联的具体素材（文物尺寸/产品/来源，无则留空）\n"
-        f"配图：配图方向（无则留空）\n"
-        f"时机：建议发布时机（无则留空）\n\n"
-        f"每个选题之间空一行，共 {count} 个。"
-        f"纲要等正文内请勿另起一行以「标题：」开头（避免被误切成新选题）。")
-    return "\n".join(parts)
+        existing_titles_section = ("\n【已有选题，必须避免重复或近似】\n"
+                                   + "\n".join(f"- {t}" for t in existing_titles) + "\n")
+    default = (
+        "你是内容选题策划。基于以下知识库信息，生成 {count} 个**全新**的内容选题。\n"
+        "\n"
+        "【品牌调性·约束】\n{brand_prompt_text}\n"
+        "\n"
+        "【内容要求·约束】\n{content_notes_text}\n"
+        "\n"
+        "【品牌内容定义（已蒸馏，直接据此）】\n{doc_digest_text}\n"
+        "{hot_hits_section}"
+        "{campaign_digest_section}"
+        "{campaign_experience_section}"
+        "{pool_materials_section}"
+        "{existing_titles_section}"
+        "\n"
+        "\n为每个选题，严格按以下纯文本格式输出，不要 JSON、不要代码块、不要开场白/总结、"
+        "不要访问任何工具或数据库，直接写：\n\n"
+        "标题：一句话标题\n"
+        "纲要：100-200字，写什么、核心切入点、可用素材\n"
+        "受众：目标受众（如 城市青年/亲子）\n"
+        "时效：强 / 中 / 弱\n"
+        "素材：关联的具体素材（文物尺寸/产品/来源，无则留空）\n"
+        "配图：配图方向（无则留空）\n"
+        "时机：建议发布时机（无则留空）\n\n"
+        "每个选题之间空一行，共 {count} 个。"
+        "纲要等正文内请勿另起一行以「标题：」开头（避免被误切成新选题）。"
+    )
+    return resolve("topic:topics_prompt", default,
+                   count=count,
+                   brand_prompt_text=brand_prompt_text,
+                   content_notes_text=content_notes_text,
+                   doc_digest_text=doc_digest_text,
+                   hot_hits_section=hot_hits_section,
+                   campaign_digest_section=campaign_digest_section,
+                   campaign_experience_section=campaign_experience_section,
+                   pool_materials_section=pool_materials_section,
+                   existing_titles_section=existing_titles_section)
 
 
 def _default_query(session: Session, brand_id: int, campaign_id: int | None) -> str:
@@ -221,15 +248,22 @@ def generate_topics(session: Session, brand_id: int, campaign_id: int | None = N
 
 
 def _manual_prompt(kc: KnowledgeContext, titles: list[str], campaign_experience: str = "") -> str:
-    return "\n".join([
+    brand_prompt_text = kc.brand_prompt or "（未填）"
+    content_notes_text = kc.content_notes or "（未填）"
+    doc_digest_text = kc.doc_digest or "（暂无）"
+    campaign_section = (f"【本次活动·选题简报】\n{kc.campaign_digest}"
+                        if kc.has_campaign else "【范围】品牌常青（不限活动）")
+    campaign_experience_text = campaign_experience or "（无）"
+    titles_text = "【用户指定标题】\n" + "\n".join(f"{i + 1}. {title}" for i, title in enumerate(titles))
+    default = "\n".join([
         "你是内容选题策划。用户已经手动指定了一组选题标题，请只补全选题信息。",
         "标题必须逐字使用用户输入，不得改写、扩写、增删标点。",
-        f"【品牌调性·约束】\n{kc.brand_prompt or '（未填）'}",
-        f"【内容要求·约束】\n{kc.content_notes or '（未填）'}",
-        f"【品牌内容定义】\n{kc.doc_digest or '（暂无）'}",
-        f"【本次活动·选题简报】\n{kc.campaign_digest}" if kc.has_campaign else "【范围】品牌常青（不限活动）",
-        f"【Campaign 总体经验包】\n{campaign_experience or '（无）'}",
-        "【用户指定标题】\n" + "\n".join(f"{i + 1}. {title}" for i, title in enumerate(titles)),
+        "【品牌调性·约束】\n{brand_prompt_text}",
+        "【内容要求·约束】\n{content_notes_text}",
+        "【品牌内容定义】\n{doc_digest_text}",
+        "{campaign_section}",
+        "【Campaign 总体经验包】\n{campaign_experience_text}",
+        "{titles_text}",
         "",
         "请为每个标题补全字段，严格按以下格式输出；标题必须与上面完全一致：",
         "标题：用户原题",
@@ -240,6 +274,13 @@ def _manual_prompt(kc: KnowledgeContext, titles: list[str], campaign_experience:
         "配图：配图方向，无则留空",
         "时机：建议发布时机，无则留空",
     ])
+    return resolve("topic:manual_prompt", default,
+                   brand_prompt_text=brand_prompt_text,
+                   content_notes_text=content_notes_text,
+                   doc_digest_text=doc_digest_text,
+                   campaign_section=campaign_section,
+                   campaign_experience_text=campaign_experience_text,
+                   titles_text=titles_text)
 
 
 def create_manual_topics(session: Session, brand_id: int, campaign_id: int | None,

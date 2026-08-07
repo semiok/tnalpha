@@ -274,6 +274,36 @@
       </div>
     {{ card_close() }}
 
+    {% if writing_reqs %}
+    {{ card_open("写作要求库") }}
+      <div class="space-y-1.5">
+        <p class="text-xs text-slate-400 mb-2">在生成图文弹窗中可直接选用这些已保存的写作要求，作为最高优先级知识注入 prompt。</p>
+        {% for req in writing_reqs %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm" x-data="{open:false}">
+          <div class="flex items-center justify-between gap-2">
+            <button @click="open=!open" type="button"
+                    class="text-sm font-medium text-slate-700 hover:text-brand-600 flex items-center gap-1">
+              <span x-text="open ? '▾' : '▸'" class="text-xs text-slate-400"></span>
+              {{ req.content[:20] }}{% if req.content|length > 20 %}…{% endif %}
+            </button>
+            <span class="flex items-center gap-2 text-xs shrink-0">
+              <span class="text-slate-400">{{ req.created_at | cn_time }}</span>
+              {% if request.state.can_write_writing %}
+              <form method="post" action="/writing/reqs/{{ req.id }}/delete" class="inline"
+                    onsubmit="return confirm('删除这条写作要求？')">
+                <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+              </form>
+              {% endif %}
+            </span>
+          </div>
+          <p x-show="open" x-cloak class="text-xs text-slate-600 mt-1.5 whitespace-pre-line leading-relaxed">{{ req.content }}</p>
+          <p x-show="!open" class="text-xs text-slate-500 mt-1 line-clamp-2">{{ req.content }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    {{ card_close() }}
+    {% endif %}
+
     <div class="grid gap-4 lg:grid-cols-[320px_1fr]">
       <section>
         {{ card_open("待写作选题") }}

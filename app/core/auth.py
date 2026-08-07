@@ -27,7 +27,7 @@ MODULES = {
     "schedule": {"num": "④", "label": "排期版", "href": "/schedule"},
     "feedback": {"num": "⑤", "label": "数据反馈", "href": "/feedback"},
     "permissions": {"num": "⑥", "label": "权限", "href": "/permissions"},
-    "prompts": {"num": "⑦", "label": "提示词展示", "href": "/prompts"},
+    "prompts": {"num": "⑦", "label": "提示词管理", "href": "/prompts"},
 }
 MODULE_VIEW: dict[str, set[str]] = {
     "admin0": set(MODULES),

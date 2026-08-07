@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from sqlmodel import Session, select
 
 from app.core import llm
+from app.core.prompt_override import resolve
 from app.modules.feedback.models import EXPERIENCE_TYPES, FeedbackExperience, _now
 from app.modules.knowledge.models import Campaign
 from app.modules.schedule.models import ScheduleMetric, ScheduleSlot
@@ -127,20 +128,28 @@ def _draft_prompt(sample: PublishedSample, experience_type: str) -> str:
     article = sample.article
     topic = sample.topic
     body = (article.body if article else "")[:2400]
-    return f"""你是内容复盘负责人。请根据发布样本沉淀一条「{experience_type}」。
+    title_text = article.title if article else (topic.title if topic else "未知")
+    topic_title_text = topic.title if topic else "未知"
+    topic_outline_text = topic.outline if topic else ""
+    platform_text = sample.slot.platform or "未填写"
+    publish_time_text = sample.slot.published_at or sample.slot.publish_date
+    performance_level_text = sample.performance_level
+    metrics_text = _metrics_text(sample.slot, sample.metric)
+    body_text = body or "（无正文）"
+    default = """你是内容复盘负责人。请根据发布样本沉淀一条「{experience_type}」。
 
 【发布样本】
-标题：{article.title if article else (topic.title if topic else "未知")}
-来源选题：{topic.title if topic else "未知"}
-选题纲要：{topic.outline if topic else ""}
-Campaign：{sample.campaign_name}
-发布平台：{sample.slot.platform or "未填写"}
-发布时间：{sample.slot.published_at or sample.slot.publish_date}
-表现判断：{sample.performance_level}
-媒体数据：{_metrics_text(sample.slot, sample.metric)}
+标题：{title_text}
+来源选题：{topic_title_text}
+选题纲要：{topic_outline_text}
+Campaign：{campaign_name}
+发布平台：{platform_text}
+发布时间：{publish_time_text}
+表现判断：{performance_level_text}
+媒体数据：{metrics_text}
 
 【文章正文节选】
-{body or "（无正文）"}
+{body_text}
 
 请输出一条可复用经验，严格按以下格式，不要输出思考过程：
 标题：一句话概括经验
@@ -149,6 +158,17 @@ Campaign：{sample.campaign_name}
 反向风险：以后应避免的问题
 下次怎么用：给②选题库或③写作引擎的具体指令
 """
+    return resolve("feedback:draft_prompt", default,
+                   experience_type=experience_type,
+                   title_text=title_text,
+                   topic_title_text=topic_title_text,
+                   topic_outline_text=topic_outline_text,
+                   campaign_name=sample.campaign_name,
+                   platform_text=platform_text,
+                   publish_time_text=publish_time_text,
+                   performance_level_text=performance_level_text,
+                   metrics_text=metrics_text,
+                   body_text=body_text)
 
 
 def _parse_field(text: str, label: str) -> str:
@@ -398,15 +418,16 @@ def experience_reference_strategy_text(current_count: int = 0, inherited_count: 
         actual = "当前 campaign 经验充足：当前经验约 70%，继承经验约 30%。"
     else:
         actual = "未关联继承经验包：当前 campaign 经验 100%。"
-    return "\n".join([
+    default = "\n".join([
         "【Campaign 总体经验包引用策略】",
         "- 当前 campaign 经验优先，用来约束本活动自己的选题和写作判断。",
         "- 继承 campaign 经验用于迁移历史打法，不能机械复刻旧标题或旧文章。",
         "- 默认权重：当前 campaign 70%，继承 campaign 30%。",
         "- 当前 campaign 经验不足时，自动提高继承 campaign 权重。",
         "- 当前 campaign 无经验时，继承 campaign 100%。",
-        f"- 本次实际策略：{actual}",
+        "- 本次实际策略：{actual}",
     ])
+    return resolve("feedback:experience_strategy", default, actual=actual)
 
 
 def _entry_source_label(entry: FeedbackExperience) -> str:

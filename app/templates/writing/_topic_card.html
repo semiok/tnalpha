@@ -16,7 +16,7 @@
 {% endfor %}
 {% set total = card_articles | length %}
 <div id="topic-card-{{ t.id }}"
-     x-data="{modalOpen: false, wordCount: 800, aiImages: true, showArticles: {{ 'true' if total > 0 and ns.gen == 0 else 'false' }}}">
+     x-data="{modalOpen: false, wordCount: 800, aiImages: true, showArticles: {{ 'true' if total > 0 and ns.gen == 0 else 'false' }}, writingReq: ''}">
   <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
     <div class="text-sm font-medium text-slate-700">{{ t.title }}</div>
     <div class="text-xs text-slate-400 mt-1">{{ cmap.get(t.campaign_id, "品牌常青") }}</div>
@@ -75,120 +75,158 @@
          class="absolute inset-0 bg-slate-900/50"
          @click="modalOpen = false"></div>
     <div x-show="modalOpen" x-transition
-         class="relative w-full max-w-lg rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+         class="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden">
+
+      {# ── Header ── #}
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100 shrink-0">
         <h3 class="text-base font-semibold text-slate-800">生成图文设置</h3>
         <button @click="modalOpen = false" type="button"
-                class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+                class="w-8 h-8 grid place-items-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition text-lg">&times;</button>
       </div>
 
       <form hx-post="/writing/topics/{{ t.id }}/generate"
             hx-target="#topic-card-{{ t.id }}"
             hx-swap="outerHTML"
-            class="px-5 py-4 space-y-4"
+            class="flex flex-col flex-1 overflow-hidden"
             @submit="$nextTick(() => modalOpen = false)">
 
-        <div class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-          <div class="text-xs text-slate-400 mb-0.5">即将生成</div>
-          <div class="text-sm font-medium text-slate-700">{{ t.title }}</div>
-        </div>
+        {# ── 可滚动内容区 ── #}
+        <div class="overflow-y-auto flex-1">
 
-        {% if default_style %}
-        <div class="rounded-lg bg-brand-50/50 border border-brand-100 px-3 py-2">
-          <div class="flex items-center gap-1.5">
-            <span class="text-xs text-brand-600 font-medium">写作风格</span>
-            <span class="text-xs text-slate-400">·品牌默认</span>
+          {# 上下文信息条 #}
+          <div class="px-5 py-2.5 bg-slate-50/60 border-b border-slate-100">
+            <div class="flex items-center gap-1.5">
+              <span class="text-slate-400 text-xs shrink-0">📝</span>
+              <span class="text-sm font-medium text-slate-700 truncate">{{ t.title }}</span>
+            </div>
+            <div class="flex items-center gap-1.5 mt-0.5 pl-5">
+              <span class="text-slate-400 text-xs shrink-0">✍️</span>
+              {% if default_style %}
+              <span class="inline-block px-1.5 py-0.5 rounded text-[11px] bg-brand-50 text-brand-600 font-medium">{{ default_style.name }}</span>
+              <span class="text-[11px] text-slate-400">品牌默认风格</span>
+              {% else %}
+              <span class="text-[11px] text-slate-400">未设默认风格，AI 按品牌要求自行决定文风</span>
+              {% endif %}
+            </div>
           </div>
-          <div class="text-sm font-medium text-slate-700 mt-0.5">{{ default_style.name }}</div>
-          <p class="text-xs text-slate-500 mt-1 line-clamp-3">{{ default_style.summary }}</p>
-        </div>
-        {% else %}
-        <div class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-          <div class="text-xs text-slate-400">写作风格</div>
-          <div class="text-sm text-slate-500 mt-0.5">未设默认风格，AI 将按品牌要求自行决定文风</div>
-        </div>
-        {% endif %}
 
-        <div>
-          <label class="block text-sm font-medium text-slate-600 mb-2">发布平台</label>
-          <div class="flex gap-2">
-            {% for p in platforms %}
-            <label class="flex-1 cursor-pointer">
-              <input type="radio" name="platform" value="{{ p }}"
-                     {{ 'checked' if p == '小红书' else '' }}
-                     class="peer sr-only">
-              <div class="rounded-lg border border-slate-200 px-3 py-2 text-center text-sm text-slate-600
-                          peer-checked:border-brand-400 peer-checked:bg-brand-50 peer-checked:text-brand-700
-                          hover:border-slate-300 transition">
-                {% if p == '小红书' %}📕{% elif p == '微信公众号' %}💚{% endif %}
-                <span class="ml-1">{{ p }}</span>
+          {# 写作要求（可选，amber 左边框强调最高优先级） #}
+          <div class="px-5 py-3.5 border-l-[3px] border-amber-300 bg-amber-50/30">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs font-semibold text-slate-700">⚡ 写作要求</span>
+                <span class="text-[11px] text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full">最高优先级</span>
+                <span class="text-[11px] text-slate-400">可选</span>
               </div>
-            </label>
-            {% endfor %}
+              {% if writing_reqs %}
+              <select class="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white max-w-[200px] truncate focus:border-brand-400 focus:outline-none"
+                      @change="if($event.target.value){writingReq=$event.target.value}; $event.target.selectedIndex=0">
+                <option value="">从已保存选择…</option>
+                {% for req in writing_reqs %}
+                <option value="{{ req.content }}">{{ req.content[:20] }}{% if req.content|length > 20 %}…{% endif %}</option>
+                {% endfor %}
+              </select>
+              {% endif %}
+            </div>
+            <textarea name="writing_req" x-model="writingReq" rows="2"
+                      placeholder="输入对这次写作的最高要求，如：开头必须是提问、不要用感叹号、必须包含3个数据点"
+                      class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none resize-none bg-white"></textarea>
+            <div class="flex items-center justify-between mt-1.5">
+              <button type="button"
+                      @click="if(!writingReq.trim()){alert('请先输入写作要求');return}
+                             fetch('/writing/reqs/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({content:writingReq})}).then(()=>tnToast('已保存'))"
+                      class="text-xs text-brand-500 hover:text-brand-600">💾 保存为常用</button>
+              <span class="text-[11px] text-slate-300">可留空</span>
+            </div>
           </div>
-          <p class="text-xs text-slate-400 mt-1">平台影响生成内容风格（小红书偏口语化带 emoji，公众号偏正式）。</p>
-        </div>
 
-        <div>
-          <label class="block text-sm font-medium text-slate-600 mb-2">目标字数</label>
-          <div class="flex items-center gap-3">
-            <input type="range" name="word_count" value="800" min="200" max="3000" step="100"
-                   x-model="wordCount"
-                   class="flex-1 accent-brand-500">
-            <span class="w-16 text-center text-sm font-medium text-slate-700"
-                  x-text="wordCount + ' 字'"></span>
+          {# ── 输出格式 ── #}
+          <div class="px-5 py-3.5 space-y-3">
+            <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">输出格式</div>
+
+            {# 平台 + 字数 #}
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1.5">发布平台</label>
+                <div class="flex gap-1.5">
+                  {% for p in platforms %}
+                  <label class="flex-1 cursor-pointer">
+                    <input type="radio" name="platform" value="{{ p }}"
+                           {{ 'checked' if p == '小红书' else '' }}
+                           class="peer sr-only">
+                    <div class="rounded-lg border border-slate-200 px-2 py-1.5 text-center text-xs text-slate-600
+                                peer-checked:border-brand-400 peer-checked:bg-brand-50 peer-checked:text-brand-700
+                                hover:border-slate-300 transition">
+                      {% if p == '小红书' %}📕{% elif p == '微信公众号' %}💚{% endif %}
+                      {{ p }}
+                    </div>
+                  </label>
+                  {% endfor %}
+                </div>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1.5">目标字数</label>
+                <div class="flex items-center gap-2 h-[30px]">
+                  <input type="range" name="word_count" value="800" min="200" max="3000" step="100"
+                         x-model="wordCount"
+                         class="flex-1 accent-brand-500">
+                  <span class="w-14 text-center text-xs font-semibold text-slate-700 tabular-nums"
+                        x-text="wordCount + '字'"></span>
+                </div>
+              </div>
+            </div>
+
+            {# AI配图 + 经验包：紧凑切换条 #}
+            <div class="grid grid-cols-2 gap-3">
+              <label class="flex items-center gap-2 cursor-pointer rounded-lg border px-3 py-2 transition"
+                     :class="aiImages ? 'border-brand-200 bg-brand-50/40' : 'border-slate-200 bg-white hover:border-slate-300'">
+                <input type="checkbox" name="ai_images" value="true"
+                       x-model="aiImages"
+                       class="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 shrink-0">
+                <div class="min-w-0">
+                  <div class="text-xs font-medium"
+                       :class="aiImages ? 'text-brand-700' : 'text-slate-600'">🖼️ AI 配图</div>
+                  <div class="text-[11px] text-slate-400 truncate"
+                       x-text="aiImages ? '自动标记插图，每处4张候选' : '保留占位标记，自行上传'"></div>
+                </div>
+              </label>
+              <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <span class="inline-flex w-4 h-4 items-center justify-center rounded bg-brand-600 text-white text-[10px] font-bold shrink-0">✓</span>
+                <div class="min-w-0">
+                  <div class="text-xs font-medium text-slate-600">经验包</div>
+                  <div class="text-[11px] text-slate-400 truncate">自动引用发布复盘和审核经验</div>
+                </div>
+              </div>
+            </div>
           </div>
-          <p class="text-xs text-slate-400 mt-1">AI 会尽量按此字数生成，实际可能略有增减。</p>
-        </div>
 
-        <div class="rounded-lg border px-3 py-2"
-             :class="aiImages ? 'bg-brand-50/50 border-brand-100' : 'bg-slate-50 border-slate-200'">
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" name="ai_images" value="true"
-                   x-model="aiImages"
-                   class="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500">
-            <span class="flex items-center gap-1.5 text-sm font-medium"
-                  :class="aiImages ? 'text-brand-700' : 'text-slate-600'">
-              <span>🖼️</span><span>AI 配图</span>
-            </span>
-          </label>
-          <p class="text-xs text-slate-500 mt-1" x-show="aiImages">
-            AI 会根据文章内容自动在合适的位置标记插图，每个位置生成 4 张候选图，生成完成后由你选择喜欢的。
-          </p>
-          <p class="text-xs text-slate-500 mt-1" x-show="!aiImages" x-cloak>
-            正文中会保留插图占位标记，你可以自己在每个位置上传图片。
-          </p>
-        </div>
-
-        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-          <div class="flex items-center gap-2">
-            <span class="inline-flex h-4 w-4 items-center justify-center rounded bg-brand-600 text-[10px] font-bold text-white">✓</span>
-            <span class="text-sm font-medium text-slate-600">默认参考 Campaign 总体经验包</span>
+          {# ── 辩论与评审 ── #}
+          <div class="px-5 pb-3.5 space-y-3">
+            <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">辩论与评审</div>
+            <div class="grid grid-cols-2 gap-3">
+              <label>
+                <span class="block text-xs font-medium text-slate-500 mb-1.5">辩论轮次</span>
+                <input type="number" name="debate_rounds" value="2" min="0" max="5"
+                  class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-center focus:border-brand-400 focus:outline-none bg-white">
+              </label>
+              <label>
+                <span class="block text-xs font-medium text-slate-500 mb-1.5">评审轮次</span>
+                <input type="number" name="review_rounds" value="2" min="0" max="5"
+                  class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-center focus:border-brand-400 focus:outline-none bg-white">
+              </label>
+            </div>
+            <p class="text-[11px] text-slate-400">设为 0 可跳过对应阶段。默认各 2 轮。</p>
           </div>
-          <p class="text-xs text-slate-500 mt-1">自动引用同 campaign 的发布复盘和审核未通过经验，约束标题、开头、结构、事实和平台语气。</p>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <label>
-            <span class="block text-sm font-medium text-slate-600 mb-1">辩论轮次</span>
-            <input type="number" name="debate_rounds" value="2" min="0" max="5"
-              class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-center focus:border-brand-400 focus:outline-none">
-          </label>
-          <label>
-            <span class="block text-sm font-medium text-slate-600 mb-1">评审轮次</span>
-            <input type="number" name="review_rounds" value="2" min="0" max="5"
-              class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-center focus:border-brand-400 focus:outline-none">
-          </label>
-        </div>
-        <p class="text-xs text-slate-400 -mt-2">设为 0 可跳过对应阶段。</p>
-
-        <div class="flex gap-3 pt-1">
+        {# ── 底部按钮（固定，不随内容滚动） ── #}
+        <div class="flex gap-3 px-5 py-3 border-t border-slate-100 shrink-0 bg-white">
           <button type="button" @click="modalOpen = false"
-                  class="flex-1 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition">
+                  class="w-2/5 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition">
             取消
           </button>
           <button type="submit"
-                  class="flex-1 px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white hover:bg-brand-700">
+                  class="flex-1 px-3.5 py-2.5 rounded-lg text-sm font-semibold transition bg-brand-600 text-white hover:bg-brand-700 shadow-sm shadow-brand-600/20">
             开始生成
           </button>
         </div>

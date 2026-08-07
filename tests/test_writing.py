@@ -18,7 +18,7 @@ from app.modules.feedback.models import FeedbackExperience
 from app.modules.topic.models import Topic
 from app.modules.writing import routes as wroutes
 from app.modules.writing.contract import writing_status_map
-from app.modules.writing.models import Article, ArticleImage, DebateRecord, Style
+from app.modules.writing.models import Article, ArticleImage, DebateRecord, Style, WritingReq
 
 
 # ── 同步线程 helper：让后台线程在 start() 时同步执行完，测试可直接断言结果 ──
@@ -290,6 +290,38 @@ def test_manual_style_requires_editor_level(publisher_client, fresh_db):
         follow_redirects=False,
     )
     assert r.status_code == 403
+
+
+def test_writing_requirement_save_render_and_delete(owner_client, fresh_db):
+    with Session(fresh_db) as session:
+        brand = Brand(name="写作要求品牌")
+        session.add(brand)
+        session.commit()
+
+    content = "开头必须提出问题，并包含三个具体数据点。"
+    saved = owner_client.post(
+        "/writing/reqs/save",
+        data={"content": content},
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    with Session(fresh_db) as session:
+        req = session.exec(select(WritingReq)).one()
+        req_id = req.id
+        assert req.content == content
+
+    html = owner_client.get("/writing").text
+    assert content in html
+    assert f'action="/writing/reqs/{req_id}/delete"' in html
+    assert "onsubmit=\"return confirm('删除这条写作要求？')\">" in html
+
+    deleted = owner_client.post(
+        f"/writing/reqs/{req_id}/delete",
+        follow_redirects=False,
+    )
+    assert deleted.status_code == 303
+    with Session(fresh_db) as session:
+        assert session.get(WritingReq, req_id) is None
 
 
 def test_set_default_style(owner_client, fresh_db):

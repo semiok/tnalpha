@@ -69,6 +69,7 @@ class Article(SQLModel, table=True):
     review_note: str = ""        # 审核备注（审核未通过时填写原因；通过时可选备注）
     reviewed_at: datetime | None = None  # 审核时间（首次审核时记录，不覆盖）
     ai_review_summary: str = ""  # AI 审核综合意见（动态角色审核完成后生成）
+    writing_req: str = ""       # 本次生成时用户填写的写作要求（持久化供回溯）
 
 
 class DebateRecord(SQLModel, table=True):
@@ -109,4 +110,16 @@ class StyleDoc(SQLModel, table=True):
     file_path: str              # 持久化存储路径（DATA_DIR 下）
     extracted_text: str = ""    # 上传时抽出的正文
     note: str = ""              # 用户填写的文字说明（同批次共享）
+    created_at: datetime = Field(default_factory=_now)
+
+
+class WritingReq(SQLModel, table=True):
+    """写作要求（用户自定义的最高优先级写作约束，可保存复用）。
+
+    品牌级，所有 campaign 共用。生成图文时从弹窗选择或手输，
+    注入 prompt 头部作为最高知识。
+    """
+    id: int | None = Field(default=None, primary_key=True)
+    brand_id: int = Field(foreign_key="brand.id", index=True)
+    content: str                 # 写作要求正文
     created_at: datetime = Field(default_factory=_now)

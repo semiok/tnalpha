@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from app.core import db, llm
 from app.core.llm import prompts
+from app.core.prompt_override import resolve
 from app.modules.knowledge.models import (
     Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, PoolTopic,
 )
@@ -34,7 +35,7 @@ def _as_attachment(file_path: str, deep_read: bool) -> bool:
 
 
 def _campaign_digest_prompt(material: str) -> str:
-    return (
+    default = (
         "你是资深内容策划。品牌的调性/文风/写作规范/视觉风格已由下方「品牌定义」固定，本文不要重复。\n"
         "只针对这个**活动**，提炼一份有时效性的「活动选题简报」，供选题库产出高时效活动选题。\n"
         "⚠️ 活动类型不定（展览/节日促销/新品/快闪/联名…）——先判断是什么活动，再按它实际有的内容填；"
@@ -47,7 +48,9 @@ def _campaign_digest_prompt(material: str) -> str:
         "⑥ 参考与经验（来自引用的数据池，属弱相关参考、不喧宾夺主）：\n"
         "   -「资料包」类：作为补充背景/佐证素材，指出能支撑上面哪些选题方向\n"
         "   -「经验包」类（过往复盘沉淀）：据此给打法建议——本次选题优先做什么（已验证有效）、规避什么（曾失效）\n\n"
-        "用简体中文，结构清晰、选题库拿了直接能用。附件里的 PDF/图片请仔细读。\n\n" + material)
+        "用简体中文，结构清晰、选题库拿了直接能用。附件里的 PDF/图片请仔细读。\n\n{material}"
+    )
+    return resolve("knowledge:campaign_digest", default, material=material)
 
 
 def run_analysis(

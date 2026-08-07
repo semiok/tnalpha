@@ -9,6 +9,7 @@ LLM 调用走 core.llm 统一入口（module="writing"），失败抛 RuntimeErr
 from sqlmodel import Session, select
 
 from app.core import llm
+from app.core.prompt_override import resolve
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
 from app.modules.writing.models import Article, DebateRecord
@@ -123,7 +124,9 @@ def _format_debate_history(records: list[DebateRecord], phase: str, up_to_round:
 def _debate_prompt(role_key: str, role_name: str, role_stance: str,
                    topic: Topic, ctx: KnowledgeContext, history: str,
                    writing_experience: str = "") -> str:
-    return f"""{role_stance}
+    knowledge_block = knowledge_context_block(ctx, writing_experience)
+    char_limit = _DEBATE_CHARS
+    default = """{role_stance}
 
 【选题】标题：{topic.title}
 纲要：{topic.outline}
@@ -131,13 +134,17 @@ def _debate_prompt(role_key: str, role_name: str, role_stance: str,
 受众：{topic.audience}
 素材：{topic.materials}
 
-{knowledge_context_block(ctx, writing_experience)}
+{knowledge_block}
 
 【前序辩论记录】
 {history}
 
 请从你的角色立场出发，对这篇选题的切入角度、结构、素材、受众钩子提出观点（可支持、反对或补充）。
-直接输出你的发言，{_DEBATE_CHARS}字以内，不要输出思考过程或分析步骤。"""
+直接输出你的发言，{char_limit}字以内，不要输出思考过程或分析步骤。"""
+    return resolve("writing:debate_prompt", default,
+                   role_stance=role_stance, topic=topic,
+                   knowledge_block=knowledge_block, history=history,
+                   char_limit=char_limit)
 
 
 def run_debate(session: Session, article_id: int, rounds: int,
@@ -216,18 +223,24 @@ def _synthesize_debate(records: list[DebateRecord], topic: Topic, ctx: Knowledge
 def _review_prompt(role_key: str, role_name: str, role_stance: str,
                    article: Article, history: str) -> str:
     body_preview = article.body[:2000] if article.body else "（空）"
-    return f"""{role_stance}
+    image_url = article.image_url or "（无）"
+    char_limit = _DEBATE_CHARS
+    default = """{role_stance}
 
 【文章标题】{article.title}
 【文章正文】
 {body_preview}
-【配图】{article.image_url or "（无）"}
+【配图】{image_url}
 
 【前序评审记录】
 {history}
 
 请从你的角色立场评审这篇文章和配图，指出具体问题（结构/事实/调性/受众/可读性）。
-直接输出你的评审意见，{_DEBATE_CHARS}字以内，不要输出思考过程。"""
+直接输出你的评审意见，{char_limit}字以内，不要输出思考过程。"""
+    return resolve("writing:review_prompt", default,
+                   role_stance=role_stance, article=article,
+                   body_preview=body_preview, image_url=image_url,
+                   history=history, char_limit=char_limit)
 
 
 def run_review(session: Session, article_id: int, rounds: int, article: Article) -> str:
@@ -291,15 +304,17 @@ def _synthesize_review(records: list[DebateRecord], article: Article) -> str:
 
 def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
                    ctx: KnowledgeContext, style_text: str,
-                   writing_experience: str = "") -> str:
+                   writing_experience: str = "", writing_req: str = "") -> str:
     """按评审建议重写文章的 prompt。"""
-    return f"""你是主笔。请基于评审综合建议，重写这篇文章。
+    req_block = f"【写作要求】\n{writing_req.strip()}\n\n" if writing_req and writing_req.strip() else ""
+    knowledge_block = knowledge_context_block(ctx, writing_experience)
+    default = """{req_block}你是主笔。请基于评审综合建议，重写这篇文章。
 
 【选题】标题：{topic.title}
 纲要：{topic.outline}
 受众：{topic.audience}
 
-{knowledge_context_block(ctx, writing_experience)}
+{knowledge_block}
 
 【写作风格】{style_text}
 
@@ -322,6 +337,10 @@ def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
 4. [插图：...] 标记只能放在完整段落之间，禁止插到句子中间或段落内部。
 5. 直接输出正文，不要输出「正文：」之外的解释性文字。
 """
+    return resolve("writing:rewrite_prompt", default,
+                   req_block=req_block, topic=topic,
+                   knowledge_block=knowledge_block, style_text=style_text,
+                   review_summary=review_summary, article=article)
 
 
 # ── AI 审核：动态角色 + 合规/真实性审核 ──

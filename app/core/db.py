@@ -11,6 +11,7 @@ engine = create_engine(config.DATABASE_URL, echo=False, connect_args=_connect_ar
 def init_db() -> None:
     """建表（开发用；生产用 Alembic 迁移）。导入所有模块的 models 后调用。"""
     import app.core.settings  # noqa: F401  注册 LLMSetting 表
+    import app.core.prompt_override  # noqa: F401  注册 PromptOverride 表
     import app.modules.knowledge.models  # noqa: F401  注册表
     import app.modules.topic.models  # noqa: F401  注册 Topic 表
     import app.modules.writing.models  # noqa: F401  注册 Article/Style 表
@@ -18,6 +19,10 @@ def init_db() -> None:
     import app.modules.feedback.models  # noqa: F401  注册 FeedbackExperience 表
     import app.modules.agent_api.models  # noqa: F401  注册 AgentAuditLog 表
     SQLModel.metadata.create_all(engine)
+    # 加载提示词覆盖缓存
+    from app.core.prompt_override import load_cache
+    with Session(engine) as session:
+        load_cache(session)
 
 
 def get_session():

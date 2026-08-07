@@ -1,14 +1,17 @@
-"""⑦提示词展示：只读列出各模块按钮会注入的 prompt。"""
+"""⑦提示词管理：可编辑、保存、恢复默认。"""
 from dataclasses import dataclass
 from datetime import date, datetime
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi.responses import RedirectResponse
 from sqlmodel import Session, select
 from starlette.requests import Request
 
+from app.core import auth
 from app.core.db import get_session
 from app.core.templates import create_templates
+from app.core.prompt_override import is_customized, save_override, delete_override
 from app.core.llm import prompts as knowledge_prompts
 from app.modules.feedback.experience import (
     PublishedSample,
@@ -24,7 +27,7 @@ from app.modules.topic.generate import _manual_prompt, _topics_prompt
 from app.modules.topic.models import Topic
 from app.modules.writing import routes as writing_prompts
 from app.modules.writing.debate import ROLES, _debate_prompt, _review_prompt, rewrite_prompt
-from app.modules.writing.models import Article, Style
+from app.modules.writing.models import Article, Style, WritingReq
 
 router = APIRouter()
 templates = create_templates()
@@ -36,6 +39,8 @@ class PromptItem:
     action: str
     source: str
     prompt: str
+    key: str = ""        # resolve key，空串表示不可编辑
+    customized: bool = False  # 是否已被用户自定义
     note: str = ""
 
 
@@ -342,6 +347,16 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
         ),
         PromptItem(
             "③写作引擎",
+            "写作要求（最高优先级·头部注入）",
+            "app/modules/writing/routes.py::_article_prompt (writing_req 参数)",
+            f"""【写作要求】
+{value("{writing_req}", "用户在生成图文弹窗中输入的写作要求，如：开头必须是提问、不要用感叹号、必须包含3个数据点。")}
+
+（以下为正常 prompt 内容：你是③写作引擎…）""",
+            "用户在生成弹窗中输入或从提示词库选择，注入 prompt 头部作为最高优先级知识。空值时不注入。生成图文和重写阶段都会注入，辩论阶段不注入。",
+        ),
+        PromptItem(
+            "③写作引擎",
             "生成图文",
             "app/modules/writing/routes.py::_article_prompt",
             writing_prompts._article_prompt(
@@ -351,8 +366,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 platform=article.platform,
                 word_count=article.word_count,
                 writing_experience=unified_experience,
+                writing_req=value("{writing_req}", "用户在生成弹窗中输入的写作要求（可选）"),
             ),
-            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。",
+            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。有写作要求时在 prompt 头部注入。",
         ),
         PromptItem(
             "③写作引擎",
@@ -366,8 +382,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 platform=article.platform,
                 word_count=article.word_count,
                 writing_experience=unified_experience,
+                writing_req=value("{writing_req}", "用户在生成弹窗中输入的写作要求（可选）"),
             ),
-            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。",
+            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。有写作要求时在 prompt 头部注入。",
         ),
         PromptItem(
             "③写作引擎",
@@ -434,8 +451,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 ctx,
                 style.summary,
                 unified_experience,
+                writing_req=value("{writing_req}", "用户在生成弹窗中输入的写作要求（可选）"),
             ),
-            "评审后重写也继承同一 Campaign 总体经验包。",
+            "评审后重写也继承同一 Campaign 总体经验包。有写作要求时在 prompt 头部注入。",
         ),
         PromptItem(
             "③写作引擎",
@@ -482,14 +500,74 @@ def _group_items(items: list[PromptItem]) -> list[SimpleNamespace]:
     return [SimpleNamespace(name=name, items=group_items) for name, group_items in groups.items()]
 
 
+# source → resolve key 映射
+_SOURCE_TO_KEY: dict[str, str] = {
+    "app/modules/feedback/experience.py::experience_reference_strategy_text": "feedback:experience_strategy",
+    "app/core/llm/prompts.py::content_analysis": "knowledge:content_analysis",
+    "app/core/llm/prompts.py::style_analysis": "knowledge:style_analysis",
+    "app/core/llm/prompts.py::aggregate_content": "knowledge:aggregate_content",
+    "app/core/llm/prompts.py::aggregate_style": "knowledge:aggregate_style",
+    "app/core/llm/prompts.py::brand_fields_prompt": "knowledge:brand_fields_prompt",
+    "app/modules/knowledge/analysis.py::_campaign_digest_prompt": "knowledge:campaign_digest",
+    "app/modules/topic/generate.py::_topics_prompt": "topic:topics_prompt",
+    "app/modules/topic/generate.py::_manual_prompt": "topic:manual_prompt",
+    "app/modules/writing/routes.py::_article_prompt": "writing:article_prompt",
+    "app/modules/writing/routes.py::_article_prompt_with_brief": "writing:article_prompt_with_brief",
+    "app/modules/writing/routes.py::_preset_prompt": "writing:preset_prompt",
+    "app/modules/writing/routes.py::_extract_style_prompt": "writing:extract_style_prompt",
+    "app/modules/writing/routes.py::_manual_style_prompt": "writing:manual_style_prompt",
+    "app/modules/writing/routes.py::_extract_from_hit_prompt": "writing:extract_from_hit_prompt",
+    "app/modules/writing/debate.py::_debate_prompt": "writing:debate_prompt",
+    "app/modules/writing/debate.py::_review_prompt": "writing:review_prompt",
+    "app/modules/writing/debate.py::rewrite_prompt": "writing:rewrite_prompt",
+    "app/modules/writing/routes.py::_image_prompt_for_slot": "writing:image_prompt_for_slot",
+    "app/modules/feedback/experience.py::_draft_prompt": "feedback:draft_prompt",
+}
+
+
 @router.get("/prompts")
 def prompts_home(request: Request, session: Session = Depends(get_session)):
     mode = request.query_params.get("mode", "template")
     if mode not in ("template", "preview"):
         mode = "template"
     items = _prompt_items(session, mode)
+    # 标记 key 和自定义状态
+    for item in items:
+        item.key = _SOURCE_TO_KEY.get(item.source, "")
+        item.customized = is_customized(item.key) if item.key else False
+    # 加载已保存的写作要求列表
+    brand = _first_brand(session)
+    writing_reqs: list[WritingReq] = []
+    if brand is not None and brand.id is not None:
+        writing_reqs = session.exec(
+            select(WritingReq).where(WritingReq.brand_id == brand.id)
+            .order_by(WritingReq.created_at.desc(), WritingReq.id.desc())
+        ).all()
     return templates.TemplateResponse(request, "prompts/home.html", {
         "groups": _group_items(items),
         "total": len(items),
         "mode": mode,
+        "writing_reqs": writing_reqs,
     })
+
+
+@router.post("/prompts/{key}/save")
+def prompts_save(request: Request, key: str,
+                 template: str = Form(""),
+                 session: Session = Depends(get_session)):
+    """保存提示词覆盖。"""
+    auth.require_level(request, 3)  # 仅管理员可编辑
+    template = template or ""
+    if not template.strip():
+        raise HTTPException(400, "模板内容不能为空")
+    save_override(session, key, template)
+    return RedirectResponse(f"/prompts?mode={request.query_params.get('mode', 'template')}#{key}", status_code=303)
+
+
+@router.post("/prompts/{key}/reset")
+def prompts_reset(request: Request, key: str,
+                  session: Session = Depends(get_session)):
+    """恢复默认（删除覆盖）。"""
+    auth.require_level(request, 3)  # 仅管理员可编辑
+    delete_override(session, key)
+    return RedirectResponse(f"/prompts?mode={request.query_params.get('mode', 'template')}#{key}", status_code=303)
