@@ -291,9 +291,10 @@ def _synthesize_review(records: list[DebateRecord], article: Article) -> str:
 
 def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
                    ctx: KnowledgeContext, style_text: str,
-                   writing_experience: str = "") -> str:
+                   writing_experience: str = "", writing_req: str = "") -> str:
     """按评审建议重写文章的 prompt。"""
-    return f"""你是主笔。请基于评审综合建议，重写这篇文章。
+    req_block = f"【写作要求】\n{writing_req.strip()}\n\n" if writing_req and writing_req.strip() else ""
+    return f"""{req_block}你是主笔。请基于评审综合建议，重写这篇文章。
 
 【选题】标题：{topic.title}
 纲要：{topic.outline}

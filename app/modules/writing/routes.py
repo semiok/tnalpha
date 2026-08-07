@@ -20,7 +20,7 @@ from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
 from app.modules.writing.debate import clean_llm_output, knowledge_context_block, rewrite_prompt, run_ai_review, run_debate, run_review
-from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, StyleDoc, _now
+from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, StyleDoc, WritingReq, _now
 
 router = APIRouter()
 templates = create_templates()
@@ -367,11 +367,17 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
             for doc in style_docs:
                 if doc.style_id:
                     style_source_files.setdefault(doc.style_id, []).append(doc.filename)
+        # 已保存的写作要求列表（供生成弹窗下拉选择）
+        writing_reqs = session.exec(
+            select(WritingReq).where(WritingReq.brand_id == brand.id)
+            .order_by(WritingReq.created_at.desc(), WritingReq.id.desc())
+        ).all()
     else:
         style_docs = []
         style_map = {}
         style_source_files = {}
         default_style = None
+        writing_reqs = []
     cmap = {c.id: c.name for c in campaigns}
     return templates.TemplateResponse(request, "writing/home.html", {
         "brand": brand,
@@ -396,6 +402,7 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         "style_docs": style_docs,
         "style_map": style_map,
         "style_source_files": style_source_files,
+        "writing_reqs": writing_reqs,
     })
 
 
@@ -741,11 +748,47 @@ async def reextract_style(request: Request,
     return RedirectResponse(f"/writing?tab=library&highlight={style.id}", status_code=303)
 
 
+@router.post("/writing/reqs/save")
+def save_writing_req(request: Request,
+                     title: str = Form(""), content: str = Form(""),
+                     session: Session = Depends(get_session)):
+    """保存写作要求到提示词库（品牌级，可复用）。"""
+    auth.require_level(request, 1)
+    brand = _first_brand(session)
+    if brand is None or brand.id is None:
+        raise HTTPException(404, "品牌不存在")
+    title = (title or "").strip()
+    content = (content or "").strip()
+    if not content:
+        raise HTTPException(400, "写作要求内容不能为空")
+    if not title:
+        title = content[:20] + ("..." if len(content) > 20 else "")
+    req = WritingReq(brand_id=brand.id, title=title, content=content)
+    session.add(req)
+    session.commit()
+    session.refresh(req)
+    return RedirectResponse("/writing", status_code=303)
+
+
+@router.post("/writing/reqs/{req_id}/delete")
+def delete_writing_req(req_id: int, request: Request,
+                       session: Session = Depends(get_session)):
+    """删除已保存的写作要求。"""
+    auth.require_level(request, 1)
+    req = session.get(WritingReq, req_id)
+    if req is None:
+        raise HTTPException(404, "写作要求不存在")
+    session.delete(req)
+    session.commit()
+    return RedirectResponse("/writing", status_code=303)
+
+
 @router.post("/writing/topics/{topic_id}/generate")
 def generate_article(topic_id: int, request: Request,
                       debate_rounds: int = Form(2), review_rounds: int = Form(2),
                       platform: str = Form(""), word_count: int = Form(0),
                       ai_images: str = Form(""), use_experience: str = Form(""),
+                      writing_req: str = Form(""),
                       session: Session = Depends(get_session)):
     """生成图文（异步后台）：辩论 → 生成文本 → 多插图候选 → 评审 → 重写 → 待审核。
 
@@ -766,6 +809,7 @@ def generate_article(topic_id: int, request: Request,
     ai_images_flag = ai_images.strip().lower() in ("true", "1", "yes", "on")
     # Campaign 总体经验包默认纳入后续生成；只有明确传 false/off/no/0 才关闭，便于兼容旧表单。
     use_experience_flag = use_experience.strip().lower() not in ("false", "0", "no", "off")
+    wr = writing_req.strip() if writing_req else ""
     # 同选题已有生成中的图文（无错误）→ 阻止并提示，不新建
     running = session.exec(
         _active_article_query()
@@ -781,6 +825,10 @@ def generate_article(topic_id: int, request: Request,
             ).all()
             campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all()
             ds = _default_style(session, topic.brand_id)
+            wrs = session.exec(
+                select(WritingReq).where(WritingReq.brand_id == topic.brand_id)
+                .order_by(WritingReq.created_at.desc(), WritingReq.id.desc())
+            ).all() if topic.brand_id else []
             return templates.TemplateResponse(request, "writing/_topic_card.html", {
                 "request": request,
                 "t": topic,
@@ -792,6 +840,7 @@ def generate_article(topic_id: int, request: Request,
                 "topic_articles": {topic.id: all_articles},
                 "platforms": PLATFORMS,
                 "default_style": ds,
+                "writing_reqs": wrs,
                 "block_message": "当前已有生成中的图文，请等待完成后再生成新的。",
             })
         return RedirectResponse("/writing", status_code=303)
@@ -802,6 +851,7 @@ def generate_article(topic_id: int, request: Request,
         status="辩论中" if dr > 0 else "写作中",
         debate_rounds=dr, review_rounds=rr, platform=pf, word_count=wc,
         llm_provider=llm_provider, llm_model=llm_model,
+        writing_req=wr,
         updated_at=_now(),
     )
     session.add(article)
@@ -810,7 +860,7 @@ def generate_article(topic_id: int, request: Request,
     # 后台线程跑完整流程
     t = threading.Thread(
         target=_run_generation_worker,
-        args=(article.id, topic.id, dr, rr, pf, wc, ai_images_flag, use_experience_flag),
+        args=(article.id, topic.id, dr, rr, pf, wc, ai_images_flag, use_experience_flag, wr),
         daemon=True,
     )
     t.start()
@@ -824,6 +874,10 @@ def generate_article(topic_id: int, request: Request,
             .order_by(Article.updated_at.desc(), Article.id.desc())
         ).all()
         ds = _default_style(session, topic.brand_id)
+        wrs = session.exec(
+            select(WritingReq).where(WritingReq.brand_id == topic.brand_id)
+            .order_by(WritingReq.created_at.desc(), WritingReq.id.desc())
+        ).all() if topic.brand_id else []
         return templates.TemplateResponse(request, "writing/_generate_response.html", {
             "request": request,
             "t": topic,
@@ -837,6 +891,7 @@ def generate_article(topic_id: int, request: Request,
             "records": [],
             "oob": True,
             "default_style": ds,
+            "writing_reqs": wrs,
             "display_phase": None,
             "platforms": PLATFORMS,
         })
@@ -845,7 +900,7 @@ def generate_article(topic_id: int, request: Request,
 
 def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, review_rounds: int,
                            platform: str = "", word_count: int = 0, ai_images: bool = True,
-                           use_experience: bool = True) -> None:
+                           use_experience: bool = True, writing_req: str = "") -> None:
     """后台线程：辩论 → 生成文本 → 评审 → 重写 → 待配图（提交正文，可阅读）。
 
     文本完成后立即把状态置为「待配图」并启动配图子线程，不阻塞用户阅读正文。
@@ -881,9 +936,9 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
                 s.add(article)
                 s.commit()
                 prompt = _article_prompt_with_brief(
-                    topic, ctx, style, brief, platform, word_count, writing_experience)
+                    topic, ctx, style, brief, platform, word_count, writing_experience, writing_req)
             else:
-                prompt = _article_prompt(topic, ctx, style, platform, word_count, writing_experience)
+                prompt = _article_prompt(topic, ctx, style, platform, word_count, writing_experience, writing_req)
 
             # ── 生成文本 ──
             llm_provider, llm_model = llm.text_model_info("writing")
@@ -914,7 +969,7 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
                 s.add(article)
                 s.commit()
                 # 按评审建议重写
-                rewrite_p = rewrite_prompt(article, review_summary, topic, ctx, style_text, writing_experience)
+                rewrite_p = rewrite_prompt(article, review_summary, topic, ctx, style_text, writing_experience, writing_req)
                 new_body = llm.generate_text(rewrite_p, task="writing_rewrite", module="writing", fallback=False)
                 new_body = clean_llm_output(new_body)
                 if new_body:
@@ -2039,12 +2094,13 @@ def _image_slot_directive(platform: str) -> str:
 
 def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
                     platform: str = "", word_count: int = 0,
-                    writing_experience: str = "") -> str:
+                    writing_experience: str = "", writing_req: str = "") -> str:
     style_text = _resolve_style_text(style, platform)
     platform_dir = _platform_directive(platform, word_count)
     img_slot_dir = _image_slot_directive(platform)
     enforce = _platform_enforce(style, platform)
-    return f"""你是③写作引擎，请基于已采纳选题生成一篇可直接编辑的中文图文稿。
+    req_block = f"【写作要求】\n{writing_req.strip()}\n\n" if writing_req and writing_req.strip() else ""
+    return f"""{req_block}你是③写作引擎，请基于已采纳选题生成一篇可直接编辑的中文图文稿。
 
 【选题】
 标题：{topic.title}
@@ -2082,13 +2138,14 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 
 def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style | None,
                                brief: str, platform: str = "", word_count: int = 0,
-                               writing_experience: str = "") -> str:
+                               writing_experience: str = "", writing_req: str = "") -> str:
     """带辩论简报的文章生成 prompt。"""
     style_text = _resolve_style_text(style, platform)
     platform_dir = _platform_directive(platform, word_count)
     img_slot_dir = _image_slot_directive(platform)
     enforce = _platform_enforce(style, platform)
-    return f"""你是③写作引擎，请基于已采纳选题和辩论简报生成一篇可直接编辑的中文图文稿。
+    req_block = f"【写作要求】\n{writing_req.strip()}\n\n" if writing_req and writing_req.strip() else ""
+    return f"""{req_block}你是③写作引擎，请基于已采纳选题和辩论简报生成一篇可直接编辑的中文图文稿。
 
 【选题】
 标题：{topic.title}

@@ -342,6 +342,16 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
         ),
         PromptItem(
             "③写作引擎",
+            "写作要求（最高优先级·头部注入）",
+            "app/modules/writing/routes.py::_article_prompt (writing_req 参数)",
+            f"""【写作要求】
+{value("{writing_req}", "用户在生成图文弹窗中输入的写作要求，如：开头必须是提问、不要用感叹号、必须包含3个数据点。")}
+
+（以下为正常 prompt 内容：你是③写作引擎…）""",
+            "用户在生成弹窗中输入或从提示词库选择，注入 prompt 头部作为最高优先级知识。空值时不注入。生成图文和重写阶段都会注入，辩论阶段不注入。",
+        ),
+        PromptItem(
+            "③写作引擎",
             "生成图文",
             "app/modules/writing/routes.py::_article_prompt",
             writing_prompts._article_prompt(
@@ -351,8 +361,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 platform=article.platform,
                 word_count=article.word_count,
                 writing_experience=unified_experience,
+                writing_req=value("{writing_req}", "用户在生成弹窗中输入的写作要求（可选）"),
             ),
-            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。",
+            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。有写作要求时在 prompt 头部注入。",
         ),
         PromptItem(
             "③写作引擎",
@@ -366,8 +377,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 platform=article.platform,
                 word_count=article.word_count,
                 writing_experience=unified_experience,
+                writing_req=value("{writing_req}", "用户在生成弹窗中输入的写作要求（可选）"),
             ),
-            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。",
+            "默认注入 Campaign 总体经验包；写作侧重点会优先使用审核退回、标题结构、事实和平台语气经验。有写作要求时在 prompt 头部注入。",
         ),
         PromptItem(
             "③写作引擎",
@@ -434,8 +446,9 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 ctx,
                 style.summary,
                 unified_experience,
+                writing_req=value("{writing_req}", "用户在生成弹窗中输入的写作要求（可选）"),
             ),
-            "评审后重写也继承同一 Campaign 总体经验包。",
+            "评审后重写也继承同一 Campaign 总体经验包。有写作要求时在 prompt 头部注入。",
         ),
         PromptItem(
             "③写作引擎",

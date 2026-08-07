@@ -16,7 +16,7 @@
 {% endfor %}
 {% set total = card_articles | length %}
 <div id="topic-card-{{ t.id }}"
-     x-data="{modalOpen: false, wordCount: 800, aiImages: true, showArticles: {{ 'true' if total > 0 and ns.gen == 0 else 'false' }}}">
+     x-data="{modalOpen: false, wordCount: 800, aiImages: true, showArticles: {{ 'true' if total > 0 and ns.gen == 0 else 'false' }}, writingReq: ''}">
   <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
     <div class="text-sm font-medium text-slate-700">{{ t.title }}</div>
     <div class="text-xs text-slate-400 mt-1">{{ cmap.get(t.campaign_id, "品牌常青") }}</div>
@@ -108,6 +108,37 @@
           <div class="text-sm text-slate-500 mt-0.5">未设默认风格，AI 将按品牌要求自行决定文风</div>
         </div>
         {% endif %}
+
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-medium text-slate-500">写作要求（最高优先级）</span>
+            {% if writing_reqs %}
+            <select class="text-xs border border-slate-200 rounded px-2 py-1 bg-white max-w-[180px] truncate"
+                    @change="if($event.target.value){writingReq=$event.target.value}; $event.target.selectedIndex=0">
+              <option value="">从已保存选择…</option>
+              {% for req in writing_reqs %}
+              <option value="{{ req.content }}">{{ req.title }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+          </div>
+          <textarea name="writing_req" x-model="writingReq" rows="3"
+                    placeholder="输入对这次写作的最高要求，如：开头必须是提问、不要用感叹号、必须包含3个数据点"
+                    class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none resize-none"></textarea>
+          <div x-data="{showSave:false}" class="flex items-center gap-2">
+            <button type="button" @click="showSave=!showSave"
+                    class="text-xs text-brand-500 hover:text-brand-600">保存为常用</button>
+            <form x-show="showSave" x-cloak method="post" action="/writing/reqs/save"
+                  class="flex items-center gap-1"
+                  @submit="if(!writingReq.trim()){alert('请先输入写作要求');event.preventDefault()}">
+              <input type="text" name="title" placeholder="名称（可选）"
+                     class="text-xs border border-slate-200 rounded px-2 py-1 w-28">
+              <input type="hidden" name="content" :value="writingReq">
+              <button type="submit"
+                      class="text-xs px-2 py-1 rounded bg-brand-600 text-white hover:bg-brand-700">保存</button>
+            </form>
+          </div>
+        </div>
 
         <div>
           <label class="block text-sm font-medium text-slate-600 mb-2">发布平台</label>
