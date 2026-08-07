@@ -8,6 +8,7 @@
 缓存：
 - 模块级 dict 缓存，app 启动时加载，保存/删除时刷新，避免每次调用都查库。
 """
+import re
 import threading
 from datetime import datetime
 from typing import Any
@@ -59,29 +60,41 @@ def is_customized(key: str) -> bool:
     return key in _cache
 
 
+# ── 安全变量替换 ──
+# 匹配 {variable} 或 {obj.attr}，不匹配 {"key": ...} 等字面花括号
+_VAR_RE = re.compile(r"\{(\w+)(?:\.(\w+))?\}")
+_MISSING = object()
+
+
+def _safe_substitute(template: str, variables: dict[str, Any]) -> str:
+    """安全替换：只替换已知变量，未知 {xxx} 原样保留，不影响字面 {}。"""
+    def _replacer(match: re.Match) -> str:
+        name = match.group(1)
+        attr = match.group(2)
+        if name not in variables:
+            return match.group(0)          # 未知变量，保持原样
+        val = variables[name]
+        if attr:
+            val = getattr(val, attr, _MISSING)
+            if val is _MISSING:
+                return match.group(0)      # 属性不存在，保持原样
+        return str(val)
+    return _VAR_RE.sub(_replacer, template)
+
+
 def resolve(key: str, default: str, **variables: Any) -> str:
     """解析提示词：有覆盖用覆盖，没有用默认。
 
-    Args:
-        key: 提示词唯一标识
-        default: 默认模板字符串（用 {variable} 占位符）
-        **variables: 模板变量，用于 .format() 替换
-
-    Returns:
-        最终的提示词字符串
+    优先用 str.format() 替换变量（支持 {name}、{obj.attr}、{name:spec} 等）。
+    如果模板含未知变量或格式错误，回退到安全替换：只替换已知变量，
+    未知 {xxx} 原样保留，不影响字面花括号。
     """
     override = _cache.get(key)
     template = override if override is not None else default
     try:
         return template.format(**variables)
     except (KeyError, ValueError, IndexError):
-        # 覆盖模板有未知变量或格式错误，回退到默认
-        if override is not None:
-            try:
-                return default.format(**variables)
-            except (KeyError, ValueError, IndexError):
-                return default
-        return default
+        return _safe_substitute(template, variables)
 
 
 def save_override(session: Session, key: str, template: str) -> None:
