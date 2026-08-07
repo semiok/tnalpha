@@ -650,9 +650,11 @@ def test_generate_with_debate_creates_records(owner_client, fresh_db, monkeypatc
     """辩论 2 轮 → DebateRecord 8 条（2×4角色）+ 综合简报 1 条 + 文章生成。"""
     _patch_threading(monkeypatch)
     call_count = {"text": 0, "image": 0}
+    prompts: dict[str, list[str]] = {}
 
     def fake_text(prompt, task="default", module="default", **k):
         call_count["text"] += 1
+        prompts.setdefault(task, []).append(prompt)
         if task == "debate":
             return f"这是辩论发言。"
         if task == "debate_brief":
@@ -700,6 +702,9 @@ def test_generate_with_debate_creates_records(owner_client, fresh_db, monkeypatc
         ).all()
         assert len(review_records) == 0
         assert article.review_summary == ""
+    assert "文章标题应区别于选题标题" in prompts["debate"][0]
+    assert "推荐文章标题" in prompts["debate_brief"][0]
+    assert "标题请采用辩论简报中推荐的文章标题" in prompts["writing_article"][0]
 
 
 def test_generate_with_review_rewrites_article(owner_client, fresh_db, monkeypatch):
@@ -1718,6 +1723,40 @@ def test_detail_page_shows_edit_button_when_pending_review(owner_client, fresh_d
     assert "[插图：待选择]" in html
     assert "在光标处插图" in html
     assert 'data-seg' in html
+
+
+def test_detail_page_hides_placeholder_title_until_generation_finishes(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        _brand, campaign, topic = _seed_topic(s)
+        article = Article(
+            topic_id=topic.id,
+            campaign_id=campaign.id,
+            title=topic.title,
+            body="",
+            status="辩论中",
+        )
+        s.add(article)
+        s.commit()
+        s.refresh(article)
+        aid = article.id
+        topic_title = topic.title
+
+    running = owner_client.get(f"/writing/articles/{aid}").text
+    assert f"<title>{topic_title} · 写作引擎</title>" in running
+    assert "标题生成中" in running
+
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        article.title = "辩论后生成的新标题"
+        article.body = "正文"
+        article.status = "待审核"
+        s.add(article)
+        s.commit()
+
+    finished = owner_client.get(f"/writing/articles/{aid}").text
+    assert "标题生成中" not in finished
+    assert "辩论后生成的新标题" in finished
+    assert f"来源选题：{topic_title}" in finished
 
 
 def test_detail_page_manual_upload_slot_shows_single_image(owner_client, fresh_db):
