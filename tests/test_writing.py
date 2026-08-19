@@ -2942,9 +2942,12 @@ def test_pending_review_detail_shows_ai_edit_entry(owner_client, fresh_db):
     assert "AI 修改正文" in html
     assert "AI 协作修改" in html
     assert "pointer-events-none" in html
-    assert '@mouseup.window="if (aiModal && aiMode === \'text\' && !aiBusy) captureAiSelection()"' in html
+    assert '@mouseup.window="if (aiModal && aiMode === \'text\' && !aiBusy) captureAiSelectionFromEvent($event)"' in html
+    assert "captureAiSelectionFromEvent(event)" in html
     assert "aiConversations" in html
     assert "aiCurrentConversationId" in html
+    assert "aiConversationHasInteraction(item)" in html
+    assert "!this.aiConversationHasInteraction(item)" in html
     assert "aiThinkingText" in html
     assert "AI 正在思考" in html
     assert "fd.append('conversation', JSON.stringify(this.aiMessages.slice(0, -2)))" in html
