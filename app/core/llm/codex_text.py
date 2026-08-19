@@ -45,8 +45,8 @@ def _file_part(fp: str) -> dict | None:
             "file_data": f"data:application/pdf;base64,{b64}"}
 
 
-def _attempt(prompt: str, model: str | None, timeout: int, reasoning: str | None,
-             pdf_path: str | None, attachments: list[str] | None) -> str:
+def _stream_attempt(prompt: str, model: str | None, timeout: int, reasoning: str | None,
+                    pdf_path: str | None, attachments: list[str] | None):
     access_token, account_id = _access(config.CODEX_AUTH_PATH)
     content: list[dict] = [{"type": "input_text", "text": prompt}]
     files = list(attachments or [])
@@ -79,9 +79,8 @@ def _attempt(prompt: str, model: str | None, timeout: int, reasoning: str | None
             raise _CodexAuthError(f"Codex 授权失败 HTTP {e.code}: {detail}") from e
         raise RuntimeError(f"Codex 文本 HTTP {e.code}: {detail}") from e
 
-    parts: list[str] = []
-    done_text = ""
     with resp:                              # 流式连接用完即关，避免 socket 泄漏
+        emitted = False
         for raw in resp:
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data:"):
@@ -98,13 +97,29 @@ def _attempt(prompt: str, model: str | None, timeout: int, reasoning: str | None
                 msg = (ev.get("error") or {}).get("message") or ev.get("message") or "未知错误"
                 raise RuntimeError(f"Codex 文本生成失败: {msg}")
             if t == "response.output_text.delta":
-                parts.append(ev.get("delta", ""))
-            elif t == "response.output_text.done":
-                done_text = ev.get("text", "") or done_text
-    out = ("".join(parts) or done_text).strip()
-    if not out:
+                delta = ev.get("delta", "") or ""
+                if delta:
+                    emitted = True
+                    yield delta
+            elif t == "response.output_text.done" and not emitted:
+                text = ev.get("text", "") or ""
+                if text:
+                    emitted = True
+                    yield text
+    if not emitted:
         raise RuntimeError("Codex 响应未含文本")
-    return out
+
+
+def _attempt(prompt: str, model: str | None, timeout: int, reasoning: str | None,
+             pdf_path: str | None, attachments: list[str] | None) -> str:
+    return "".join(_stream_attempt(prompt, model, timeout, reasoning, pdf_path, attachments)).strip()
+
+
+def stream_text(prompt: str, model: str | None = None, timeout: int = 180,
+                reasoning: str | None = None, pdf_path: str | None = None,
+                attachments: list[str] | None = None):
+    """以增量文本迭代 Responses API 的输出。"""
+    yield from _stream_attempt(prompt, model, timeout, reasoning, pdf_path, attachments)
 
 
 def generate_text(prompt: str, model: str | None = None, timeout: int = 180,

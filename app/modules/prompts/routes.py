@@ -124,7 +124,7 @@ def _sample_style(brand: Brand | None) -> Style:
         brand_id=brand.id if brand and brand.id else 1,
         name="展览叙事风",
         summary="以具体物件开场，用短段落推进现场感；语言准确但不过度学术，结尾落到观众可感的生活问题。",
-        source="preset",
+        source="manual",
         is_default=True,
     )
 
@@ -388,14 +388,18 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
         ),
         PromptItem(
             "③写作引擎",
-            "AI 预设写作风格",
-            "app/modules/writing/routes.py::_preset_prompt",
-            writing_prompts._preset_prompt(
-                brand or Brand(name="示例品牌"),
+            "和 AI 讨论写作风格",
+            "app/modules/writing/routes.py::_style_discussion_prompt",
+            writing_prompts._style_discussion_prompt(
+                style,
                 ctx,
-                3,
+                "文件：示例文档.pdf\n用户说明：希望减少广告感\n解析文本：这里会注入此前上传文件的解析正文。",
+                "用户：希望更自然一些。\nAI：可以保留核心意象，减少抽象形容词。",
+                value("{style_discussion_message}", "用户本次提出的修改方向，例如：保留东方感，但不要太文艺。"),
+                value("{style_draft_name}", "当前尚未应用的修改草案名称（如有）。"),
+                value("{style_draft_summary}", "当前尚未应用的修改草案总结（如有）。"),
             ),
-            "生成品牌公共风格库，不绑定具体 campaign。",
+            "讨论会读取当前风格、品牌约束、此前上传文件的解析内容和会话历史；AI 只生成草案，用户确认后才会应用。",
         ),
         PromptItem(
             "③写作引擎",
@@ -416,16 +420,6 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
                 value("{extracted_text}", "这里会注入从上传文件抽出的正文，按文件顺序拼接。"),
             ),
             "上传文件抽文本后喂给 LLM 提炼风格；文字说明作为分析意图注入，无文件时文字说明本身作为正文。",
-        ),
-        PromptItem(
-            "③写作引擎",
-            "搜索命中提炼写作风格",
-            "app/modules/writing/routes.py::_extract_from_hit_prompt",
-            writing_prompts._extract_from_hit_prompt({
-                "title": value("{search_hit.title}", "参考文章标题"),
-                "summary": value("{search_hit.summary}", "搜索结果摘要会放在这里。"),
-                "url": value("{search_hit.url}", "https://example.com/reference"),
-            }),
         ),
         PromptItem(
             "③写作引擎",
@@ -513,10 +507,9 @@ _SOURCE_TO_KEY: dict[str, str] = {
     "app/modules/topic/generate.py::_manual_prompt": "topic:manual_prompt",
     "app/modules/writing/routes.py::_article_prompt": "writing:article_prompt",
     "app/modules/writing/routes.py::_article_prompt_with_brief": "writing:article_prompt_with_brief",
-    "app/modules/writing/routes.py::_preset_prompt": "writing:preset_prompt",
+    "app/modules/writing/routes.py::_style_discussion_prompt": "writing:style_discussion_prompt",
     "app/modules/writing/routes.py::_extract_style_prompt": "writing:extract_style_prompt",
     "app/modules/writing/routes.py::_manual_style_prompt": "writing:manual_style_prompt",
-    "app/modules/writing/routes.py::_extract_from_hit_prompt": "writing:extract_from_hit_prompt",
     "app/modules/writing/debate.py::_debate_prompt": "writing:debate_prompt",
     "app/modules/writing/debate.py::_review_prompt": "writing:review_prompt",
     "app/modules/writing/debate.py::rewrite_prompt": "writing:rewrite_prompt",

@@ -1,0 +1,123 @@
+{% set is_page = full_page|default(false) %}
+<div id="style-discussion-modal" x-data="{sending: false, pendingMessage: '', draftOpen: false}"
+     class="{{ 'w-full' if is_page else 'fixed inset-0 z-40 bg-black/30 grid place-items-center' }}"
+     {% if not is_page %}onclick="if(event.target===this)tnCloseModal()"{% endif %}>
+  <div class="relative bg-white rounded-xl {{ 'border border-slate-200 shadow-sm w-full h-[min(820px,calc(100vh-8rem))] min-h-[560px]' if is_page else 'shadow-xl w-full max-w-3xl h-[min(760px,calc(100vh-2rem))] m-4' }} p-5 flex flex-col overflow-hidden">
+    <div class="flex items-start justify-between gap-4 mb-3">
+      <div class="min-w-0">
+        <div class="font-semibold text-slate-800">和 AI 讨论：{{ style.name|strip_markdown }}</div>
+        <div class="text-xs text-slate-400 mt-1">讨论不会自动修改风格，确认后才会应用。</div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        {% if discussion.draft_name and discussion.draft_summary %}
+        <button type="button" @click="draftOpen = !draftOpen" :aria-expanded="draftOpen"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100">
+          <span class="h-1.5 w-1.5 rounded-full bg-brand-500"></span>
+          待确认草案
+          <span x-text="draftOpen ? '收起' : '查看'"></span>
+        </button>
+        {% endif %}
+        {% if is_page %}
+        <a href="/writing?tab=library" class="text-sm text-slate-500 hover:text-brand-600">← 返回风格库</a>
+        {% else %}
+        <button type="button" onclick="tnCloseModal()" class="text-slate-400 hover:text-slate-600">✕</button>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if discussion.draft_name and discussion.draft_summary %}
+    <div x-show="draftOpen" x-cloak x-transition
+         class="absolute right-5 top-16 z-20 w-[min(430px,calc(100%-2.5rem))] max-h-[min(70vh,560px)] rounded-xl border border-brand-200 bg-brand-50 p-3 text-sm shadow-xl">
+      <div class="flex items-center justify-between gap-2">
+        <div class="font-medium text-brand-800">AI 修改草案</div>
+        <button type="button" @click="draftOpen = false" class="text-xs text-brand-600 hover:text-brand-800">收起</button>
+      </div>
+      <div class="mt-2 max-h-[min(48vh,360px)] overflow-y-auto overscroll-contain pr-1">
+        <div class="text-brand-900 font-medium">{{ discussion.draft_name|strip_markdown }}</div>
+        <p class="mt-1 whitespace-pre-line text-brand-800">{{ discussion.draft_summary|strip_markdown }}</p>
+        {% if discussion.draft_reason %}<p class="mt-2 text-xs text-brand-700">修改理由：{{ discussion.draft_reason|strip_markdown }}</p>{% endif %}
+      </div>
+      <div class="flex flex-wrap gap-2 mt-3 pt-3 border-t border-brand-200/70">
+        <form method="post" action="/writing/styles/{{ style.id }}/discussion/apply"
+              onsubmit="return confirm('确认应用这版修改？原风格会保留在版本记录中。');">
+          <button type="submit" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-brand-600 text-white hover:bg-brand-700">应用到当前风格</button>
+        </form>
+        <form method="post" action="/writing/styles/{{ style.id }}/discussion/save-as"
+              onsubmit="return confirm('将这版修改另存为新风格？当前风格不会改变。');">
+          <button type="submit" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-brand-700 border border-brand-200 hover:bg-brand-100">另存为新风格</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="grid gap-3 md:grid-cols-[220px_1fr] min-h-0 flex-1 overflow-hidden">
+      <aside class="min-h-0 rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 overflow-y-auto overscroll-contain">
+        <div class="font-medium text-slate-700 mb-1">当前风格</div>
+        <p class="whitespace-pre-line leading-relaxed">{{ style.summary|strip_markdown }}</p>
+        <div class="border-t border-slate-200 mt-3 pt-3">
+          <div class="font-medium text-slate-700 mb-1">已有上下文</div>
+          <div>来源：{{ style_sources.get(style.source, style.source) if style_sources is defined else style.source }}</div>
+          {% if style.reference_url %}
+          <a href="{{ style.reference_url }}" target="_blank" rel="noopener" class="block text-brand-600 hover:text-brand-700 truncate mt-1">参考链接</a>
+          {% endif %}
+          {% if source_docs %}
+          <div class="mt-2 space-y-1">
+            {% for doc in source_docs %}
+            <div class="truncate" title="{{ doc.filename }}">📄 {{ doc.filename }}</div>
+            {% if doc.note %}<div class="text-slate-400 line-clamp-2">{{ doc.note }}</div>{% endif %}
+            {% endfor %}
+          </div>
+          <div class="text-slate-400 mt-2">AI 会继续参考这些文件的解析内容。</div>
+          {% else %}
+          <div class="text-slate-400 mt-2">没有关联上传文件，AI 将依据当前风格和品牌资料讨论。</div>
+          {% endif %}
+        </div>
+      </aside>
+
+      <div class="min-h-0 flex flex-col overflow-hidden">
+        <div x-ref="messages" data-style-message-list data-auto-scroll data-as-key="style-discussion-{{ style.id }}"
+             class="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
+          {% for item in messages %}
+          <div class="flex {{ 'justify-end' if item.role == 'user' else 'justify-start' }}">
+            <div class="max-w-[88%] rounded-lg px-3 py-2 text-sm whitespace-pre-line leading-relaxed {{ 'bg-brand-600 text-white' if item.role == 'user' else 'bg-slate-100 text-slate-700' }}">
+              {{ item.content|strip_markdown }}
+            </div>
+          </div>
+          {% else %}
+          <div class="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-400">
+            你可以直接告诉 AI 想怎么调整，例如“减少文艺感，改得更自然一些”。
+          </div>
+          {% endfor %}
+          <div data-pending-message class="hidden flex justify-end">
+            <div class="max-w-[88%] rounded-lg px-3 py-2 text-sm whitespace-pre-line leading-relaxed bg-brand-600 text-white"
+                 data-pending-text></div>
+          </div>
+          <div data-thinking class="hidden flex justify-start">
+            <div class="rounded-lg px-3 py-2 text-sm text-slate-500 bg-slate-100">
+              AI 正在思考中…
+            </div>
+          </div>
+          <div data-streaming-reply class="hidden flex justify-start">
+            <div class="max-w-[88%] rounded-lg px-3 py-2 text-sm whitespace-pre-line leading-relaxed bg-slate-100 text-slate-700"
+                 data-streaming-text></div>
+          </div>
+        </div>
+
+        <form data-stream-url="/writing/styles/{{ style.id }}/discussion/stream"
+              data-refresh-url="/writing/styles/{{ style.id }}/discussion"
+              @submit.prevent="tnStreamStyleDiscussion($el)"
+              class="flex gap-2 mt-3 shrink-0">
+          <textarea x-ref="message" name="message" rows="2" required maxlength="4000"
+                    :readonly="sending"
+                    placeholder="告诉 AI 你想怎么修改这套风格…"
+                    class="flex-1 resize-none border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none read-only:bg-slate-50 read-only:cursor-wait"></textarea>
+          <button type="submit" :disabled="sending"
+                  class="self-end px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-60 disabled:cursor-wait">
+            <span data-send-label>发送</span>
+            <span data-sending-label class="hidden">思考中…</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>

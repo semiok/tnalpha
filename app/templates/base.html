@@ -56,6 +56,139 @@
     document.body.addEventListener('saved', e=>tnToast((e.detail&&e.detail.value)||'保存成功'));
     function tnCloseModal(){document.getElementById('modal-slot').innerHTML='';}
 
+    // 风格库跨 Tab 同步：独立讨论页保存后，其他写作页自动刷新风格库。
+    window._tnStyleSyncKey = 'tn-writing-style-library-sync';
+    window._tnStyleSyncChannel = null;
+    try {
+      if (window.BroadcastChannel) {
+        window._tnStyleSyncChannel = new BroadcastChannel(window._tnStyleSyncKey);
+      }
+    } catch (_) {}
+    window.tnBroadcastStyleUpdate = function(payload) {
+      const message = Object.assign({eventId: Date.now() + '-' + Math.random().toString(36).slice(2)}, payload || {});
+      try { if (window._tnStyleSyncChannel) window._tnStyleSyncChannel.postMessage(message); } catch (_) {}
+      try {
+        localStorage.setItem(window._tnStyleSyncKey, JSON.stringify(message));
+        localStorage.removeItem(window._tnStyleSyncKey);
+      } catch (_) {}
+    };
+    window.tnListenStyleUpdate = function(handler) {
+      let lastEventId = '';
+      const dispatch = function(message) {
+        if (!message || !message.eventId || message.eventId === lastEventId) return;
+        lastEventId = message.eventId;
+        handler(message);
+      };
+      if (window._tnStyleSyncChannel) window._tnStyleSyncChannel.addEventListener('message', e => dispatch(e.data));
+      window.addEventListener('storage', e => {
+        if (e.key !== window._tnStyleSyncKey || !e.newValue) return;
+        try { dispatch(JSON.parse(e.newValue)); } catch (_) {}
+      });
+    };
+
+    // 风格讨论流式输出：POST 后按 SSE 增量更新当前 AI 气泡，完成后再用完整片段刷新草案状态。
+    window.tnStreamStyleDiscussion = async function(form) {
+      if (form._tnStreaming) return;
+      const root = form.closest('#style-discussion-modal');
+      const textarea = form.querySelector('textarea[name="message"]');
+      const sendButton = form.querySelector('button[type="submit"]');
+      const messages = root && root.querySelector('[data-style-message-list]');
+      const pending = root && root.querySelector('[data-pending-message]');
+      const thinking = root && root.querySelector('[data-thinking]');
+      const streaming = root && root.querySelector('[data-streaming-reply]');
+      const streamingText = streaming && streaming.querySelector('[data-streaming-text]');
+      const sendLabel = form.querySelector('[data-send-label]');
+      const sendingLabel = form.querySelector('[data-sending-label]');
+      const message = (textarea && textarea.value || '').trim();
+      if (!root || !textarea || !message) return;
+
+      form._tnStreaming = true;
+      textarea.readOnly = true;
+      if (sendButton) sendButton.disabled = true;
+      if (sendLabel) sendLabel.classList.add('hidden');
+      if (sendingLabel) sendingLabel.classList.remove('hidden');
+      if (pending) { pending.textContent = message; pending.classList.remove('hidden'); }
+      if (streamingText) streamingText.textContent = '';
+      if (streaming) streaming.classList.add('hidden');
+      if (thinking) thinking.classList.remove('hidden');
+      if (messages) messages.scrollTop = messages.scrollHeight;
+
+      const refresh = async function() {
+        if (window.htmx) {
+          await htmx.ajax('GET', form.dataset.refreshUrl, {
+            target: '#style-discussion-modal', swap: 'outerHTML'
+          });
+        } else {
+          window.location.reload();
+        }
+      };
+      const showError = async function(messageText) {
+        if (thinking) thinking.classList.add('hidden');
+        if (streamingText) streamingText.textContent = messageText || 'AI 回复失败，请重试。';
+        if (streaming) streaming.classList.remove('hidden');
+        if (window.tnToast) tnToast(messageText || 'AI 回复失败，请重试');
+        await refresh();
+      };
+
+      try {
+        const response = await fetch(form.dataset.streamUrl, {
+          method: 'POST',
+          headers: {'Accept': 'text/event-stream', 'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({message})
+        });
+        if (!response.ok || !response.body) {
+          throw new Error('请求失败（HTTP ' + response.status + '）');
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let completed = false;
+        const handleBlock = function(block) {
+          let eventName = 'message';
+          let data = '';
+          block.split('\n').forEach(function(line) {
+            if (line.startsWith('event:')) eventName = line.slice(6).trim();
+            if (line.startsWith('data:')) data += line.slice(5).trim();
+          });
+          let payload = {};
+          try { payload = data ? JSON.parse(data) : {}; } catch (_) {}
+          if (eventName === 'delta' && payload.text) {
+            if (thinking) thinking.classList.add('hidden');
+            if (streaming) streaming.classList.remove('hidden');
+            if (streamingText) streamingText.textContent += payload.text;
+            if (messages) messages.scrollTop = messages.scrollHeight;
+          } else if (eventName === 'done') {
+            completed = true;
+          } else if (eventName === 'error') {
+            throw new Error(payload.message || 'AI 回复失败，请重试');
+          }
+        };
+        while (true) {
+          const part = await reader.read();
+          buffer += decoder.decode(part.value || new Uint8Array(), {stream: !part.done});
+          let splitAt = -1;
+          while ((splitAt = buffer.indexOf('\n\n')) >= 0) {
+            const block = buffer.slice(0, splitAt);
+            buffer = buffer.slice(splitAt + 2);
+            if (block.trim()) handleBlock(block);
+          }
+          if (part.done) break;
+        }
+        if (buffer.trim()) handleBlock(buffer);
+        if (!completed) throw new Error('AI 输出未正常结束，请重试');
+        textarea.value = '';
+        await refresh();
+      } catch (error) {
+        await showError(error && error.message);
+      } finally {
+        form._tnStreaming = false;
+        textarea.readOnly = false;
+        if (sendButton) sendButton.disabled = false;
+        if (sendLabel) sendLabel.classList.remove('hidden');
+        if (sendingLabel) sendingLabel.classList.add('hidden');
+      }
+    };
+
     // ── 滚动跟随：用户未滑动时跟随最新输出；一旦手动滑动过则保持位置不动 ──
     // 适用于 HTMX 整块 outerHTML 替换的场景（如写作引擎详情页 2s 轮询）。
     // 给滚动容器加 data-auto-scroll 属性即可启用；data-as-key 提供稳定的逻辑键。

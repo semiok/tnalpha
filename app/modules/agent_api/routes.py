@@ -121,7 +121,10 @@ def list_brands(
     for brand in brands:
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == brand.id)).all()
         docs = session.exec(select(BrandDoc).where(BrandDoc.brand_id == brand.id)).all()
-        styles = session.exec(select(Style).where(Style.brand_id == brand.id)).all()
+        styles = session.exec(select(Style).where(
+            Style.brand_id == brand.id,
+            Style.source != "preset",
+        )).all()
         result.append({
             "id": brand.id,
             "name": brand.name,
