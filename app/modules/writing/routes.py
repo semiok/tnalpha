@@ -6,7 +6,9 @@ import json
 import threading
 import os
 import re
+import shutil
 import time
+import uuid
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -873,11 +875,18 @@ def save_style_discussion_as_new(style_id: int, request: Request,
         select(StyleDoc).where(StyleDoc.style_id == style.id)
     ).all()
     for doc in source_docs:
+        copied_path = doc.file_path
+        if os.path.isfile(doc.file_path):
+            extension = os.path.splitext(doc.file_path)[1]
+            copied_path = os.path.join(
+                os.path.dirname(doc.file_path), f"{uuid.uuid4().hex}{extension}"
+            )
+            shutil.copy2(doc.file_path, copied_path)
         session.add(StyleDoc(
             brand_id=doc.brand_id,
             style_id=new_style.id,
             filename=doc.filename,
-            file_path=doc.file_path,
+            file_path=copied_path,
             extracted_text=doc.extracted_text,
             note=doc.note,
         ))
@@ -1014,10 +1023,17 @@ def delete_style_doc(doc_id: int, request: Request,
     doc = session.get(StyleDoc, doc_id)
     if doc is None:
         raise HTTPException(404, "文档不存在")
-    try:
-        os.remove(doc.file_path)
-    except OSError:
-        pass
+    shared_path = session.exec(
+        select(StyleDoc.id).where(
+            StyleDoc.file_path == doc.file_path,
+            StyleDoc.id != doc.id,
+        )
+    ).first()
+    if shared_path is None:
+        try:
+            os.remove(doc.file_path)
+        except OSError:
+            pass
     session.delete(doc)
     session.commit()
     return RedirectResponse("/writing?tab=new", status_code=303)
@@ -1465,8 +1481,9 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
     用 minimax n 参数批量生成 4 张（1 次 API 调用）。
     """
     lock = _get_article_lock(article_id)
-    if not lock.acquire(blocking=False):
-        return  # 该文章已有配图 worker 在跑，跳过
+    # 同一文章的多个插图任务必须排队执行，不能因为锁被占用而静默丢弃。
+    # 任务在线程中运行，阻塞这里不会阻塞请求线程。
+    lock.acquire()
     try:
         from sqlmodel import Session as SMSession
         with SMSession(db.engine) as s:
@@ -2177,18 +2194,10 @@ def regenerate_slot_with_prompt(article_id: int, slot_index: int, request: Reque
     slot_desc = _slot_desc(article, slot_index, session)
     if not slot_desc:
         raise HTTPException(400, f"插图位置 {slot_index + 1} 不存在")
-    # 先清理当前插图位置的旧候选图，让页面立即进入标准的 0/4 生成中状态。
-    old_slot_images = session.exec(
-        select(ArticleImage).where(
-            ArticleImage.article_id == article_id,
-            ArticleImage.slot_index == slot_index,
-        )
-    ).all()
-    for image in old_slot_images:
-        session.delete(image)
+    # 不提前删除旧候选图：worker 只有在新图生成成功后才会原子替换，失败时可回退。
     article.status = "待配图"
     article.error_message = ""
-    article.image_generation_slot = -1
+    article.image_generation_slot = slot_index
     article.updated_at = _now()
     session.add(article)
     session.commit()
@@ -2252,25 +2261,21 @@ def regenerate_slot(article_id: int, slot_index: int, request: Request,
         if existing is None:
             raise HTTPException(400, f"插图位置 {slot_index + 1} 不存在")
         slot_desc = existing.slot_desc or "文章配图"
-    old_imgs = session.exec(
-        select(ArticleImage).where(
-            ArticleImage.article_id == article_id,
-            ArticleImage.slot_index == slot_index,
-        )
-    ).all()
-    for oi in old_imgs:
-        session.delete(oi)
+    # 与提示词优化保持一致：生成成功后再替换旧候选图，失败时保留旧图。
+    article.status = "待配图"
+    article.error_message = ""
+    article.image_generation_slot = slot_index
     article.updated_at = _now()
     session.add(article)
     session.commit()
     # 启动子线程异步重生该 slot
     t = threading.Thread(
         target=_run_single_slot_worker,
-        args=(article_id, article.topic_id, slot_index, slot_desc, article.platform),
+        args=(article_id, article.topic_id, slot_index, slot_desc, article.platform, "", True),
         daemon=True,
     )
     t.start()
-    # 立即返回当前详情片段（旧图已被清理，新图生成中，轮询会自动补上）
+    # 立即返回当前详情片段；旧图仍可展示，轮询会自动补上新候选图。
     if request.headers.get("HX-Request") == "true":
         topic = session.get(Topic, article.topic_id)
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
@@ -2488,6 +2493,19 @@ def _ai_edit_slot_descriptions(body: str) -> list[str]:
     return [desc for _pos, desc in _parse_image_slots(body)]
 
 
+def _remove_ai_edit_slot_markers(body: str, indexes: set[int]) -> str:
+    """移除用户明确选择删除的插图标记，按原始 slot 索引从后往前处理。"""
+    if not indexes:
+        return body
+    pattern = re.compile(r'\[插图(?:位|位置)?[：:](.+?)\]')
+    matches = list(pattern.finditer(body))
+    for index in sorted(indexes, reverse=True):
+        if 0 <= index < len(matches):
+            match = matches[index]
+            body = body[:match.start()] + body[match.end():]
+    return body
+
+
 def _mask_image_slots_for_ai(body: str) -> str:
     """给选中模式提供上下文时隐藏插图标记，避免模型把结构标记复制进结果。"""
     return re.sub(
@@ -2568,7 +2586,26 @@ def _apply_article_body_image_changes(session: Session, article: Article,
                                       requested_actions: dict[int, dict]) -> list[int]:
     """保存正文后重排插图，并返回需要异步重生成的 slot。"""
     old_slots = _ai_edit_slot_descriptions(old_body)
+    raw_new_slots = _ai_edit_slot_descriptions(new_body)
+    remove_indexes = {
+        index for index in range(len(raw_new_slots))
+        if requested_actions.get(index, {}).get("action") == "remove"
+    }
+    if remove_indexes:
+        new_body = _remove_ai_edit_slot_markers(new_body, remove_indexes)
+        article.body = new_body
+        session.add(article)
     new_slots = _ai_edit_slot_descriptions(new_body)
+    action_by_new_index: dict[int, dict] = {}
+    raw_index_by_new_index: dict[int, int] = {}
+    filtered_index = 0
+    for raw_index in range(len(raw_new_slots)):
+        if raw_index in remove_indexes:
+            continue
+        raw_index_by_new_index[filtered_index] = raw_index
+        if raw_index in requested_actions:
+            action_by_new_index[filtered_index] = requested_actions[raw_index]
+        filtered_index += 1
     images = session.exec(
         select(ArticleImage).where(ArticleImage.article_id == article.id)
         .order_by(ArticleImage.slot_index, ArticleImage.id)
@@ -2593,22 +2630,25 @@ def _apply_article_body_image_changes(session: Session, article: Article,
     for new_index, new_desc in enumerate(new_slots):
         if new_index in mapped:
             continue
-        action_info = requested_actions.get(new_index, {})
+        action_info = action_by_new_index.get(new_index, {})
         if action_info.get("kind") == "added":
             continue
-        if new_index < len(old_slots) and new_index in by_slot and new_index not in used_old:
-            mapped[new_index] = new_index
-            used_old.add(new_index)
+        raw_index = raw_index_by_new_index.get(new_index, new_index)
+        if raw_index < len(old_slots) and raw_index in by_slot and raw_index not in used_old:
+            mapped[new_index] = raw_index
+            used_old.add(raw_index)
 
     regenerate: list[int] = []
     for new_index, new_desc in enumerate(new_slots):
         old_index = mapped.get(new_index)
         slot_images = by_slot.get(old_index, []) if old_index is not None else []
-        action_info = requested_actions.get(new_index, {})
+        action_info = action_by_new_index.get(new_index, {})
         action = action_info.get("action", "keep")
-        if action == "regenerate" or (old_index is None and new_index not in requested_actions):
+        if action == "regenerate" or (old_index is None and new_index not in action_by_new_index):
             for image in slot_images:
-                session.delete(image)
+                image.slot_index = new_index
+                image.slot_desc = new_desc
+                session.add(image)
             regenerate.append(new_index)
             continue
         for image in slot_images:
@@ -2625,6 +2665,7 @@ def _apply_article_body_image_changes(session: Session, article: Article,
     if regenerate:
         article.status = "待配图"
         article.error_message = ""
+        article.image_generation_slot = regenerate[0] if len(regenerate) == 1 else -1
         article.updated_at = _now()
         session.add(article)
     session.commit()
@@ -2632,18 +2673,34 @@ def _apply_article_body_image_changes(session: Session, article: Article,
         slot_desc = new_slots[slot_index]
         t = threading.Thread(
             target=_run_single_slot_worker,
-            args=(article.id, article.topic_id, slot_index, slot_desc, article.platform),
+            args=(article.id, article.topic_id, slot_index, slot_desc, article.platform, "", True),
             daemon=True,
         )
         t.start()
     return regenerate
 
 
-def _find_ai_edit_selection(source_body: str, selected_text: str) -> tuple[int, int] | None:
-    """定位浏览器选区在当前正文中的范围，兼容 contenteditable 的换行差异。"""
-    exact_start = source_body.find(selected_text)
-    if exact_start >= 0:
-        return exact_start, exact_start + len(selected_text)
+def _find_ai_edit_selection(source_body: str, selected_text: str,
+                            selection_start: int = -1,
+                            selection_end: int = -1) -> tuple[int, int] | None:
+    """定位浏览器选区，优先使用前端传来的偏移，避免重复文本总命中第一处。"""
+    if (
+        selection_start >= 0
+        and selection_end == selection_start + len(selected_text)
+        and selection_end <= len(source_body)
+        and source_body[selection_start:selection_end] == selected_text
+    ):
+        return selection_start, selection_end
+
+    exact_matches: list[int] = []
+    cursor = source_body.find(selected_text)
+    while cursor >= 0:
+        exact_matches.append(cursor)
+        cursor = source_body.find(selected_text, cursor + 1)
+    if len(exact_matches) == 1:
+        return exact_matches[0], exact_matches[0] + len(selected_text)
+    if len(exact_matches) > 1:
+        return None
 
     def normalize(value: str) -> tuple[str, list[int]]:
         chars: list[str] = []
@@ -2665,9 +2722,14 @@ def _find_ai_edit_selection(source_body: str, selected_text: str) -> tuple[int, 
     normalized_selected, _ = normalize(selected_text)
     if not normalized_selected:
         return None
-    normalized_start = normalized_source.find(normalized_selected)
-    if normalized_start < 0 or not source_positions:
+    normalized_matches: list[int] = []
+    cursor = normalized_source.find(normalized_selected)
+    while cursor >= 0:
+        normalized_matches.append(cursor)
+        cursor = normalized_source.find(normalized_selected, cursor + 1)
+    if len(normalized_matches) != 1 or not source_positions:
         return None
+    normalized_start = normalized_matches[0]
     normalized_end = normalized_start + len(normalized_selected) - 1
     return source_positions[normalized_start], source_positions[normalized_end] + 1
 
@@ -2750,7 +2812,9 @@ def _ai_edit_selection_output_limit(selected_text: str) -> int:
 def _prepare_ai_edit_prompt(session: Session, article: Article, scope: str,
                             target: str, body: str, title: str, selected_text: str,
                             instruction: str,
-                            conversation: str | list | None = None) -> dict:
+                            conversation: str | list | None = None,
+                            selection_start: int = -1,
+                            selection_end: int = -1) -> dict:
     """校验 AI 修改输入并组装 prompt；同步和流式接口共用。"""
     if scope not in ("selection", "article"):
         raise HTTPException(400, "修改范围不合法")
@@ -2781,7 +2845,9 @@ def _prepare_ai_edit_prompt(session: Session, article: Article, scope: str,
         if len(selected_text) > 12000:
             raise HTTPException(400, "选中内容过长，请缩小修改范围")
         selection_source = source_title if target == "title" else source_body
-        if _find_ai_edit_selection(selection_source, selected_text) is None:
+        if _find_ai_edit_selection(
+            selection_source, selected_text, selection_start, selection_end
+        ) is None:
             raise HTTPException(400, "选中内容已不在当前标题或正文中，请重新选择")
         if target == "body" and _parse_image_slots(selected_text):
             raise HTTPException(400, "不能直接修改插图位置标记")
@@ -2874,6 +2940,8 @@ def _prepare_ai_edit_prompt(session: Session, article: Article, scope: str,
         "source_body": source_body,
         "source_title": source_title,
         "selected_text": selected_text,
+        "selection_start": selection_start,
+        "selection_end": selection_end,
         "conversation": conversation_items,
         "prompt": prompt,
         "topic": topic,
@@ -2894,7 +2962,10 @@ def _finalize_ai_edit_preview(article: Article, prepared: dict, raw: str) -> dic
     source_title = prepared["source_title"]
     selected_text = prepared["selected_text"]
     if target == "title":
-        selection_span = _find_ai_edit_selection(source_title, selected_text)
+        selection_span = _find_ai_edit_selection(
+            source_title, selected_text,
+            prepared.get("selection_start", -1), prepared.get("selection_end", -1)
+        )
         if selection_span is None:
             raise HTTPException(400, "选中标题已不在当前标题中，请重新选择")
         selection_start, selection_end = selection_span
@@ -2913,7 +2984,10 @@ def _finalize_ai_edit_preview(article: Article, prepared: dict, raw: str) -> dic
                 502,
                 f"AI 返回内容超出选区范围（{len(proposed)} 字，选区建议上限 {max_chars} 字）",
             )
-        selection_span = _find_ai_edit_selection(source_body, selected_text)
+        selection_span = _find_ai_edit_selection(
+            source_body, selected_text,
+            prepared.get("selection_start", -1), prepared.get("selection_end", -1)
+        )
         if selection_span is None:
             raise HTTPException(400, "选中内容已不在当前正文中，请重新选择")
         selection_start, selection_end = selection_span
@@ -2955,13 +3029,16 @@ def ai_edit_article(article_id: int, request: Request,
                     body: str = Form(""),
                     title: str = Form(""),
                     selected_text: str = Form(""),
+                    selection_start: int = Form(-1),
+                    selection_end: int = Form(-1),
                     instruction: str = Form(""),
                     conversation: str = Form("[]"),
                     session: Session = Depends(get_session)):
     """兼容旧调用：为待审核文章生成一次性 AI 修改预览。"""
     article = _require_ai_edit_article(article_id, request, session)
     prepared = _prepare_ai_edit_prompt(
-        session, article, scope, target, body, title, selected_text, instruction, conversation)
+        session, article, scope, target, body, title, selected_text, instruction,
+        conversation, selection_start, selection_end)
     started_at = time.monotonic()
     print(
         f"[ai-edit] start article={article_id} scope={prepared['scope']} prompt_chars={len(prepared['prompt'])}",
@@ -2988,13 +3065,16 @@ def ai_edit_article_stream(article_id: int, request: Request,
                            body: str = Form(""),
                            title: str = Form(""),
                            selected_text: str = Form(""),
+                           selection_start: int = Form(-1),
+                           selection_end: int = Form(-1),
                            instruction: str = Form(""),
                            conversation: str = Form("[]"),
                            session: Session = Depends(get_session)):
     """流式生成 AI 修改建议；完成前不写回文章，完成后才校验并返回可应用结果。"""
     article = _require_ai_edit_article(article_id, request, session)
     prepared = _prepare_ai_edit_prompt(
-        session, article, scope, target, body, title, selected_text, instruction, conversation)
+        session, article, scope, target, body, title, selected_text, instruction,
+        conversation, selection_start, selection_end)
 
     def generate_events():
         started_at = time.monotonic()

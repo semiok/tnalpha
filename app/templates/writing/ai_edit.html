@@ -15,6 +15,8 @@ function tnAiEditWorkbench(initial) {
     scope: 'selection',
     target: 'body',
     selectedText: '',
+    selectedStart: -1,
+    selectedEnd: -1,
     contexts: [],
     activeContextId: 0,
     lastRequestContextId: 0,
@@ -42,6 +44,8 @@ function tnAiEditWorkbench(initial) {
             scope: hash.get('scope') === 'article' ? 'article' : 'selection',
             target: hash.get('target') === 'title' ? 'title' : 'body',
             selectedText: (hash.get('selected_text') || '').trim(),
+            selectedStart: Number(hash.get('selected_start') || -1),
+            selectedEnd: Number(hash.get('selected_end') || -1),
           };
           history.replaceState(null, '', window.location.pathname + window.location.search);
         }
@@ -55,6 +59,8 @@ function tnAiEditWorkbench(initial) {
           this.scope = start.scope === 'article' ? 'article' : 'selection';
           this.target = start.target === 'title' ? 'title' : 'body';
           this.selectedText = (start.selectedText || '').trim();
+          this.selectedStart = Number.isInteger(start.selectedStart) ? start.selectedStart : -1;
+          this.selectedEnd = Number.isInteger(start.selectedEnd) ? start.selectedEnd : -1;
           localStorage.removeItem(startKey);
           sessionStorage.removeItem(startKey);
         }
@@ -63,6 +69,8 @@ function tnAiEditWorkbench(initial) {
         this.scope = hashSelection.scope;
         this.target = hashSelection.target;
         this.selectedText = hashSelection.selectedText;
+        this.selectedStart = hashSelection.selectedStart;
+        this.selectedEnd = hashSelection.selectedEnd;
       }
       this.activateContext(false);
     },
@@ -94,12 +102,14 @@ function tnAiEditWorkbench(initial) {
         scope: this.scope,
         target: this.target,
         selectedText: this.selectedText,
+        selectedStart: this.selectedStart,
+        selectedEnd: this.selectedEnd,
         excerpt: this.contextExcerpt(),
         latestBody: '',
         latestTitle: '',
         latestSelectedText: '',
       };
-      const existing = this.contexts.find(item => item.scope === context.scope && item.target === context.target && item.selectedText === context.selectedText);
+      const existing = this.contexts.find(item => item.scope === context.scope && item.target === context.target && item.selectedText === context.selectedText && item.selectedStart === context.selectedStart && item.selectedEnd === context.selectedEnd);
       if (existing) this.activeContextId = existing.id;
       else this.contexts.unshift(context);
       this.done = false;
@@ -119,6 +129,8 @@ function tnAiEditWorkbench(initial) {
         body: context && context.latestBody ? context.latestBody : this.baseBody,
         title: context && context.latestTitle ? context.latestTitle : this.baseTitle,
         selectedText: context && context.latestSelectedText ? context.latestSelectedText : this.selectedText,
+        selectedStart: context && Number.isInteger(context.selectedStart) ? context.selectedStart : this.selectedStart,
+        selectedEnd: context && Number.isInteger(context.selectedEnd) ? context.selectedEnd : this.selectedEnd,
       };
     },
     selectContext(context) {
@@ -126,6 +138,8 @@ function tnAiEditWorkbench(initial) {
       this.scope = context.scope;
       this.target = context.target;
       this.selectedText = context.selectedText || '';
+      this.selectedStart = Number.isInteger(context.selectedStart) ? context.selectedStart : -1;
+      this.selectedEnd = Number.isInteger(context.selectedEnd) ? context.selectedEnd : -1;
       this.activeContextId = context.id;
       this.done = false;
       this.error = '';
@@ -207,7 +221,7 @@ function tnAiEditWorkbench(initial) {
       form.append('target', this.target);
       form.append('body', requestSource.body);
       form.append('title', requestSource.title);
-      form.append('selected_text', requestSelectedText);
+      form.append('selected_text', requestSelectedText); form.append('selection_start', String(requestSource.selectedStart)); form.append('selection_end', String(requestSource.selectedEnd));
       form.append('instruction', contextChanged ? '用户已切换新的修改对象。此前结果只能作为参考，请只针对当前选中的内容或当前正文处理。\n\n' + instruction : instruction);
       form.append('conversation', JSON.stringify(this.messages.slice(0, -2).map(item => ({role: item.role, text: item.text, target: item.target}))));
 
@@ -231,6 +245,7 @@ function tnAiEditWorkbench(initial) {
               this.currentProposed = payload.proposed || this.currentProposed;
               this.resultBody = payload.body || '';
               this.resultTitle = payload.title || '';
+              if (this.scope === 'selection' && this.selectedStart >= 0) this.selectedEnd = this.selectedStart + this.currentProposed.length;
               this.mergeImageChanges(payload.image_changes);
               assistant.text = this.currentProposed;
               const context = this.activeContext();
@@ -238,6 +253,8 @@ function tnAiEditWorkbench(initial) {
                 context.latestBody = this.resultBody || requestSource.body;
                 context.latestTitle = this.resultTitle || requestSource.title;
                 context.latestSelectedText = this.scope === 'selection' ? this.currentProposed : '';
+                context.selectedStart = this.selectedStart;
+                context.selectedEnd = this.selectedEnd;
               }
               this.done = true;
               this.instruction = '';

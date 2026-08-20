@@ -9,6 +9,7 @@
 """
 import io
 import json
+import os
 import time
 
 from sqlmodel import Session, select
@@ -221,6 +222,7 @@ def test_style_discussion_keeps_uploaded_context_and_returns_draft(owner_client,
     assert page.status_code == 200
     assert "返回风格库" in page.text
     assert "TN-Alpha" in page.text
+    assert f'data-refresh-url="/writing/styles/{style_id}/discussion/page"' in page.text
 
     seen = {}
 
@@ -373,6 +375,7 @@ def test_style_discussion_save_as_keeps_original_style(owner_client, fresh_db, m
         ))
         s.commit()
         style_id = style.id
+    (tmp_path / "原始素材.md").write_text("需要继承的风格素材", encoding="utf-8")
 
     monkeypatch.setattr(
         wroutes.llm,
@@ -395,6 +398,15 @@ def test_style_discussion_save_as_keeps_original_style(owner_client, fresh_db, m
         copied_docs = s.exec(select(StyleDoc).where(StyleDoc.style_id == new_id)).all()
         assert len(copied_docs) == 1
         assert copied_docs[0].extracted_text == "需要继承的风格素材"
+        assert copied_docs[0].file_path != str(tmp_path / "原始素材.md")
+        assert os.path.exists(copied_docs[0].file_path)
+
+    deleted = owner_client.post(
+        f"/writing/styles/docs/{copied_docs[0].id}/delete",
+        follow_redirects=False,
+    )
+    assert deleted.status_code == 303
+    assert (tmp_path / "原始素材.md").exists()
 
 
 def test_manual_style_with_files_and_note_creates_style(owner_client, fresh_db, monkeypatch):
@@ -2832,8 +2844,8 @@ def test_image_prompt_regeneration_replaces_old_candidates(owner_client, fresh_d
         assert sum(image.is_selected for image in images) == 1
 
 
-def test_image_prompt_regeneration_clears_slot_before_background_generation(owner_client, fresh_db, monkeypatch):
-    """启动提示词生图后，详情页立即显示标准的 0/4 生成中状态。"""
+def test_image_prompt_regeneration_keeps_old_candidates_before_background_generation(owner_client, fresh_db, monkeypatch):
+    """启动提示词生图后保留旧候选图，生成失败时可以回退。"""
     with Session(fresh_db) as s:
         aid, _cid = _seed_pending_review_article(s)
         s.add(ArticleImage(
@@ -2862,10 +2874,45 @@ def test_image_prompt_regeneration_clears_slot_before_background_generation(owne
     with Session(fresh_db) as s:
         article = s.get(Article, aid)
         assert article.status == "待配图"
-        assert s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all() == []
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(images) == 1
+        assert images[0].image_url.endswith("old.png")
     html = owner_client.get(f"/writing/articles/{aid}").text
-    assert "0/4 张" in html
-    assert "生成中" in html
+    assert "当前图片暂保留" in html
+    assert "正在生成新候选图" in html
+
+
+def test_image_prompt_regeneration_failure_rolls_back_to_old_candidates(owner_client, fresh_db, monkeypatch):
+    """新提示词生图失败时，旧候选图仍然可用并显示错误。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        s.add(ArticleImage(
+            article_id=aid,
+            slot_index=0,
+            slot_desc="头图",
+            prompt="旧提示词",
+            image_url="https://img.example/old.png",
+            is_selected=True,
+        ))
+        s.commit()
+
+    def fail_images(*args, **kwargs):
+        raise RuntimeError("图片服务暂时不可用")
+
+    monkeypatch.setattr(wroutes.llm, "generate_images", fail_images)
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/regenerate-with-prompt",
+        data={"prompt": "新的提示词"},
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert article.status == "待审核"
+        assert "图片服务暂时不可用" in article.error_message
+        assert len(images) == 1
+        assert images[0].prompt == "旧提示词"
 
 
 def test_ai_edit_allows_new_and_removed_image_slots(owner_client, fresh_db, monkeypatch):
@@ -2931,7 +2978,113 @@ def test_edit_body_regenerates_selected_image_change(owner_client, fresh_db, mon
         article = s.get(Article, aid)
         assert article.body == "正文内容\n\n[插图：新的头图]\n\n结尾段"
         assert article.status == "待配图"
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(images) == 1
+        assert images[0].slot_desc == "新的头图"
+
+
+def test_edit_body_remove_action_removes_marker_and_images(owner_client, fresh_db):
+    """正文保留插图标记时，显式选择删除也必须移除标记和候选图。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        article = s.get(Article, aid)
+        article.body = "正文内容\n\n[插图：头图]\n\n结尾段"
+        s.add(article)
+        s.add(ArticleImage(
+            article_id=aid,
+            slot_index=0,
+            slot_desc="头图",
+            prompt="旧提示词",
+            image_url="https://img.example/old.png",
+            is_selected=True,
+        ))
+        s.commit()
+
+    response = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={
+            "body": "正文内容\n\n[插图：头图]\n\n结尾段",
+            "image_changes": json.dumps([{
+                "index": 0,
+                "kind": "updated",
+                "old_desc": "头图",
+                "new_desc": "头图",
+                "action": "remove",
+            }], ensure_ascii=False),
+        },
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert "[插图：头图]" not in article.body
         assert s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all() == []
+
+
+def test_edit_body_queues_all_regenerated_image_slots(owner_client, fresh_db, monkeypatch):
+    """多个插图同时选择重生成时，所有 slot 都会进入任务队列且保留旧图。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        article = s.get(Article, aid)
+        article.body = "第一段\n\n[插图：头图]\n\n第二段\n\n[插图：尾图]"
+        s.add(article)
+        for index, desc in enumerate(("头图", "尾图")):
+            s.add(ArticleImage(
+                article_id=aid,
+                slot_index=index,
+                slot_desc=desc,
+                prompt=f"旧提示词{index}",
+                image_url=f"https://img.example/old-{index}.png",
+                is_selected=True,
+            ))
+        s.commit()
+
+    started = []
+    monkeypatch.setattr(
+        wroutes,
+        "_run_single_slot_worker",
+        lambda *args: started.append(args),
+    )
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={
+            "body": "第一段\n\n[插图：新头图]\n\n第二段\n\n[插图：新尾图]",
+            "image_changes": json.dumps([
+                {"index": 0, "kind": "updated", "old_desc": "头图", "new_desc": "新头图", "action": "regenerate"},
+                {"index": 1, "kind": "updated", "old_desc": "尾图", "new_desc": "新尾图", "action": "regenerate"},
+            ], ensure_ascii=False),
+        },
+    )
+    assert response.status_code == 200
+    assert len(started) == 2
+    assert {args[2] for args in started} == {0, 1}
+    assert all(args[-1] is True for args in started)
+    with Session(fresh_db) as s:
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(images) == 2
+
+
+def test_ai_edit_duplicate_selection_uses_supplied_position(owner_client, fresh_db, monkeypatch):
+    """文章出现重复句子时，服务端按选区偏移替换对应的那一处。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", lambda *args, **kwargs: "第二处已修改")
+    body = "相同句子\n\n中间内容\n\n相同句子"
+    second_start = body.rfind("相同句子")
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "selection",
+            "body": body,
+            "selected_text": "相同句子",
+            "selection_start": str(second_start),
+            "selection_end": str(second_start + len("相同句子")),
+            "instruction": "润色表达。",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["body"] == "相同句子\n\n中间内容\n\n第二处已修改"
 
 
 def test_pending_review_detail_shows_ai_edit_entry(owner_client, fresh_db):
