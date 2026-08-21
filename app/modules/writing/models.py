@@ -5,6 +5,7 @@ Style 归属品牌，品牌常青和所有 campaign 共用同一套风格库。
 """
 from datetime import datetime
 
+from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
 
 
@@ -19,12 +20,12 @@ PLATFORMS = ("小红书", "微信公众号")
 
 # 风格来源 → UI 标签。stub 仅回退用，不在 UI 显示。
 STYLE_SOURCES = {
-    "preset": "AI 预设",
     "google": "Google",
     "mp": "公众号",
     "sonar": "深度热点",
     "url": "URL 提取",
     "manual": "手动",
+    "discussion": "AI 讨论",
     "stub": "内置",
 }
 
@@ -35,8 +36,47 @@ class Style(SQLModel, table=True):
     name: str
     summary: str = ""          # 段落/语气/用词总结
     reference_url: str = ""
-    source: str = "stub"       # preset | google | mp | sonar | url | manual | stub
+    source: str = "stub"       # google | mp | sonar | url | manual | discussion | stub
     is_default: bool = False
+    created_at: datetime = Field(default_factory=_now)
+
+
+class StyleDiscussion(SQLModel, table=True):
+    """与 AI 讨论某个写作风格的持久化会话。"""
+    id: int | None = Field(default=None, primary_key=True)
+    style_id: int = Field(foreign_key="style.id", index=True)
+    brand_id: int = Field(foreign_key="brand.id", index=True)
+    draft_name: str = ""       # 最近一版尚未应用的修改草案
+    draft_summary: str = ""
+    draft_reason: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+    last_applied_at: datetime | None = None
+
+    __table_args__ = (
+        Index("uq_stylediscussion_style", "style_id", unique=True),
+    )
+
+
+class StyleDiscussionMessage(SQLModel, table=True):
+    """风格 AI 讨论中的单条用户/助手消息。"""
+    id: int | None = Field(default=None, primary_key=True)
+    discussion_id: int = Field(foreign_key="stylediscussion.id", index=True)
+    role: str                  # user | assistant
+    content: str
+    created_at: datetime = Field(default_factory=_now)
+
+
+class StyleRevision(SQLModel, table=True):
+    """应用风格讨论草案前保存的前后版本，便于追溯。"""
+    id: int | None = Field(default=None, primary_key=True)
+    style_id: int = Field(foreign_key="style.id", index=True)
+    discussion_id: int | None = Field(default=None, foreign_key="stylediscussion.id")
+    previous_name: str
+    previous_summary: str
+    new_name: str
+    new_summary: str
+    change_reason: str = ""
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -70,6 +110,7 @@ class Article(SQLModel, table=True):
     reviewed_at: datetime | None = None  # 审核时间（首次审核时记录，不覆盖）
     ai_review_summary: str = ""  # AI 审核综合意见（动态角色审核完成后生成）
     writing_req: str = ""       # 本次生成时用户填写的写作要求（持久化供回溯）
+    image_generation_slot: int = -1  # 正在替换候选图的插图位置；-1 表示没有单 slot 替换任务
 
 
 class DebateRecord(SQLModel, table=True):
@@ -123,3 +164,9 @@ class WritingReq(SQLModel, table=True):
     brand_id: int = Field(foreign_key="brand.id", index=True)
     content: str                 # 写作要求正文
     created_at: datetime = Field(default_factory=_now)
+
+    # 写作要求是品牌级复用数据，同一品牌不允许保存完全相同的内容。
+    # 入库前由接口先做友好拦截，此索引负责兜底并发写入等场景。
+    __table_args__ = (
+        Index("uq_writingreq_brand_content", "brand_id", "content", unique=True),
+    )

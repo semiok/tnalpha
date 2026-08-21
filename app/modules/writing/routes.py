@@ -2,17 +2,22 @@
 
 边界：读② Topic(status='采纳')，写③ Article/Style；不回写 Topic.status。
 """
+import json
 import threading
 import os
 import re
+import shutil
+import time
+import uuid
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from starlette.requests import Request
 
-from app.core import auth, config, db, docparse, llm, sources, storage
+from app.core import auth, config, db, docparse, llm, storage
 from app.core.db import get_session
 from app.core.prompt_override import resolve
 from app.core.templates import create_templates
@@ -21,7 +26,21 @@ from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
 from app.modules.writing.debate import clean_llm_output, knowledge_context_block, rewrite_prompt, run_ai_review, run_debate, run_review
-from app.modules.writing.models import ARTICLE_STATUSES, PLATFORMS, STYLE_SOURCES, Article, ArticleImage, DebateRecord, Style, StyleDoc, WritingReq, _now
+from app.modules.writing.models import (
+    ARTICLE_STATUSES,
+    PLATFORMS,
+    STYLE_SOURCES,
+    Article,
+    ArticleImage,
+    DebateRecord,
+    Style,
+    StyleDiscussion,
+    StyleDiscussionMessage,
+    StyleDoc,
+    StyleRevision,
+    WritingReq,
+    _now,
+)
 
 router = APIRouter()
 templates = create_templates()
@@ -149,13 +168,15 @@ def _default_style(session: Session, brand_id: int) -> Style | None:
         select(Style).where(
             Style.brand_id == brand_id,
             Style.is_default == True,
+            Style.source != "preset",
         ).order_by(Style.id)
     ).first()
     if style is not None:
         return style
-    return session.exec(
-        select(Style).where(Style.brand_id == brand_id).order_by(Style.id)
-    ).first()
+    return session.exec(select(Style).where(
+        Style.brand_id == brand_id,
+        Style.source != "preset",
+    ).order_by(Style.id)).first()
 
 
 def _active_article_query():
@@ -170,37 +191,6 @@ def _article_title(text: str, fallback: str) -> str:
         if line.startswith("# "):
             return line[2:].strip() or fallback
     return fallback
-
-
-def _preset_prompt(brand: Brand, ctx: KnowledgeContext, count: int) -> str:
-    """基于品牌知识库预设可跨 campaign 复用的写作风格。"""
-    brand_prompt = ctx.brand_prompt or "（未设置）"
-    content_notes = ctx.content_notes or "（未设置）"
-    doc_digest = ctx.doc_digest or "（无）"
-    default = """你是写作风格预设器。请基于以下知识库信息，为品牌「{brand.name}」预设 {count} 个可长期复用的写作风格。
-
-【品牌调性】
-{brand_prompt}
-
-【内容要求】
-{content_notes}
-
-【品牌资料综合】
-{doc_digest}
-
-请预设 {count} 个差异化的写作风格，每个风格包含名称和总结。
-这些风格属于品牌公共风格库，不绑定具体 campaign，不要写入活动名称、时间节点或一次性素材。
-严格按以下格式输出，每个风格之间用空行分隔，不要输出思考过程、分析步骤或其他任何内容：
-
-名称：风格名称
-总结：对该风格的写作特征进行全面描述
-
-名称：另一个风格
-总结：...
-"""
-    return resolve("writing:preset_prompt", default,
-                   brand=brand, count=count,
-                   brand_prompt=brand_prompt, content_notes=content_notes, doc_digest=doc_digest)
 
 
 def _parse_styles(text: str) -> list[tuple[str, str]]:
@@ -230,6 +220,183 @@ def _parse_styles(text: str) -> list[tuple[str, str]]:
         if name and summary_lines:
             out.append((name[:80], "\n".join(summary_lines)))
     return out
+
+
+def _style_discussion_source_context(session: Session, style: Style) -> tuple[list[StyleDoc], str]:
+    """收集风格讨论需要的上传资料上下文，限制总长度避免撑爆 prompt。"""
+    docs = session.exec(
+        select(StyleDoc).where(StyleDoc.style_id == style.id)
+        .order_by(StyleDoc.created_at, StyleDoc.id)
+    ).all()
+    parts = []
+    for doc in docs:
+        text = (doc.extracted_text or "").strip()
+        note = (doc.note or "").strip()
+        block = [f"文件：{doc.filename}"]
+        if note:
+            block.append(f"用户说明：{note}")
+        block.append(f"解析文本：{text[:6000] if text else '（未提取到正文）'}")
+        parts.append("\n".join(block))
+    source_context = "\n\n".join(parts)[:18000]
+    if not source_context:
+        source_context = "（当前风格没有关联的上传文档；请以风格总结和参考链接为准。）"
+    return docs, source_context
+
+
+def _style_discussion_history(messages: list[StyleDiscussionMessage], limit: int = 12) -> str:
+    """保留最近对话并限制总字数，避免长回复让后续请求越来越慢。"""
+    labels = {"user": "用户", "assistant": "AI"}
+    recent = messages[-limit:]
+    if not recent:
+        return "（还没有历史对话）"
+    max_total_chars = 24000
+    max_message_chars = 5000
+    selected: list[str] = []
+    used = 0
+    for message in reversed(recent):
+        content = (message.content or "").strip()
+        if len(content) > max_message_chars:
+            content = (
+                content[:max_message_chars // 2]
+                + "\n……（本条较长，已截取中间内容）……\n"
+                + content[-max_message_chars // 2:]
+            )
+        item = f"{labels.get(message.role, message.role)}：{content}"
+        separator_chars = 2 if selected else 0
+        remaining = max_total_chars - used - separator_chars
+        if remaining <= 0:
+            break
+        if len(item) > remaining:
+            marker = "\n……（历史上下文已截断）"
+            item = item[:max(0, remaining - len(marker))] + marker[:remaining]
+        selected.append(item)
+        used += len(item) + separator_chars
+    return "\n\n".join(reversed(selected))
+
+
+def _style_discussion_prompt(style: Style, ctx: KnowledgeContext,
+                             source_context: str, history: str,
+                             user_message: str, draft_name: str = "",
+                             draft_summary: str = "") -> str:
+    """风格讨论 prompt：回答问题，并在合适时给出结构化修改草案。"""
+    default = """你是品牌写作风格顾问，正在和用户一起打磨一套可长期复用的品牌写作风格。
+
+你的任务是先理解用户想解决的问题，再给出具体、可执行的建议。不要擅自修改数据库；只有用户点击“应用到当前风格”后，修改才会生效。
+
+【品牌约束】
+- 品牌调性：{brand_prompt}
+- 内容要求：{content_notes}
+- 品牌资料综合：{doc_digest}
+
+【当前写作风格】
+- 名称：{style.name}
+- 总结：{style.summary}
+- 来源：{style.source}
+- 参考链接：{style.reference_url}
+
+【之前上传文件和解析内容】
+{source_context}
+
+【已有修改草案】
+- 名称：{draft_name}
+- 总结：{draft_summary}
+
+【最近对话】
+{history}
+
+【用户最新消息】
+{user_message}
+
+请用中文回答，重点讨论“为什么这样改、会带来什么取舍、如何避免失去原风格的核心特征”。
+如果用户只是提问或还没有明确要改什么，正常回答，不要强行生成修改稿。
+如果已经形成了明确的修改方案，请在回答末尾严格按以下格式输出完整修改草案：
+
+【修改后名称】
+新的风格名称
+
+【修改后总结】
+新的完整风格总结，必须可以直接注入文章生成 prompt
+
+【修改理由】
+说明改了什么、保留了什么、有什么取舍
+"""
+    return resolve(
+        "writing:style_discussion_prompt",
+        default,
+        style=style,
+        brand_prompt=ctx.brand_prompt or "（未设置）",
+        content_notes=ctx.content_notes or "（未设置）",
+        doc_digest=ctx.doc_digest or "（无）",
+        source_context=source_context,
+        history=history,
+        user_message=user_message,
+        draft_name=draft_name or "（暂无）",
+        draft_summary=draft_summary or "（暂无）",
+    )
+
+
+def _extract_style_discussion_section(text: str, marker: str, next_markers: tuple[str, ...]) -> str:
+    lines = (text or "").splitlines()
+    for index, line in enumerate(lines):
+        if marker not in line:
+            continue
+        first = line.split(marker, 1)[1].lstrip("：: ").strip()
+        values = [first] if first else []
+        for following in lines[index + 1:]:
+            if any(stop in following for stop in next_markers):
+                break
+            if following.strip():
+                values.append(following.strip())
+        return "\n".join(values).strip()
+    return ""
+
+
+def _parse_style_discussion_draft(text: str) -> tuple[str, str, str] | None:
+    """解析 AI 回复中的修改草案；普通问答没有完整三段时返回 None。"""
+    clean = clean_llm_output(text)
+    name = _extract_style_discussion_section(
+        clean, "【修改后名称】", ("【修改后总结】", "【修改理由】")
+    )
+    summary = _extract_style_discussion_section(
+        clean, "【修改后总结】", ("【修改后名称】", "【修改理由】")
+    )
+    reason = _extract_style_discussion_section(
+        clean, "【修改理由】", ("【修改后名称】", "【修改后总结】")
+    )
+    if name and summary:
+        return name[:120], summary[:12000], reason[:4000]
+    return None
+
+
+def _get_style_for_discussion(style_id: int, request: Request, session: Session) -> Style:
+    auth.require_level(request, 1)
+    style = session.get(Style, style_id)
+    brand = _first_brand(session)
+    if style is None or brand is None or style.brand_id != brand.id or style.source == "preset":
+        raise HTTPException(404, "风格不存在")
+    return style
+
+
+def _get_or_create_style_discussion(session: Session, style: Style) -> StyleDiscussion:
+    discussion = session.exec(
+        select(StyleDiscussion).where(StyleDiscussion.style_id == style.id)
+    ).first()
+    if discussion is not None:
+        return discussion
+    discussion = StyleDiscussion(style_id=style.id, brand_id=style.brand_id)
+    session.add(discussion)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        discussion = session.exec(
+            select(StyleDiscussion).where(StyleDiscussion.style_id == style.id)
+        ).first()
+        if discussion is None:
+            raise
+    else:
+        session.refresh(discussion)
+    return discussion
 
 
 def _extract_style_prompt(url: str, text: str) -> str:
@@ -303,21 +470,24 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
     }
     if status_filter not in (*STATUS_GROUPS, "全部"):
         status_filter = "全部"
-    tab = request.query_params.get("tab", "preset")
-    if tab not in ("preset", "library", "new"):
-        tab = "preset"
+    tab = request.query_params.get("tab", "library")
+    if tab not in ("library", "new"):
+        tab = "library"
     highlight_raw = request.query_params.get("highlight")
     try:
         highlight = int(highlight_raw) if highlight_raw else None
     except ValueError:
         highlight = None
+    style_sync = request.query_params.get("style_sync")
+    if style_sync not in ("applied", "created"):
+        style_sync = None
+    style_sync_id = request.query_params.get("style_sync_id")
     brand = _first_brand(session)
     topics: list[Topic] = []
     campaigns: list[Campaign] = []
     article_rows: list[dict] = []
     topic_articles: dict[int, list[Article]] = {}
     styles: list[Style] = []
-    preset_styles: list[Style] = []
     has_default_style = False
     if brand is not None:
         campaigns = session.exec(
@@ -361,11 +531,10 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
             article_rows.append({"article": article, "topic": topic, "records": records})
         all_styles = session.exec(
             select(Style)
-            .where(Style.brand_id == brand.id)
+            .where(Style.brand_id == brand.id, Style.source != "preset")
             .order_by(Style.is_default.desc(), Style.id)
         ).all()
-        preset_styles = [st for st in all_styles if st.source == "preset"]
-        styles = [st for st in all_styles if st.source != "preset"]
+        styles = all_styles
         has_default_style = any(st.is_default for st in all_styles)
         default_style = next((st for st in all_styles if st.is_default), None)
         # 手动上传历史文档（按上传时间倒序，供「手动上传」tab 展示）
@@ -403,13 +572,13 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         "article_statuses": ARTICLE_STATUSES,
         "status_filters": ("全部", "生成中", "待审核", "审核通过", "审核未通过", "已删除"),
         "styles": styles,
-        "preset_styles": preset_styles,
         "has_default_style": has_default_style,
         "default_style": default_style,
         "style_sources": STYLE_SOURCES,
-        "catalog": sources.catalog(),
         "tab": tab,
         "highlight": highlight,
+        "style_sync": style_sync,
+        "style_sync_id": style_sync_id,
         "level": getattr(request.state, "level", 0),
         "platforms": PLATFORMS,
         "style_docs": style_docs,
@@ -417,70 +586,6 @@ def writing_home(request: Request, session: Session = Depends(get_session)):
         "style_source_files": style_source_files,
         "writing_reqs": writing_reqs,
     })
-
-
-def _extract_from_hit_prompt(hit: dict) -> str:
-    """网络抓取风格提取 prompt：基于搜索命中（标题+摘要+URL）提炼可复用的写作风格。"""
-    title = (hit.get("title") or "").strip()
-    summary = (hit.get("summary") or "").strip()
-    url = (hit.get("url") or "").strip()
-    default = """请分析以下搜索结果内容，提炼出一个可复用的写作风格总结。
-
-【来源标题】
-{title}
-
-【来源摘要】
-{summary}
-
-【来源URL】
-{url}
-
-直接按以下格式输出，不要输出思考过程、分析步骤或其他任何内容：
-名称：用一个短语概括这种风格
-总结：对该风格的写作特征进行全面描述
-"""
-    return resolve("writing:extract_from_hit_prompt", default,
-                   title=title, summary=summary, url=url)
-
-
-@router.post("/writing/styles/capture")
-def capture_styles(request: Request, query: str = Form(""),
-                   source: list[str] = Form([]), count: int = Form(5),
-                   session: Session = Depends(get_session)):
-    """网络抓取：搜索引擎检索 → 每条命中经 LLM 提炼写作风格 → 入风格库（记录搜索来源）。"""
-    auth.require_level(request, 1)
-    brand = _first_brand(session)
-    if brand is None or brand.id is None:
-        raise HTTPException(404, "品牌不存在")
-    names = [s for s in source if s in sources.available()] or ["stub"]
-    q = query.strip() or f"{brand.name} 写作风格"
-    hits = sources.gather(names, q, per_source=max(1, min(count, 5))) or sources.search("stub", q)
-    existing_default = _default_style(session, brand.id) is not None
-    created = 0
-    failed = 0
-    for hit in hits[:max(1, min(count, 5))]:
-        try:
-            raw = llm.generate_text(_extract_from_hit_prompt(hit),
-                                    task="writing_style_capture", module="writing", fallback=False)
-        except RuntimeError:
-            failed += 1
-            continue
-        parsed = _parse_styles(raw)
-        if not parsed:
-            failed += 1
-            continue
-        name, summary = parsed[0]
-        session.add(Style(
-            brand_id=brand.id, name=name, summary=summary,
-            reference_url=(hit.get("url") or "").strip(),
-            source=(hit.get("source") or "stub").strip(),
-            is_default=(not existing_default and created == 0),
-        ))
-        created += 1
-    session.commit()
-    if created == 0:
-        raise HTTPException(502, f"网络抓取到 {len(hits)} 条结果，但 LLM 提取全部失败，请检查模型配置后重试")
-    return RedirectResponse("/writing", status_code=303)
 
 
 @router.post("/writing/styles/{style_id}/default")
@@ -523,53 +628,274 @@ def delete_style(style_id: int, request: Request, session: Session = Depends(get
     return RedirectResponse("/writing", status_code=303)
 
 
-@router.post("/writing/styles/preset")
-def preset_styles(request: Request, count: int = Form(8),
-                  session: Session = Depends(get_session)):
-    """基于品牌知识库生成可跨 campaign 复用的写作风格。
-
-    生成规则：总数凑足 8 个 preset。
-    - 若当前默认风格是 preset → 保留它，删其他 preset，生成 7 个新 preset（都不设默认）。
-    - 若默认风格不存在或非 preset → 删全部旧 preset，生成 8 个新 preset（都不设默认）。
-    """
-    auth.require_level(request, 1)
-    brand = _first_brand(session)
-    if brand is None or brand.id is None:
-        raise HTTPException(404, "品牌不存在")
-    # 找出真正的默认 preset（is_default=True 且 source="preset"），保留不动
-    kept_default = session.exec(
-        select(Style).where(
-            Style.brand_id == brand.id,
-            Style.is_default == True,
-            Style.source == "preset",
-        ).order_by(Style.id)
-    ).first()
-    # 删除该 Campaign 所有非保留的旧 preset
-    old_presets = session.exec(
-        select(Style).where(Style.brand_id == brand.id, Style.source == "preset")
+def _style_discussion_page_context(request: Request, session: Session,
+                                   style: Style, discussion: StyleDiscussion) -> dict:
+    docs, source_context = _style_discussion_source_context(session, style)
+    messages = session.exec(
+        select(StyleDiscussionMessage)
+        .where(StyleDiscussionMessage.discussion_id == discussion.id)
+        .order_by(StyleDiscussionMessage.created_at, StyleDiscussionMessage.id)
     ).all()
-    for p in old_presets:
-        if kept_default is None or p.id != kept_default.id:
-            session.delete(p)
+    return {
+        "request": request,
+        "style": style,
+        "discussion": discussion,
+        "messages": messages,
+        "source_docs": docs,
+        "source_context": source_context,
+        "style_sources": STYLE_SOURCES,
+    }
+
+
+@router.get("/writing/styles/{style_id}/discussion")
+def style_discussion(style_id: int, request: Request,
+                     session: Session = Depends(get_session)):
+    """打开某个写作风格的持久化 AI 讨论会话。"""
+    style = _get_style_for_discussion(style_id, request, session)
+    discussion = _get_or_create_style_discussion(session, style)
+    return templates.TemplateResponse(
+        request,
+        "writing/_style_discussion.html",
+        _style_discussion_page_context(request, session, style, discussion),
+    )
+
+
+@router.get("/writing/styles/{style_id}/discussion/page")
+def style_discussion_page(style_id: int, request: Request,
+                          session: Session = Depends(get_session)):
+    """以独立页面打开某个写作风格的持久化 AI 讨论会话。"""
+    style = _get_style_for_discussion(style_id, request, session)
+    discussion = _get_or_create_style_discussion(session, style)
+    context = _style_discussion_page_context(request, session, style, discussion)
+    context["full_page"] = True
+    return templates.TemplateResponse(request, "writing/style_discussion.html", context)
+
+
+@router.post("/writing/styles/{style_id}/discussion")
+def style_discussion_message(style_id: int, request: Request,
+                             message: str = Form(""),
+                             session: Session = Depends(get_session)):
+    """发送一条风格讨论消息，并持久化 AI 回复与修改草案。"""
+    style = _get_style_for_discussion(style_id, request, session)
+    message = (message or "").strip()
+    if not message:
+        raise HTTPException(400, "请输入想讨论的修改方向")
+    if len(message) > 4000:
+        raise HTTPException(400, "单条消息不能超过 4000 字")
+
+    discussion = _get_or_create_style_discussion(session, style)
+    user_message = StyleDiscussionMessage(
+        discussion_id=discussion.id,
+        role="user",
+        content=message,
+    )
+    session.add(user_message)
     session.commit()
-    # 需要新生成几个，凑足 count 个 preset
-    n = max(1, min(count - (1 if kept_default else 0), 20))
-    ctx = KnowledgeContext.load(session, brand.id)
-    prompt = _preset_prompt(brand, ctx, n)
+
+    messages = session.exec(
+        select(StyleDiscussionMessage)
+        .where(StyleDiscussionMessage.discussion_id == discussion.id)
+        .order_by(StyleDiscussionMessage.created_at, StyleDiscussionMessage.id)
+    ).all()
+    ctx = KnowledgeContext.load(session, style.brand_id)
+    _docs, source_context = _style_discussion_source_context(session, style)
+    prompt = _style_discussion_prompt(
+        style,
+        ctx,
+        source_context,
+        _style_discussion_history(messages),
+        message,
+        discussion.draft_name,
+        discussion.draft_summary,
+    )
     try:
-        raw = llm.generate_text(prompt, task="writing_style_preset", module="writing", fallback=False)
+        raw = llm.generate_text(
+            prompt,
+            task="style_discussion",
+            module="writing",
+            fallback=False,
+        )
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
-    parsed = _parse_styles(raw)
-    if not parsed:
-        raise HTTPException(502, "AI 未返回可识别的风格，请重试或检查模型配置")
-    for name, summary in parsed[:n]:
-        session.add(Style(
-            brand_id=brand.id, name=name, summary=summary,
-            source="preset", is_default=False,
-        ))
+
+    assistant_content = clean_llm_output(raw)
+    draft = _parse_style_discussion_draft(assistant_content)
+    if draft is not None:
+        discussion.draft_name, discussion.draft_summary, discussion.draft_reason = draft
+    discussion.updated_at = _now()
+    session.add(StyleDiscussionMessage(
+        discussion_id=discussion.id,
+        role="assistant",
+        content=assistant_content,
+    ))
+    session.add(discussion)
     session.commit()
-    return RedirectResponse("/writing", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "writing/_style_discussion.html",
+        _style_discussion_page_context(request, session, style, discussion),
+    )
+
+
+def _style_discussion_sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/writing/styles/{style_id}/discussion/stream")
+def style_discussion_stream(style_id: int, request: Request,
+                            message: str = Form(""),
+                            session: Session = Depends(get_session)):
+    """流式输出风格讨论；完整输出结束后才解析并保存修改草案。"""
+    style = _get_style_for_discussion(style_id, request, session)
+    message = (message or "").strip()
+    if not message:
+        raise HTTPException(400, "请输入想讨论的修改方向")
+    if len(message) > 4000:
+        raise HTTPException(400, "单条消息不能超过 4000 字")
+
+    discussion = _get_or_create_style_discussion(session, style)
+    session.add(StyleDiscussionMessage(
+        discussion_id=discussion.id,
+        role="user",
+        content=message,
+    ))
+    session.commit()
+    messages = session.exec(
+        select(StyleDiscussionMessage)
+        .where(StyleDiscussionMessage.discussion_id == discussion.id)
+        .order_by(StyleDiscussionMessage.created_at, StyleDiscussionMessage.id)
+    ).all()
+    ctx = KnowledgeContext.load(session, style.brand_id)
+    _docs, source_context = _style_discussion_source_context(session, style)
+    prompt = _style_discussion_prompt(
+        style,
+        ctx,
+        source_context,
+        _style_discussion_history(messages),
+        message,
+        discussion.draft_name,
+        discussion.draft_summary,
+    )
+
+    def generate_events():
+        chunks: list[str] = []
+        yield _style_discussion_sse("thinking", {})
+        try:
+            for chunk in llm.stream_text(
+                prompt,
+                task="style_discussion",
+                module="writing",
+                fallback=False,
+            ):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                yield _style_discussion_sse("delta", {"text": chunk})
+            assistant_content = clean_llm_output("".join(chunks))
+            if not assistant_content:
+                raise RuntimeError("AI 没有返回内容")
+            draft = _parse_style_discussion_draft(assistant_content)
+            if draft is not None:
+                discussion.draft_name, discussion.draft_summary, discussion.draft_reason = draft
+            discussion.updated_at = _now()
+            session.add(StyleDiscussionMessage(
+                discussion_id=discussion.id,
+                role="assistant",
+                content=assistant_content,
+            ))
+            session.add(discussion)
+            session.commit()
+            yield _style_discussion_sse("done", {
+                "has_draft": bool(discussion.draft_name and discussion.draft_summary),
+            })
+        except Exception as exc:
+            session.rollback()
+            yield _style_discussion_sse("error", {"message": str(exc)[:500]})
+
+    return StreamingResponse(
+        generate_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/writing/styles/{style_id}/discussion/apply")
+def apply_style_discussion(style_id: int, request: Request,
+                           session: Session = Depends(get_session)):
+    """把用户确认过的 AI 修改草案应用到原风格，并保存版本记录。"""
+    style = _get_style_for_discussion(style_id, request, session)
+    discussion = _get_or_create_style_discussion(session, style)
+    if not discussion.draft_name or not discussion.draft_summary:
+        raise HTTPException(400, "当前还没有可应用的修改草案")
+    session.add(StyleRevision(
+        style_id=style.id,
+        discussion_id=discussion.id,
+        previous_name=style.name,
+        previous_summary=style.summary,
+        new_name=discussion.draft_name,
+        new_summary=discussion.draft_summary,
+        change_reason=discussion.draft_reason,
+    ))
+    style.name = discussion.draft_name
+    style.summary = discussion.draft_summary
+    discussion.draft_name = ""
+    discussion.draft_summary = ""
+    discussion.draft_reason = ""
+    discussion.last_applied_at = _now()
+    discussion.updated_at = _now()
+    session.add(style)
+    session.add(discussion)
+    session.commit()
+    return RedirectResponse(
+        f"/writing?tab=library&highlight={style.id}&style_sync=applied&style_sync_id={style.id}",
+        status_code=303,
+    )
+
+
+@router.post("/writing/styles/{style_id}/discussion/save-as")
+def save_style_discussion_as_new(style_id: int, request: Request,
+                                 session: Session = Depends(get_session)):
+    """把 AI 修改草案另存为一个新风格，不改变当前风格。"""
+    style = _get_style_for_discussion(style_id, request, session)
+    discussion = _get_or_create_style_discussion(session, style)
+    if not discussion.draft_name or not discussion.draft_summary:
+        raise HTTPException(400, "当前还没有可保存的修改草案")
+    new_style = Style(
+        brand_id=style.brand_id,
+        name=discussion.draft_name,
+        summary=discussion.draft_summary,
+        reference_url=style.reference_url,
+        source="discussion",
+        is_default=False,
+    )
+    session.add(new_style)
+    session.commit()
+    session.refresh(new_style)
+    source_docs = session.exec(
+        select(StyleDoc).where(StyleDoc.style_id == style.id)
+    ).all()
+    for doc in source_docs:
+        copied_path = doc.file_path
+        if os.path.isfile(doc.file_path):
+            extension = os.path.splitext(doc.file_path)[1]
+            copied_path = os.path.join(
+                os.path.dirname(doc.file_path), f"{uuid.uuid4().hex}{extension}"
+            )
+            shutil.copy2(doc.file_path, copied_path)
+        session.add(StyleDoc(
+            brand_id=doc.brand_id,
+            style_id=new_style.id,
+            filename=doc.filename,
+            file_path=copied_path,
+            extracted_text=doc.extracted_text,
+            note=doc.note,
+        ))
+    if source_docs:
+        session.commit()
+    return RedirectResponse(
+        f"/writing?tab=library&highlight={new_style.id}&style_sync=created&style_sync_id={new_style.id}",
+        status_code=303,
+    )
 
 
 @router.post("/writing/styles/extract")
@@ -697,10 +1023,17 @@ def delete_style_doc(doc_id: int, request: Request,
     doc = session.get(StyleDoc, doc_id)
     if doc is None:
         raise HTTPException(404, "文档不存在")
-    try:
-        os.remove(doc.file_path)
-    except OSError:
-        pass
+    shared_path = session.exec(
+        select(StyleDoc.id).where(
+            StyleDoc.file_path == doc.file_path,
+            StyleDoc.id != doc.id,
+        )
+    ).first()
+    if shared_path is None:
+        try:
+            os.remove(doc.file_path)
+        except OSError:
+            pass
     session.delete(doc)
     session.commit()
     return RedirectResponse("/writing?tab=new", status_code=303)
@@ -775,9 +1108,26 @@ def save_writing_req(request: Request,
     content = (content or "").strip()
     if not content:
         raise HTTPException(400, "写作要求内容不能为空")
+
+    # 写作要求按品牌复用；首尾空白在上面已统一去除，因此同一条要求
+    # 重复点击保存或从不同入口保存时，都不会新增重复记录。
+    existing = session.exec(
+        select(WritingReq).where(
+            WritingReq.brand_id == brand.id,
+            WritingReq.content == content,
+        )
+    ).first()
+    if existing is not None:
+        return RedirectResponse("/writing", status_code=303)
+
     req = WritingReq(brand_id=brand.id, content=content)
     session.add(req)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # 唯一索引兜底并发请求：另一请求可能在查询后已经先提交。
+        session.rollback()
+        return RedirectResponse("/writing", status_code=303)
     session.refresh(req)
     return RedirectResponse("/writing", status_code=303)
 
@@ -797,7 +1147,7 @@ def delete_writing_req(req_id: int, request: Request,
 
 @router.post("/writing/topics/{topic_id}/generate")
 def generate_article(topic_id: int, request: Request,
-                      debate_rounds: int = Form(2), review_rounds: int = Form(2),
+                      debate_rounds: int = Form(0), review_rounds: int = Form(0),
                       platform: str = Form(""), word_count: int = Form(0),
                       ai_images: str = Form(""), use_experience: str = Form(""),
                       writing_req: str = Form(""),
@@ -1121,19 +1471,26 @@ def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
         lock.release()
 
 
-def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
-                             slot_desc: str, platform: str = "") -> None:
-    """配图子线程：为指定 slot 重新生成 4 张候选图。
+def _run_slot_batch_worker(article_id: int, topic_id: int,
+                           slot_specs: list[tuple[int, str, str]],
+                           platform: str = "",
+                           replace_after_generation: bool = True) -> None:
+    """配图子线程：串行完成一批 slot，再统一结算文章状态。
 
-    清理该 slot 的旧候选图，保留其他 slot 的图。
-    用 minimax n 参数批量生成 4 张（1 次 API 调用）。
+    同一文章的多个插图不能各自启动 worker：单个 worker 完成时，其他 slot
+    可能仍保留 4 张旧图，按候选图数量判断会把文章错误地提前标成「待审核」。
+    这里由一个 worker 持有文章锁，逐个处理整批 slot，所有 slot 完成后才结算
+    「待审核/待配图」状态。新候选图不足 4 张时不替换旧图，保证可以回退。
+
+    ``slot_specs`` 中每项为 ``(slot_index, slot_desc, prompt_override)``。
     """
     lock = _get_article_lock(article_id)
-    if not lock.acquire(blocking=False):
-        return  # 该文章已有配图 worker 在跑，跳过
+    lock.acquire()
     try:
         from sqlmodel import Session as SMSession
         with SMSession(db.engine) as s:
+            article = None
+            errors: list[str] = []
             try:
                 article = s.get(Article, article_id)
                 topic = s.get(Topic, topic_id)
@@ -1144,50 +1501,88 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
                 ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
                 style = _default_style(s, topic.brand_id)
 
-                # 清理该 slot 的旧候选图
-                old_imgs = s.exec(
-                    select(ArticleImage).where(
-                        ArticleImage.article_id == article_id,
-                        ArticleImage.slot_index == slot_index,
-                    )
-                ).all()
-                for oi in old_imgs:
-                    s.delete(oi)
-                s.commit()
+                for slot_index, slot_desc, prompt_override in slot_specs:
+                    old_imgs = s.exec(
+                        select(ArticleImage).where(
+                            ArticleImage.article_id == article_id,
+                            ArticleImage.slot_index == slot_index,
+                        )
+                    ).all()
+                    img_p = (prompt_override or "").strip() or _image_prompt_for_slot(
+                        topic, ctx, style, slot_desc, article.body, platform)
+                    image_provider, image_model = llm.image_model_info("writing")
+                    try:
+                        urls = llm.generate_images(img_p, module="writing", n=4, fallback=False)
+                        urls = list(urls or [])
+                        if replace_after_generation and len(urls) < 4:
+                            raise RuntimeError(
+                                f"图片服务只返回 {len(urls)} 张候选图，需要完整返回 4 张后再替换"
+                            )
+                        # 只有候选图准备好后才删除旧图；部分返回或异常均可回退。
+                        for oi in old_imgs:
+                            s.delete(oi)
+                        for candidate_idx, url in enumerate(urls[:4]):
+                            # 默认选中第 0 张：AI 给默认选择，用户不换 = 默认认可
+                            s.add(ArticleImage(
+                                article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
+                                slot_index=slot_index, slot_desc=slot_desc,
+                                is_selected=(candidate_idx == 0),
+                                image_provider=image_provider,
+                                image_model=image_model,
+                            ))
+                        s.commit()
+                    except Exception as exc:
+                        s.rollback()
+                        errors.append(f"插图位置 {slot_index + 1}：{str(exc)[:180]}")
+                        continue
 
-                img_p = _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, platform)
-                image_provider, image_model = llm.image_model_info("writing")
-                try:
-                    urls = llm.generate_images(img_p, module="writing", n=4, fallback=False)
-                except RuntimeError:
-                    urls = []
-                for candidate_idx, url in enumerate(urls):
-                    # 默认选中第 0 张：AI 给默认选择，用户不换 = 默认认可
-                    s.add(ArticleImage(
-                        article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
-                        slot_index=slot_index, slot_desc=slot_desc,
-                        is_selected=(candidate_idx == 0),
-                        image_provider=image_provider,
-                        image_model=image_model,
-                    ))
-                s.commit()
-
-                # 单 slot 重生后：若所有 slot 满 4 张 → 待审核；否则保持待配图
+                # 只有整批 slot 都处理完后才统一结算状态，避免第一项完成时提前进入待审核。
+                article = s.get(Article, article_id)
+                if article is None:
+                    return
                 all_imgs = s.exec(
                     select(ArticleImage).where(ArticleImage.article_id == article_id)
                 ).all()
-                if _all_image_slots_full(article.body, all_imgs):
+                if errors and len(slot_specs) == 1 and replace_after_generation:
+                    # 保持单 slot 旧逻辑：即使旧候选图不足 4 张，失败时也回到待审核供用户查看回退图。
                     article.status = "待审核"
+                elif _all_image_slots_full(article.body, all_imgs):
+                    article.status = "待审核"
+                else:
+                    article.status = "待配图"
+                article.error_message = "；".join(errors)[:400]
+                article.image_generation_slot = -1
                 article.updated_at = _now()
                 s.add(article)
                 s.commit()
 
             except Exception as exc:
                 s.rollback()
-                # 单 slot 失败不影响整体，记日志即可（article 状态不变）
-                print(f"[single-slot-worker] article={article_id} slot={slot_index} 失败: {exc}", flush=True)
+                article = s.get(Article, article_id)
+                if article:
+                    article.status = "待审核"
+                    article.error_message = f"插图候选生成失败：{str(exc)[:400]}"
+                    article.image_generation_slot = -1
+                    article.updated_at = _now()
+                    s.add(article)
+                    s.commit()
+                print(f"[slot-batch-worker] article={article_id} 失败: {exc}", flush=True)
     finally:
         lock.release()
+
+
+def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
+                             slot_desc: str, platform: str = "",
+                             prompt_override: str = "",
+                             replace_after_generation: bool = False) -> None:
+    """兼容单 slot 调用，实际仍走批处理 worker 的统一结算逻辑。"""
+    _run_slot_batch_worker(
+        article_id,
+        topic_id,
+        [(slot_index, slot_desc, prompt_override)],
+        platform,
+        replace_after_generation,
+    )
 
 
 def _display_phase_for_article(article: Article) -> str | None:
@@ -1236,6 +1631,7 @@ def _article_detail_fragment(request: Request, article: Article, topic: Topic,
         "article_body_clean": "",
         "body_segments": [],
         "force_editing": force_editing,
+        "image_generation_slot": getattr(article, "image_generation_slot", -1),
     }
     # 待配图 / 待审核：装载全部候选图（供换选/重生）+ 图文混排切片
     if article.status in ("待配图", "待审核"):
@@ -1326,6 +1722,7 @@ def article_detail(article_id: int, request: Request, session: Session = Depends
         "article_body_clean": "",
         "body_segments": [],
         "force_editing": False,
+        "image_generation_slot": getattr(article, "image_generation_slot", -1),
     }
     if article.status in ("待配图", "待审核"):
         images = session.exec(
@@ -1388,6 +1785,38 @@ def article_detail(article_id: int, request: Request, session: Session = Depends
     return templates.TemplateResponse(request, "writing/article_detail.html", ctx)
 
 
+@router.get("/writing/articles/{article_id}/ai-edit/page")
+def ai_edit_page(article_id: int, request: Request,
+                 session: Session = Depends(get_session)):
+    """AI 修改工作台：独立页面承载选区上下文、交互记录和修改预览。"""
+    article = _require_ai_edit_article(article_id, request, session)
+    topic = session.get(Topic, article.topic_id)
+    if topic is None:
+        raise HTTPException(404, "来源选题不存在")
+    campaigns = session.exec(
+        select(Campaign).where(Campaign.brand_id == topic.brand_id)
+    ).all()
+    campaign_name = {c.id: c.name for c in campaigns}.get(
+        topic.campaign_id, "品牌常青")
+    workbench = {
+        "articleId": article.id,
+        "articleUrl": f"/writing/articles/{article.id}",
+        "title": article.title or "",
+        "body": article.body or "",
+        "topicTitle": topic.title or "",
+        "campaignName": campaign_name,
+    }
+    # <script> / Alpine 表达式中不直接插入可执行的用户内容。
+    workbench_json = json.dumps(workbench, ensure_ascii=False).replace("<", "\\u003c")
+    return templates.TemplateResponse(request, "writing/ai_edit.html", {
+        "request": request,
+        "article": article,
+        "topic": topic,
+        "campaign_name": campaign_name,
+        "workbench_json": workbench_json,
+    })
+
+
 @router.get("/writing/articles/{article_id}/generate-status")
 def generate_status(article_id: int, request: Request, session: Session = Depends(get_session)):
     """HTMX 轮询（列表用）：返回简洁列表项，正在生成的继续轮询，已完成的停止。"""
@@ -1402,7 +1831,8 @@ def generate_status(article_id: int, request: Request, session: Session = Depend
 
 
 @router.get("/writing/articles/{article_id}/detail-status")
-def detail_status(article_id: int, request: Request, session: Session = Depends(get_session)):
+def detail_status(article_id: int, request: Request, force_editing: bool = False,
+                  session: Session = Depends(get_session)):
     """HTMX 轮询（详情页用）：辩论/写作/重写中 → 更新辩论过程；待配图 → 选图界面；待审核 → 最终文章+换选。"""
     article = session.get(Article, article_id)
     if article is None:
@@ -1411,7 +1841,8 @@ def detail_status(article_id: int, request: Request, session: Session = Depends(
     if topic is None:
         return RedirectResponse("/writing", status_code=303)
     campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all()
-    return _article_detail_fragment(request, article, topic, campaigns, session)
+    return _article_detail_fragment(request, article, topic, campaigns, session,
+                                     force_editing=force_editing)
 
 
 @router.get("/writing/uploads/{rel_path:path}")
@@ -1595,6 +2026,7 @@ def regenerate_images(article_id: int, request: Request, session: Session = Depe
         session.delete(oi)
     article.status = "待配图"
     article.error_message = ""
+    article.image_generation_slot = -1
     article.updated_at = _now()
     session.add(article)
     session.commit()
@@ -1638,6 +2070,190 @@ def regenerate_missing_images(article_id: int, request: Request, session: Sessio
     return RedirectResponse(f"/writing/articles/{article_id}", status_code=303)
 
 
+def _image_prompt_context_for_slot(body: str, slot_desc: str) -> str:
+    """提取插图位置前后的文章语境，供提示词优化模型理解画面用途。"""
+    pattern = re.compile(r"\[插图(?:位|位置)?[：:]" + re.escape(slot_desc) + r"\]")
+    match = pattern.search(body or "")
+    if not match:
+        return (body or "")[:400]
+    return (body[max(0, match.start() - 260):match.end() + 260]).strip()
+
+
+def _current_slot_image_prompt(session: Session, article: Article,
+                               topic: Topic, slot_index: int,
+                               slot_desc: str) -> str:
+    """取得当前插图提示词；手动上传图片没有提示词时按文章语境生成一个基准提示词。"""
+    image = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article.id,
+            ArticleImage.slot_index == slot_index,
+        ).order_by(ArticleImage.is_selected.desc(), ArticleImage.id)
+    ).first()
+    if image and image.prompt and image.prompt != "手动上传":
+        return image.prompt.strip()
+    ctx = KnowledgeContext.load(session, topic.brand_id, topic.campaign_id)
+    style = _default_style(session, topic.brand_id)
+    return _image_prompt_for_slot(topic, ctx, style, slot_desc, article.body, article.platform)
+
+
+@router.post("/writing/articles/{article_id}/slots/{slot_index}/optimize-prompt/stream")
+def optimize_slot_prompt_stream(article_id: int, slot_index: int, request: Request,
+                                slot_desc: str = Form(""),
+                                current_prompt: str = Form(""),
+                                instruction: str = Form(""),
+                                conversation: str = Form("[]"),
+                                session: Session = Depends(get_session)):
+    """为单个插图位置优化提示词；只返回提示词，不生成或替换图片。"""
+    article = _require_ai_edit_article(article_id, request, session)
+    topic = session.get(Topic, article.topic_id)
+    if topic is None:
+        raise HTTPException(404, "来源选题不存在")
+    resolved_desc = _slot_desc(article, slot_index, session) or (slot_desc or "文章配图")
+    resolved_prompt = (current_prompt or "").strip() or _current_slot_image_prompt(
+        session, article, topic, slot_index, resolved_desc)
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise HTTPException(400, "请先填写提示词优化要求")
+    if len(instruction) > 2000:
+        raise HTTPException(400, "提示词优化要求过长，请压缩到 2000 字以内")
+    history = _parse_ai_edit_conversation(conversation)
+    history_block = ""
+    if history:
+        history_block = "【此前的提示词优化对话】\n" + "\n\n".join(
+            ("用户：" if item["role"] == "user" else "AI：") + item["text"]
+            for item in history
+        ) + "\n\n"
+    image_context = _image_prompt_context_for_slot(article.body, resolved_desc)
+    prompt = f"""你是 TN-Alpha 的插图提示词编辑助手。
+
+【本次优化要求】
+{instruction}
+
+【插图位置描述】
+{resolved_desc}
+
+【当前插图提示词】
+{resolved_prompt}
+
+【文章语境】
+{image_context}
+
+{history_block}【输出要求】
+1. 只输出一条可直接用于生成图片的中文提示词。
+2. 保留当前画面的主体、构图和文章事实，除非用户明确要求改变。
+3. 只根据用户本次要求优化，不要输出分析、解释、前后对比或 Markdown。
+4. 不要生成图片，不要输出“提示词：”等前缀。
+5. 最终提示词控制在 1200 字以内。
+"""
+
+    def generate_events():
+        yield _ai_edit_sse("thinking", {})
+        for attempt in range(2):
+            chunks: list[str] = []
+            if attempt:
+                yield _ai_edit_sse("retry", {"message": "提示词过长或未得到最终结果，正在自动重试…"})
+            try:
+                attempt_prompt = prompt
+                if attempt:
+                    attempt_prompt += "\n\n【严格重试要求】只输出最终的一条中文图片提示词，不要输出任何分析或解释，长度不超过 1200 字。"
+                for chunk in llm.stream_text(
+                    attempt_prompt, task="writing_image_prompt_edit", module="writing", fallback=False
+                ):
+                    if chunk:
+                        chunks.append(chunk)
+                        yield _ai_edit_sse("delta", {"text": chunk})
+                proposed = clean_llm_output("".join(chunks))
+                for prefix in ("提示词：", "新提示词：", "Prompt:"):
+                    if proposed.startswith(prefix):
+                        proposed = proposed[len(prefix):].strip()
+                if not proposed:
+                    raise HTTPException(502, "AI 没有返回可用的图片提示词")
+                if len(proposed) > 1200:
+                    raise HTTPException(502, "AI 返回的图片提示词过长")
+                yield _ai_edit_sse("done", {
+                    "original": resolved_prompt,
+                    "proposed": proposed,
+                    "slot_index": slot_index,
+                    "slot_desc": resolved_desc,
+                })
+                return
+            except HTTPException as exc:
+                if exc.status_code == 502 and attempt == 0:
+                    continue
+                message = str(exc.detail)
+                if exc.status_code == 502:
+                    message = "AI 未返回合适的图片提示词，已自动重试 1 次，请点击重新生成。"
+                yield _ai_edit_sse("error", {"message": message})
+                return
+            except Exception as exc:
+                yield _ai_edit_sse("error", {"message": str(exc)[:500]})
+                return
+
+    return StreamingResponse(
+        generate_events(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/writing/articles/{article_id}/slots/{slot_index}/regenerate-with-prompt")
+def regenerate_slot_with_prompt(article_id: int, slot_index: int, request: Request,
+                                prompt: str = Form(""),
+                                session: Session = Depends(get_session)):
+    """用用户确认后的新提示词生成候选图，成功后整体替换该位置的旧候选图。"""
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "待审核":
+        if article.status == "待配图":
+            raise HTTPException(409, "该文章正在生成配图，请等待当前候选图生成完成")
+        raise HTTPException(400, "只有待审核文章可以优化插图")
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise HTTPException(400, "图片提示词不能为空")
+    slot_desc = _slot_desc(article, slot_index, session)
+    if not slot_desc:
+        raise HTTPException(400, f"插图位置 {slot_index + 1} 不存在")
+    # 不提前删除旧候选图：worker 只有在新图生成成功后才会原子替换，失败时可回退。
+    article.status = "待配图"
+    article.error_message = ""
+    article.image_generation_slot = slot_index
+    article.updated_at = _now()
+    session.add(article)
+    session.commit()
+    threading.Thread(
+        target=_run_single_slot_worker,
+        args=(article_id, article.topic_id, slot_index, slot_desc, article.platform, prompt, True),
+        daemon=True,
+    ).start()
+    return JSONResponse({"started": True, "slot_index": slot_index, "prompt": prompt})
+
+
+@router.get("/writing/articles/{article_id}/slots/{slot_index}/generation-status")
+def slot_generation_status(article_id: int, slot_index: int, request: Request,
+                           prompt: str = "",
+                           session: Session = Depends(get_session)):
+    """查询某个新提示词候选图是否生成完成。"""
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    images = session.exec(
+        select(ArticleImage).where(
+            ArticleImage.article_id == article_id,
+            ArticleImage.slot_index == slot_index,
+        )
+    ).all()
+    matched = [img for img in images if prompt and img.prompt == prompt]
+    failed = bool(article.error_message and article.status == "待审核")
+    return JSONResponse({
+        "ready": bool(matched) and article.status == "待审核",
+        "failed": failed,
+        "error": article.error_message or "",
+        "count": len(matched),
+    })
+
+
 @router.post("/writing/articles/{article_id}/slots/{slot_index}/regenerate")
 def regenerate_slot(article_id: int, slot_index: int, request: Request,
                     session: Session = Depends(get_session)):
@@ -1665,25 +2281,21 @@ def regenerate_slot(article_id: int, slot_index: int, request: Request,
         if existing is None:
             raise HTTPException(400, f"插图位置 {slot_index + 1} 不存在")
         slot_desc = existing.slot_desc or "文章配图"
-    old_imgs = session.exec(
-        select(ArticleImage).where(
-            ArticleImage.article_id == article_id,
-            ArticleImage.slot_index == slot_index,
-        )
-    ).all()
-    for oi in old_imgs:
-        session.delete(oi)
+    # 与提示词优化保持一致：生成成功后再替换旧候选图，失败时保留旧图。
+    article.status = "待配图"
+    article.error_message = ""
+    article.image_generation_slot = slot_index
     article.updated_at = _now()
     session.add(article)
     session.commit()
     # 启动子线程异步重生该 slot
     t = threading.Thread(
         target=_run_single_slot_worker,
-        args=(article_id, article.topic_id, slot_index, slot_desc, article.platform),
+        args=(article_id, article.topic_id, slot_index, slot_desc, article.platform, "", True),
         daemon=True,
     )
     t.start()
-    # 立即返回当前详情片段（旧图已被清理，新图生成中，轮询会自动补上）
+    # 立即返回当前详情片段；旧图仍可展示，轮询会自动补上新候选图。
     if request.headers.get("HX-Request") == "true":
         topic = session.get(Topic, article.topic_id)
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []
@@ -1896,9 +2508,684 @@ def _reindex_slots_by_body(session: Session, article: Article) -> None:
     session.commit()
 
 
+def _ai_edit_slot_descriptions(body: str) -> list[str]:
+    """返回正文中插图标记的描述，供 AI 修改前后做结构校验。"""
+    return [desc for _pos, desc in _parse_image_slots(body)]
+
+
+def _remove_ai_edit_slot_markers(body: str, indexes: set[int]) -> str:
+    """移除用户明确选择删除的插图标记，按原始 slot 索引从后往前处理。"""
+    if not indexes:
+        return body
+    pattern = re.compile(r'\[插图(?:位|位置)?[：:](.+?)\]')
+    matches = list(pattern.finditer(body))
+    for index in sorted(indexes, reverse=True):
+        if 0 <= index < len(matches):
+            match = matches[index]
+            body = body[:match.start()] + body[match.end():]
+    return body
+
+
+def _mask_image_slots_for_ai(body: str) -> str:
+    """给选中模式提供上下文时隐藏插图标记，避免模型把结构标记复制进结果。"""
+    return re.sub(
+        r'\[插图(?:位|位置)?[：:].+?\]',
+        "[此处保留插图位置，不要输出此占位符]",
+        body,
+    )
+
+
+def _ai_edit_image_changes(before: str, after: str) -> list[dict]:
+    """比较修改前后的插图槽位，生成供前端确认的图片变化清单。"""
+    before_slots = _ai_edit_slot_descriptions(before)
+    after_slots = _ai_edit_slot_descriptions(after)
+    changes: list[dict] = []
+    max_slots = max(len(before_slots), len(after_slots))
+    for index in range(max_slots):
+        old_desc = before_slots[index] if index < len(before_slots) else ""
+        new_desc = after_slots[index] if index < len(after_slots) else ""
+        if old_desc and new_desc and old_desc == new_desc:
+            continue
+        if old_desc and new_desc:
+            changes.append({
+                "index": index,
+                "kind": "updated",
+                "old_desc": old_desc,
+                "new_desc": new_desc,
+                "action": "regenerate",
+            })
+        elif old_desc:
+            changes.append({
+                "index": index,
+                "kind": "removed",
+                "old_desc": old_desc,
+                "new_desc": "",
+                "action": "remove",
+            })
+        else:
+            changes.append({
+                "index": index,
+                "kind": "added",
+                "old_desc": "",
+                "new_desc": new_desc,
+                "action": "regenerate",
+            })
+    return changes
+
+
+def _parse_ai_image_actions(raw: str | list | None) -> dict[int, dict]:
+    """解析用户对插图变化的选择，只接受当前正文保存需要的有限动作。"""
+    if not raw:
+        return {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(400, "插图处理选项格式不正确") from exc
+    if not isinstance(raw, list):
+        raise HTTPException(400, "插图处理选项格式不正确")
+    actions: dict[int, dict] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0:
+            continue
+        action = item.get("action") or "keep"
+        if action not in ("keep", "regenerate", "remove"):
+            raise HTTPException(400, "插图处理动作不合法")
+        actions[index] = {"action": action, "kind": item.get("kind", "")}
+    return actions
+
+
+def _apply_article_body_image_changes(session: Session, article: Article,
+                                      old_body: str, new_body: str,
+                                      requested_actions: dict[int, dict]) -> list[int]:
+    """保存正文后重排插图，并返回需要异步重生成的 slot。"""
+    old_slots = _ai_edit_slot_descriptions(old_body)
+    raw_new_slots = _ai_edit_slot_descriptions(new_body)
+    remove_indexes = {
+        index for index in range(len(raw_new_slots))
+        if requested_actions.get(index, {}).get("action") == "remove"
+    }
+    if remove_indexes:
+        new_body = _remove_ai_edit_slot_markers(new_body, remove_indexes)
+        article.body = new_body
+        session.add(article)
+    new_slots = _ai_edit_slot_descriptions(new_body)
+    action_by_new_index: dict[int, dict] = {}
+    raw_index_by_new_index: dict[int, int] = {}
+    filtered_index = 0
+    for raw_index in range(len(raw_new_slots)):
+        if raw_index in remove_indexes:
+            continue
+        raw_index_by_new_index[filtered_index] = raw_index
+        if raw_index in requested_actions:
+            action_by_new_index[filtered_index] = requested_actions[raw_index]
+        filtered_index += 1
+    images = session.exec(
+        select(ArticleImage).where(ArticleImage.article_id == article.id)
+        .order_by(ArticleImage.slot_index, ArticleImage.id)
+    ).all()
+    by_slot: dict[int, list[ArticleImage]] = {}
+    for image in images:
+        by_slot.setdefault(image.slot_index, []).append(image)
+
+    # 优先按原描述匹配；描述被 AI 改写时，再按同位置回退匹配。
+    desc_to_slots: dict[str, list[int]] = {}
+    for old_index in sorted(by_slot):
+        desc = by_slot[old_index][0].slot_desc or ""
+        desc_to_slots.setdefault(desc, []).append(old_index)
+    mapped: dict[int, int] = {}
+    used_old: set[int] = set()
+    for new_index, new_desc in enumerate(new_slots):
+        for old_index in desc_to_slots.get(new_desc, []):
+            if old_index not in used_old:
+                mapped[new_index] = old_index
+                used_old.add(old_index)
+                break
+    for new_index, new_desc in enumerate(new_slots):
+        if new_index in mapped:
+            continue
+        action_info = action_by_new_index.get(new_index, {})
+        if action_info.get("kind") == "added":
+            continue
+        raw_index = raw_index_by_new_index.get(new_index, new_index)
+        if raw_index < len(old_slots) and raw_index in by_slot and raw_index not in used_old:
+            mapped[new_index] = raw_index
+            used_old.add(raw_index)
+
+    regenerate: list[int] = []
+    for new_index, new_desc in enumerate(new_slots):
+        old_index = mapped.get(new_index)
+        slot_images = by_slot.get(old_index, []) if old_index is not None else []
+        action_info = action_by_new_index.get(new_index, {})
+        action = action_info.get("action", "keep")
+        if action == "regenerate" or (old_index is None and new_index not in action_by_new_index):
+            for image in slot_images:
+                image.slot_index = new_index
+                image.slot_desc = new_desc
+                session.add(image)
+            regenerate.append(new_index)
+            continue
+        for image in slot_images:
+            image.slot_index = new_index
+            image.slot_desc = new_desc
+            session.add(image)
+
+    # 正文中删除的旧插图位置，连同对应候选图一起清理。
+    for old_index, slot_images in by_slot.items():
+        if old_index not in used_old:
+            for image in slot_images:
+                session.delete(image)
+
+    if regenerate:
+        article.status = "待配图"
+        article.error_message = ""
+        article.image_generation_slot = regenerate[0] if len(regenerate) == 1 else -1
+        article.updated_at = _now()
+        session.add(article)
+    session.commit()
+    if len(regenerate) == 1:
+        slot_index = regenerate[0]
+        slot_desc = new_slots[slot_index]
+        t = threading.Thread(
+            target=_run_single_slot_worker,
+            args=(article.id, article.topic_id, slot_index, slot_desc, article.platform, "", True),
+            daemon=True,
+        )
+        t.start()
+    elif regenerate:
+        slot_specs = [(slot_index, new_slots[slot_index], "") for slot_index in regenerate]
+        t = threading.Thread(
+            target=_run_slot_batch_worker,
+            args=(article.id, article.topic_id, slot_specs, article.platform, True),
+            daemon=True,
+        )
+        t.start()
+    return regenerate
+
+
+def _find_ai_edit_selection(source_body: str, selected_text: str,
+                            selection_start: int = -1,
+                            selection_end: int = -1) -> tuple[int, int] | None:
+    """定位浏览器选区，优先使用前端传来的偏移，避免重复文本总命中第一处。"""
+    if (
+        selection_start >= 0
+        and selection_end == selection_start + len(selected_text)
+        and selection_end <= len(source_body)
+        and source_body[selection_start:selection_end] == selected_text
+    ):
+        return selection_start, selection_end
+
+    exact_matches: list[int] = []
+    cursor = source_body.find(selected_text)
+    while cursor >= 0:
+        exact_matches.append(cursor)
+        cursor = source_body.find(selected_text, cursor + 1)
+    if len(exact_matches) == 1:
+        return exact_matches[0], exact_matches[0] + len(selected_text)
+    if len(exact_matches) > 1:
+        return None
+
+    def normalize(value: str) -> tuple[str, list[int]]:
+        chars: list[str] = []
+        positions: list[int] = []
+        for index, char in enumerate(value):
+            if char.isspace():
+                if chars and chars[-1] != " ":
+                    chars.append(" ")
+                    positions.append(index)
+                continue
+            chars.append(char)
+            positions.append(index)
+        if chars and chars[-1] == " ":
+            chars.pop()
+            positions.pop()
+        return "".join(chars), positions
+
+    normalized_source, source_positions = normalize(source_body)
+    normalized_selected, _ = normalize(selected_text)
+    if not normalized_selected:
+        return None
+    normalized_matches: list[int] = []
+    cursor = normalized_source.find(normalized_selected)
+    while cursor >= 0:
+        normalized_matches.append(cursor)
+        cursor = normalized_source.find(normalized_selected, cursor + 1)
+    if len(normalized_matches) != 1 or not source_positions:
+        return None
+    normalized_start = normalized_matches[0]
+    normalized_end = normalized_start + len(normalized_selected) - 1
+    return source_positions[normalized_start], source_positions[normalized_end] + 1
+
+
+def _ai_edit_context_excerpt(source: str, selected_text: str,
+                             radius: int = 420) -> str:
+    """返回选区附近的可读上下文，供 AI 修改工作台展示。"""
+    source = (source or "").replace("\r\n", "\n").replace("\r", "\n")
+    selected_text = (selected_text or "").strip()
+    if not source:
+        return ""
+    if not selected_text:
+        return source[: radius * 2]
+    span = _find_ai_edit_selection(source, selected_text)
+    if span is None:
+        return source[: radius * 2]
+    start, end = span
+    excerpt_start = max(0, start - radius)
+    excerpt_end = min(len(source), end + radius)
+    excerpt = source[excerpt_start:excerpt_end].strip()
+    if excerpt_start > 0:
+        excerpt = "…" + excerpt
+    if excerpt_end < len(source):
+        excerpt += "…"
+    return excerpt
+
+
+def _build_article_edit_context(session: Session, article: Article, topic: Topic) -> tuple[KnowledgeContext, Style | None, str]:
+    """组装文章 AI 修改所需的知识、风格和经验上下文。"""
+    ctx = KnowledgeContext.load(session, topic.brand_id, topic.campaign_id)
+    style = session.get(Style, article.style_id) if article.style_id else _default_style(session, topic.brand_id)
+    writing_experience = campaign_experience_context(
+        session,
+        topic.brand_id,
+        topic.campaign_id,
+        platform=article.platform,
+        task="writing",
+        inherited_packs=ctx.pool_experiences,
+    )
+    return ctx, style, writing_experience
+
+
+def _parse_ai_edit_conversation(raw: str | list | None) -> list[dict[str, str]]:
+    """解析本次弹窗会话，避免把无效或过大的历史记录送入模型。"""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(400, "AI 对话记录格式不正确") from exc
+    if not isinstance(raw, list):
+        raise HTTPException(400, "AI 对话记录格式不正确")
+
+    messages: list[dict[str, str]] = []
+    total_chars = 0
+    for item in raw[-12:]:
+        if not isinstance(item, dict) or item.get("role") not in ("user", "assistant"):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        text = text[:6000]
+        remaining = 16000 - total_chars
+        if remaining <= 0:
+            break
+        text = text[:remaining]
+        target = item.get("target") if item.get("target") in ("body", "title") else "body"
+        messages.append({"role": item["role"], "text": text, "target": target})
+        total_chars += len(text)
+    return messages
+
+
+def _ai_edit_selection_output_limit(selected_text: str) -> int:
+    """给选区修改设置合理的输出上限，避免模型把整篇文章当成替换结果返回。"""
+    # 允许润色、扩写带来的自然增长，但小选区不能无限膨胀；大选区也保留绝对上限。
+    return max(240, min(4000, len((selected_text or '').strip()) * 6))
+
+
+def _prepare_ai_edit_prompt(session: Session, article: Article, scope: str,
+                            target: str, body: str, title: str, selected_text: str,
+                            instruction: str,
+                            conversation: str | list | None = None,
+                            selection_start: int = -1,
+                            selection_end: int = -1) -> dict:
+    """校验 AI 修改输入并组装 prompt；同步和流式接口共用。"""
+    if scope not in ("selection", "article"):
+        raise HTTPException(400, "修改范围不合法")
+    if target not in ("body", "title"):
+        raise HTTPException(400, "修改对象不合法")
+    if target == "title" and scope != "selection":
+        raise HTTPException(400, "标题只支持选中修改")
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise HTTPException(400, "请先填写修改要求")
+    if len(instruction) > 3000:
+        raise HTTPException(400, "修改要求过长，请压缩到 3000 字以内")
+
+    source_body = (body or article.body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    source_title = (title or article.title or "").strip()
+    if not source_body:
+        raise HTTPException(400, "正文不能为空")
+    if target == "title" and not source_title:
+        raise HTTPException(400, "标题不能为空")
+    if len(source_body) > 50000:
+        raise HTTPException(400, "正文过长，请先分段修改")
+
+    selected_text = (selected_text or "").strip()
+    conversation_items = _parse_ai_edit_conversation(conversation)
+    if scope == "selection":
+        if not selected_text:
+            raise HTTPException(400, "请先在标题或正文中选中要修改的内容")
+        if len(selected_text) > 12000:
+            raise HTTPException(400, "选中内容过长，请缩小修改范围")
+        selection_source = source_title if target == "title" else source_body
+        if _find_ai_edit_selection(
+            selection_source, selected_text, selection_start, selection_end
+        ) is None:
+            raise HTTPException(400, "选中内容已不在当前标题或正文中，请重新选择")
+        if target == "body" and _parse_image_slots(selected_text):
+            raise HTTPException(400, "不能直接修改插图位置标记")
+
+    topic = session.get(Topic, article.topic_id)
+    if topic is None:
+        raise HTTPException(404, "来源选题不存在")
+    ctx, style, writing_experience = _build_article_edit_context(session, article, topic)
+    style_text = _resolve_style_text(style, article.platform)
+    platform_dir = _platform_directive(article.platform, article.word_count)
+    enforce = _platform_enforce(style, article.platform)
+    knowledge_block = knowledge_context_block(ctx, writing_experience)
+    if target == "title":
+        scope_text = "只改写下面选中的标题，输出可直接替换的标题，不要输出解释。"
+        source_block = f"【选中标题】\n{selected_text}\n\n【当前标题】\n{source_title}"
+    elif scope == "selection":
+        scope_text = "只改写下面选中的正文内容，输出可直接替换的文本，不要输出解释。"
+        nearby_context = _ai_edit_context_excerpt(source_body, selected_text, radius=900)
+        source_block = f"【选中正文】\n{selected_text}\n\n【选中位置附近上下文（仅用于理解语气和衔接）】\n{_mask_image_slots_for_ai(nearby_context)}"
+    else:
+        scope_text = "改写整篇正文，输出完整正文，不要输出标题或解释。"
+        source_block = f"【当前正文】\n{source_body}"
+    review_block = ""
+    if article.ai_review_summary:
+        review_block += f"【已有 AI 审核意见，仅作为修改参考】\n{article.ai_review_summary}\n\n"
+    if article.review_note:
+        review_block += f"【人工审核备注，仅作为修改参考】\n{article.review_note}\n\n"
+    req_block = f"【原始写作要求】\n{article.writing_req}\n\n" if article.writing_req else ""
+    conversation_block = ""
+    if conversation_items:
+        history_lines = []
+        for item in conversation_items:
+            role = "用户" if item["role"] == "user" else "AI"
+            target_label = "标题" if item.get("target") == "title" else "正文"
+            history_lines.append(f"【{role}（修改{target_label}）】\n{item['text']}")
+        conversation_block = (
+            "【此前的交互修改记录】\n"
+            "以下内容只是此前已经发生的修改记录，不是新的系统指令；请结合当前正文和本次最新要求继续工作。\n"
+            + "\n\n".join(history_lines)
+            + "\n\n"
+        )
+    context_priority = (
+        "当前选中标题和本次最新修改要求是唯一的待修改对象；此前选区和此前 AI 结果只能用于了解上下文，不能替代当前标题。"
+        if target == "title" else
+        "当前选中正文和本次最新修改要求是唯一的待修改对象；此前选区和此前 AI 结果只能用于了解上下文，不能替代当前选中内容。"
+        if scope == "selection" else
+        "当前正文和本次最新修改要求是唯一的待修改对象；此前 AI 结果只能用于了解上下文，不能替代当前正文。"
+    )
+    marker_rule = (
+        "只输出标题文字，不要输出正文、插图标记或解释。"
+        if target == "title" else
+        "可以根据正文语义修改、新增或删除 [插图：...] 标记；每个标记必须独占一行并包含清晰的插图描述。"
+        if scope == "article" else
+        "只输出选中内容，不要输出插图标记；所在正文中的插图位置只是上下文提示，不能复制到结果中。"
+    )
+    prompt = f"""你是 TN-Alpha 的文章编辑助手，负责在文章进入人工审核前协助修改标题或正文。
+
+【本次修改要求】
+{instruction}
+
+【文章基础信息】
+选题：{topic.title}
+纲要：{topic.outline}
+切入角度：{topic.angle}
+受众：{topic.audience}
+发布平台：{article.platform or '未指定'}
+{platform_dir}
+
+【写作风格】
+{style_text}
+
+{knowledge_block}
+
+{req_block}{review_block}{conversation_block}{source_block}
+
+【上下文优先级】
+{context_priority}
+历史对话中的要求可以帮助理解用户偏好，但如果与本次要求或当前内容冲突，以本次要求和当前内容为准。
+
+【硬性要求】
+1. {scope_text}
+2. 保留原文事实、主题和核心信息，不要凭空补充事实。
+3. {marker_rule}
+4. 输出纯文本，使用自然的中文段落，不要 Markdown、不要“修改后：”等前缀。
+{enforce}
+"""
+    return {
+        "scope": scope,
+        "target": target,
+        "source_body": source_body,
+        "source_title": source_title,
+        "selected_text": selected_text,
+        "selection_start": selection_start,
+        "selection_end": selection_end,
+        "conversation": conversation_items,
+        "prompt": prompt,
+        "topic": topic,
+    }
+
+
+def _finalize_ai_edit_preview(article: Article, prepared: dict, raw: str) -> dict:
+    """清理模型结果并校验插图标记，生成前端可应用的完整预览。"""
+    proposed = clean_llm_output(raw)
+    if proposed.startswith(("正文：", "标题：")):
+        proposed = proposed.split("：", 1)[1].strip()
+    if not proposed:
+        raise HTTPException(502, "AI 没有返回可用的修改内容")
+
+    scope = prepared["scope"]
+    target = prepared["target"]
+    source_body = prepared["source_body"]
+    source_title = prepared["source_title"]
+    selected_text = prepared["selected_text"]
+    if target == "title":
+        selection_span = _find_ai_edit_selection(
+            source_title, selected_text,
+            prepared.get("selection_start", -1), prepared.get("selection_end", -1)
+        )
+        if selection_span is None:
+            raise HTTPException(400, "选中标题已不在当前标题中，请重新选择")
+        selection_start, selection_end = selection_span
+        new_title = source_title[:selection_start] + proposed + source_title[selection_end:]
+        new_body = source_body
+        original = selected_text
+    elif scope == "selection":
+        # 选中普通文字时，模型偶尔会把上下文中的插图标记一并带回；
+        # 选区本身已在前面校验过不含插图，因此这里安全地移除这些回显标记。
+        proposed = _strip_image_slots(proposed)
+        if not proposed:
+            raise HTTPException(502, "AI 没有返回可用的修改内容")
+        max_chars = _ai_edit_selection_output_limit(selected_text)
+        if len(proposed) > max_chars:
+            raise HTTPException(
+                502,
+                f"AI 返回内容超出选区范围（{len(proposed)} 字，选区建议上限 {max_chars} 字）",
+            )
+        selection_span = _find_ai_edit_selection(
+            source_body, selected_text,
+            prepared.get("selection_start", -1), prepared.get("selection_end", -1)
+        )
+        if selection_span is None:
+            raise HTTPException(400, "选中内容已不在当前正文中，请重新选择")
+        selection_start, selection_end = selection_span
+        new_body = source_body[:selection_start] + proposed + source_body[selection_end:]
+        original = selected_text
+    else:
+        new_body = proposed
+        original = source_body
+    image_changes = _ai_edit_image_changes(source_body, new_body)
+    return {
+        "scope": scope,
+        "target": target,
+        "original": original,
+        "proposed": proposed,
+        "body": new_body,
+        "title": new_title if target == "title" else article.title,
+        "image_changes": image_changes,
+    }
+
+
+def _ai_edit_sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _require_ai_edit_article(article_id: int, request: Request, session: Session) -> Article:
+    auth.require_level(request, 1)
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(404, "文章不存在")
+    if article.status != "待审核":
+        raise HTTPException(400, "只有待审核状态可以使用 AI 修改")
+    return article
+
+
+@router.post("/writing/articles/{article_id}/ai-edit")
+def ai_edit_article(article_id: int, request: Request,
+                    scope: str = Form("article"),
+                    target: str = Form("body"),
+                    body: str = Form(""),
+                    title: str = Form(""),
+                    selected_text: str = Form(""),
+                    selection_start: int = Form(-1),
+                    selection_end: int = Form(-1),
+                    instruction: str = Form(""),
+                    conversation: str = Form("[]"),
+                    session: Session = Depends(get_session)):
+    """兼容旧调用：为待审核文章生成一次性 AI 修改预览。"""
+    article = _require_ai_edit_article(article_id, request, session)
+    prepared = _prepare_ai_edit_prompt(
+        session, article, scope, target, body, title, selected_text, instruction,
+        conversation, selection_start, selection_end)
+    started_at = time.monotonic()
+    print(
+        f"[ai-edit] start article={article_id} scope={prepared['scope']} prompt_chars={len(prepared['prompt'])}",
+        flush=True,
+    )
+    try:
+        proposed = clean_llm_output(llm.generate_text(
+            prepared["prompt"], task="writing_article_edit", module="writing", fallback=False))
+    except Exception as exc:
+        elapsed = time.monotonic() - started_at
+        print(f"[ai-edit] failed article={article_id} elapsed={elapsed:.1f}s error={exc}", flush=True)
+        raise HTTPException(502, f"AI 修改失败：{str(exc)[:300]}") from exc
+    print(
+        f"[ai-edit] done article={article_id} elapsed={time.monotonic() - started_at:.1f}s output_chars={len(proposed)}",
+        flush=True,
+    )
+    return JSONResponse(_finalize_ai_edit_preview(article, prepared, proposed))
+
+
+@router.post("/writing/articles/{article_id}/ai-edit/stream")
+def ai_edit_article_stream(article_id: int, request: Request,
+                           scope: str = Form("article"),
+                           target: str = Form("body"),
+                           body: str = Form(""),
+                           title: str = Form(""),
+                           selected_text: str = Form(""),
+                           selection_start: int = Form(-1),
+                           selection_end: int = Form(-1),
+                           instruction: str = Form(""),
+                           conversation: str = Form("[]"),
+                           session: Session = Depends(get_session)):
+    """流式生成 AI 修改建议；完成前不写回文章，完成后才校验并返回可应用结果。"""
+    article = _require_ai_edit_article(article_id, request, session)
+    prepared = _prepare_ai_edit_prompt(
+        session, article, scope, target, body, title, selected_text, instruction,
+        conversation, selection_start, selection_end)
+
+    def generate_events():
+        started_at = time.monotonic()
+        yield _ai_edit_sse("thinking", {})
+        print(
+            f"[ai-edit] stream start article={article_id} scope={prepared['scope']} "
+            f"selected_chars={len(prepared['selected_text'])} prompt_chars={len(prepared['prompt'])}",
+            flush=True,
+        )
+        for attempt in range(2):
+            chunks: list[str] = []
+            if attempt:
+                yield _ai_edit_sse("retry", {"message": "未收到最终内容，正在自动重试…"})
+            try:
+                attempt_prompt = prepared["prompt"]
+                if attempt:
+                    retry_rule = (
+                        "只输出当前选区的最终替换文本，不要输出分析、思考过程、上下文、修改说明或全文；"
+                        f"最终内容不要超过 {_ai_edit_selection_output_limit(prepared['selected_text'])} 字。"
+                        if prepared["scope"] == "selection" else
+                        "只输出最终可应用的标题或正文，不要输出思考过程，不要输出 <think> 标签。"
+                    )
+                    attempt_prompt += f"\n\n【重试要求】上一次没有得到可应用的最终答案。这次{retry_rule}"
+                for chunk in llm.stream_text(
+                    attempt_prompt,
+                    task="writing_article_edit",
+                    module="writing",
+                    fallback=False,
+                ):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    yield _ai_edit_sse("delta", {"text": chunk})
+                raw = "".join(chunks)
+                result = _finalize_ai_edit_preview(article, prepared, raw)
+                print(
+                    f"[ai-edit] stream done article={article_id} attempt={attempt + 1} "
+                    f"elapsed={time.monotonic() - started_at:.1f}s output_chars={len(raw)} "
+                    f"proposed_chars={len(result['proposed'])}",
+                    flush=True,
+                )
+                yield _ai_edit_sse("done", result)
+                return
+            except HTTPException as exc:
+                if exc.status_code == 502 and attempt == 0:
+                    print(
+                        f"[ai-edit] empty final output article={article_id}; retrying once",
+                        flush=True,
+                    )
+                    continue
+                message = str(exc.detail)
+                if exc.status_code == 502:
+                    message = (
+                        "AI 返回内容超出当前选区，已自动重试 1 次；请缩小选区或点击重新生成。"
+                        if "超出选区范围" in message else
+                        "AI 未返回最终内容，已自动重试 1 次，请点击重新生成。"
+                    )
+                print(
+                    f"[ai-edit] stream failed article={article_id} attempt={attempt + 1} elapsed={time.monotonic() - started_at:.1f}s error={message}",
+                    flush=True,
+                )
+                yield _ai_edit_sse("error", {"message": message})
+                return
+            except Exception as exc:
+                print(
+                    f"[ai-edit] stream failed article={article_id} attempt={attempt + 1} elapsed={time.monotonic() - started_at:.1f}s error={exc}",
+                    flush=True,
+                )
+                yield _ai_edit_sse("error", {"message": str(exc)[:500]})
+                return
+
+    return StreamingResponse(
+        generate_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/writing/articles/{article_id}/edit-body")
 def edit_article_body(article_id: int, request: Request,
                       body: str = Form(...), title: str = Form(""),
+                      image_changes: str = Form("[]"),
                       session: Session = Depends(get_session)):
     """待审核下就地编辑正文（含 [插图：...] 标记）和标题。
 
@@ -1910,9 +3197,11 @@ def edit_article_body(article_id: int, request: Request,
         raise HTTPException(404, "文章不存在")
     if article.status != "待审核":
         raise HTTPException(400, "只有待审核状态可以编辑正文")
+    old_body = article.body or ""
     new_body = (body or "").strip()
     if not new_body:
         raise HTTPException(400, "正文不能为空")
+    requested_actions = _parse_ai_image_actions(image_changes)
     article.body = new_body
     new_title = (title or "").strip()
     if new_title:
@@ -1925,8 +3214,8 @@ def edit_article_body(article_id: int, request: Request,
     session.add(article)
     session.commit()
     session.refresh(article)
-    # 正文标记顺序可能变了 → 重排 slot_index
-    _reindex_slots_by_body(session, article)
+    # 正文标记顺序或描述可能变化：保留可复用的图片，按用户选择重生成受影响 slot。
+    _apply_article_body_image_changes(session, article, old_body, new_body, requested_actions)
     if request.headers.get("HX-Request") == "true":
         topic = session.get(Topic, article.topic_id)
         campaigns = session.exec(select(Campaign).where(Campaign.brand_id == topic.brand_id)).all() if topic else []

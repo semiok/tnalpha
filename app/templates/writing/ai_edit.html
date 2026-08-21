@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+{% block title %}AI 修改正文 · {{ article.title }}{% endblock %}
+
+{% block content %}
+<script>
+function tnAiEditWorkbench(initial) {
+  const startKey = 'tnalpha-ai-edit-start-' + initial.articleId;
+  return {
+    articleId: initial.articleId,
+    articleUrl: initial.articleUrl,
+    baseTitle: initial.title || '',
+    baseBody: initial.body || '',
+    topicTitle: initial.topicTitle || '',
+    campaignName: initial.campaignName || '',
+    scope: 'selection',
+    target: 'body',
+    selectedText: '',
+    selectedStart: -1,
+    selectedEnd: -1,
+    contexts: [],
+    activeContextId: 0,
+    lastRequestContextId: 0,
+    instruction: '',
+    messages: [],
+    busy: false,
+    done: false,
+    error: '',
+    retryable: false,
+    currentOriginal: '',
+    currentProposed: '',
+    resultBody: '',
+    resultTitle: '',
+    imageChanges: [],
+    imageActions: {},
+    requestController: null,
+    requestInstruction: '',
+
+    init() {
+      let hashSelection = null;
+      try {
+        const hash = new URLSearchParams((window.location.hash || '').slice(1));
+        if (hash.has('scope') || hash.has('selected_text')) {
+          hashSelection = {
+            scope: hash.get('scope') === 'article' ? 'article' : 'selection',
+            target: hash.get('target') === 'title' ? 'title' : 'body',
+            selectedText: (hash.get('selected_text') || '').trim(),
+            selectedStart: Number(hash.get('selected_start') || -1),
+            selectedEnd: Number(hash.get('selected_end') || -1),
+          };
+          history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+      } catch (_) {}
+      try {
+        const raw = localStorage.getItem(startKey) || sessionStorage.getItem(startKey);
+        if (raw) {
+          const start = JSON.parse(raw);
+          if (start.body) this.baseBody = start.body;
+          if (start.title) this.baseTitle = start.title;
+          this.scope = start.scope === 'article' ? 'article' : 'selection';
+          this.target = start.target === 'title' ? 'title' : 'body';
+          this.selectedText = (start.selectedText || '').trim();
+          this.selectedStart = Number.isInteger(start.selectedStart) ? start.selectedStart : -1;
+          this.selectedEnd = Number.isInteger(start.selectedEnd) ? start.selectedEnd : -1;
+          localStorage.removeItem(startKey);
+          sessionStorage.removeItem(startKey);
+        }
+      } catch (_) {}
+      if (hashSelection) {
+        this.scope = hashSelection.scope;
+        this.target = hashSelection.target;
+        this.selectedText = hashSelection.selectedText;
+        this.selectedStart = hashSelection.selectedStart;
+        this.selectedEnd = hashSelection.selectedEnd;
+      }
+      this.activateContext(false);
+    },
+
+    sourceText() { return this.target === 'title' ? this.baseTitle : this.baseBody; },
+    scopeLabel() { return this.scope === 'article' ? '全文' : (this.target === 'title' ? '标题选区' : '正文选区'); },
+    contextExcerpt() {
+      const source = this.sourceText();
+      if (!source) return '';
+      if (this.scope === 'article' || !this.selectedText) return source.slice(0, 900) + (source.length > 900 ? '…' : '');
+      let start = source.indexOf(this.selectedText);
+      if (start < 0) {
+        const compactSource = source.replace(/\s+/g, ' ');
+        const compactSelected = this.selectedText.replace(/\s+/g, ' ');
+        const compactStart = compactSource.indexOf(compactSelected);
+        start = compactStart >= 0 ? Math.max(0, source.indexOf(this.selectedText.slice(0, 12))) : -1;
+      }
+      if (start < 0) return source.slice(0, 900) + (source.length > 900 ? '…' : '');
+      const end = start + this.selectedText.length;
+      const from = Math.max(0, start - 420);
+      const to = Math.min(source.length, end + 420);
+      return (from ? '…' : '') + source.slice(from, to).trim() + (to < source.length ? '…' : '');
+    },
+    activateContext(increment = true) {
+      if (increment) this.activeContextId += 1;
+      else this.activeContextId = 1;
+      const context = {
+        id: this.activeContextId,
+        scope: this.scope,
+        target: this.target,
+        selectedText: this.selectedText,
+        selectedStart: this.selectedStart,
+        selectedEnd: this.selectedEnd,
+        excerpt: this.contextExcerpt(),
+        latestBody: '',
+        latestTitle: '',
+        latestSelectedText: '',
+      };
+      const existing = this.contexts.find(item => item.scope === context.scope && item.target === context.target && item.selectedText === context.selectedText && item.selectedStart === context.selectedStart && item.selectedEnd === context.selectedEnd);
+      if (existing) this.activeContextId = existing.id;
+      else this.contexts.unshift(context);
+      this.done = false;
+      this.error = '';
+      this.retryable = false;
+      this.currentOriginal = '';
+      this.currentProposed = '';
+      this.resultBody = '';
+      this.resultTitle = '';
+      this.imageChanges = [];
+      this.imageActions = {};
+    },
+    activeContext() { return this.contexts.find(item => item.id === this.activeContextId) || null; },
+    requestSource() {
+      const context = this.activeContext();
+      return {
+        body: context && context.latestBody ? context.latestBody : this.baseBody,
+        title: context && context.latestTitle ? context.latestTitle : this.baseTitle,
+        selectedText: context && context.latestSelectedText ? context.latestSelectedText : this.selectedText,
+        selectedStart: context && Number.isInteger(context.selectedStart) ? context.selectedStart : this.selectedStart,
+        selectedEnd: context && Number.isInteger(context.selectedEnd) ? context.selectedEnd : this.selectedEnd,
+      };
+    },
+    selectContext(context) {
+      if (this.busy) return;
+      this.scope = context.scope;
+      this.target = context.target;
+      this.selectedText = context.selectedText || '';
+      this.selectedStart = Number.isInteger(context.selectedStart) ? context.selectedStart : -1;
+      this.selectedEnd = Number.isInteger(context.selectedEnd) ? context.selectedEnd : -1;
+      this.activeContextId = context.id;
+      this.done = false;
+      this.error = '';
+      this.currentOriginal = '';
+      this.currentProposed = '';
+      this.resultBody = '';
+      this.resultTitle = '';
+      this.imageChanges = [];
+      this.imageActions = {};
+    },
+    chooseScope(scope) {
+      if (this.busy) return;
+      this.scope = scope === 'article' ? 'article' : 'selection';
+      if (this.scope === 'article') { this.target = 'body'; this.selectedText = ''; }
+      this.activateContext(true);
+    },
+    startNewContext() {
+      if (this.busy) return;
+      this.scope = 'selection';
+      this.target = 'body';
+      this.selectedText = '';
+      this.selectedStart = -1;
+      this.selectedEnd = -1;
+      this.activateContext(true);
+    },
+    selectionOffset(root, node, offset) {
+      if (!root || !node) return -1;
+      const range = document.createRange();
+      range.selectNodeContents(root);
+      try { range.setEnd(node, offset); } catch (_) { return -1; }
+      return range.toString().length;
+    },
+    capturePageSelection() {
+      if (this.busy) return;
+      const selection = window.getSelection();
+      const text = selection ? selection.toString().trim() : '';
+      if (!text) return;
+      const inTitle = this.$refs.sourceTitle && this.$refs.sourceTitle.contains(selection.anchorNode);
+      const inBody = this.$refs.sourceBody && this.$refs.sourceBody.contains(selection.anchorNode);
+      if (!inTitle && !inBody) return;
+      const nextTarget = inTitle ? 'title' : 'body';
+      if (!selection.rangeCount) return;
+      const root = inTitle ? this.$refs.sourceTitle : this.$refs.sourceBody;
+      const range = selection.getRangeAt(0);
+      const rawStart = this.selectionOffset(root, range.startContainer, range.startOffset);
+      const leading = (selection.toString() || '').length - (selection.toString() || '').replace(/^\s+/, '').length;
+      const nextStart = rawStart >= 0 ? rawStart + leading : -1;
+      const nextEnd = nextStart >= 0 ? nextStart + text.length : -1;
+      if (this.scope === 'selection' && this.target === nextTarget && this.selectedText === text && this.selectedStart === nextStart && this.selectedEnd === nextEnd) return;
+      this.scope = 'selection';
+      this.target = nextTarget;
+      this.selectedText = text;
+      this.selectedStart = nextStart;
+      this.selectedEnd = nextEnd;
+      this.activateContext(true);
+    },
+    usePreset(text) { this.instruction = text; },
+    scrollChat() { this.$nextTick(() => { if (this.$refs.chat) this.$refs.chat.scrollTop = this.$refs.chat.scrollHeight; }); },
+    mergeImageChanges(changes) {
+      this.imageChanges = changes || [];
+      this.imageActions = {};
+      this.imageChanges.forEach(item => { this.imageActions[item.index] = item.action || (item.kind === 'removed' ? 'remove' : 'regenerate'); });
+    },
+    requestAiEdit() {
+      const instruction = this.instruction.trim();
+      if (!instruction) { this.error = '请先填写修改要求'; return; }
+      if (this.scope === 'selection' && !this.selectedText) { this.error = this.target === 'title' ? '请先在左侧标题中选中要修改的内容' : '请先在左侧正文中选中要修改的内容'; return; }
+      const requestSource = this.requestSource();
+      const source = this.target === 'title' ? requestSource.title : requestSource.body;
+      const requestSelectedText = this.scope === 'selection' ? requestSource.selectedText : '';
+      if (this.scope === 'selection' && !requestSelectedText) { this.error = '当前修改对象没有可用选区，请重新选择'; return; }
+      if (this.scope === 'selection' && !source.includes(requestSelectedText.slice(0, 12))) { this.error = '当前选区已经不在文章内容中，请重新选择'; return; }
+
+      const contextChanged = this.lastRequestContextId && this.lastRequestContextId !== this.activeContextId;
+      this.messages.push({role: 'user', text: instruction, target: this.target, scope: this.scope, contextId: this.activeContextId});
+      this.messages.push({role: 'assistant', text: '', scope: this.scope, target: this.target, contextId: this.activeContextId, thinking: true});
+      const assistant = this.messages[this.messages.length - 1];
+      this.requestInstruction = instruction;
+      this.busy = true;
+      this.done = false;
+      this.error = '';
+      this.retryable = false;
+      this.currentOriginal = this.scope === 'selection' ? requestSelectedText : requestSource.body;
+      this.currentProposed = '';
+      this.resultBody = '';
+      this.resultTitle = '';
+      this.imageChanges = [];
+      this.imageActions = {};
+      this.lastRequestContextId = this.activeContextId;
+      this.scrollChat();
+
+      const controller = new AbortController();
+      this.requestController = controller;
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
+      const form = new FormData();
+      form.append('scope', this.scope);
+      form.append('target', this.target);
+      form.append('body', requestSource.body);
+      form.append('title', requestSource.title);
+      form.append('selected_text', requestSelectedText); form.append('selection_start', String(requestSource.selectedStart)); form.append('selection_end', String(requestSource.selectedEnd));
+      form.append('instruction', contextChanged ? '用户已切换新的修改对象。此前结果只能作为参考，请只针对当前选中的内容或当前正文处理。\n\n' + instruction : instruction);
+      form.append('conversation', JSON.stringify(this.messages.slice(0, -2).map(item => ({role: item.role, text: item.text, target: item.target}))));
+
+      fetch('/writing/articles/' + this.articleId + '/ai-edit/stream', {method: 'POST', headers: {'Accept': 'text/event-stream'}, body: form, signal: controller.signal})
+        .then(async response => {
+          if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.detail || 'AI 修改失败'); }
+          if (!response.body) throw new Error('浏览器不支持流式响应');
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          const consume = block => {
+            let event = 'message'; let data = '';
+            block.split('\n').forEach(line => { if (line.startsWith('event:')) event = line.slice(6).trim(); else if (line.startsWith('data:')) data += line.slice(5).trim(); });
+            if (!data) return;
+            const payload = JSON.parse(data);
+            if (event === 'delta') { assistant.thinking = true; assistant.text += payload.text || ''; this.currentProposed = assistant.text; this.scrollChat(); }
+            else if (event === 'retry') { assistant.text = ''; this.currentProposed = ''; this.error = ''; }
+            else if (event === 'error') throw new Error(payload.message || 'AI 修改失败');
+            else if (event === 'done') {
+              assistant.thinking = false;
+              this.currentProposed = payload.proposed || this.currentProposed;
+              this.resultBody = payload.body || '';
+              this.resultTitle = payload.title || '';
+              if (this.scope === 'selection' && this.selectedStart >= 0) this.selectedEnd = this.selectedStart + this.currentProposed.length;
+              this.mergeImageChanges(payload.image_changes);
+              assistant.text = this.currentProposed;
+              const context = this.activeContext();
+              if (context) {
+                context.latestBody = this.resultBody || requestSource.body;
+                context.latestTitle = this.resultTitle || requestSource.title;
+                context.latestSelectedText = this.scope === 'selection' ? this.currentProposed : '';
+                context.selectedStart = this.selectedStart;
+                context.selectedEnd = this.selectedEnd;
+              }
+              this.done = true;
+              this.instruction = '';
+            }
+          };
+          while (true) { const part = await reader.read(); buffer += decoder.decode(part.value || new Uint8Array(), {stream: !part.done}); const blocks = buffer.split('\n\n'); buffer = blocks.pop() || ''; blocks.forEach(block => { if (block.trim()) consume(block); }); if (part.done) break; }
+          if (buffer.trim()) consume(buffer);
+          if (!this.done) throw new Error('AI 修改未正常完成');
+        })
+        .catch(error => { assistant.thinking = false; this.error = error.name === 'AbortError' ? 'AI 修改已停止，可以修改要求后继续。' : error.message; this.retryable = true; })
+        .finally(() => { clearTimeout(timeoutId); this.requestController = null; this.busy = false; this.scrollChat(); });
+    },
+    stopAiEdit() { if (this.requestController) this.requestController.abort(); },
+    retryAiEdit() {
+      if (this.busy) return;
+      if (this.messages.length >= 2 && this.messages[this.messages.length - 1].role === 'assistant') this.messages.splice(-2);
+      this.instruction = this.requestInstruction;
+      this.error = '';
+      this.retryable = false;
+      this.requestAiEdit();
+    },
+    applyToEditor() {
+      if (!this.done || !this.currentProposed) return;
+      const draft = {
+        body: this.resultBody || this.baseBody,
+        title: this.resultTitle || this.baseTitle,
+        imageChanges: this.imageChanges.map(item => ({...item, action: this.imageActions[item.index] || item.action}))
+      };
+      try { localStorage.setItem('tnalpha-ai-edit-draft-' + this.articleId, JSON.stringify(draft)); sessionStorage.setItem('tnalpha-ai-edit-draft-' + this.articleId, JSON.stringify(draft)); } catch (_) {}
+      window.location.href = this.articleUrl + '?ai_draft=1';
+    },
+    goBack() { window.location.href = this.articleUrl; }
+  };
+}
+</script>
+
+<div x-data="tnAiEditWorkbench({{ workbench_json|forceescape }})" x-init="init()" class="relative left-1/2 -translate-x-1/2 w-[calc(100vw-1rem)] max-w-none h-[calc(100vh-9rem)] max-h-[calc(100vh-9rem)] -my-6 bg-slate-100 flex flex-col overflow-hidden">
+  <header class="shrink-0 bg-white border-b border-slate-200 px-6 py-4 flex flex-wrap items-center gap-3">
+    <a :href="articleUrl" class="text-slate-400 hover:text-brand-600 text-sm">← 返回文章</a>
+    <span class="text-slate-300">/</span>
+    <div class="min-w-0">
+      <h1 class="font-semibold text-slate-800 flex items-center gap-2"><span>🤖</span> AI 修改工作台</h1>
+      <p class="text-xs text-slate-400 mt-0.5 truncate" x-text="baseTitle"></p>
+    </div>
+    <div class="ml-auto flex items-center gap-2 text-xs">
+      <span class="rounded-full bg-violet-50 text-violet-700 px-2.5 py-1">对话记录会保留</span>
+      <span class="rounded-full px-2.5 py-1" :class="busy ? 'bg-amber-50 text-amber-700' : (done ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500')" x-text="busy ? 'AI 正在处理…' : (done ? '已生成预览' : '等待修改要求')"></span>
+    </div>
+  </header>
+
+  <main class="flex-1 min-h-0 overflow-hidden p-4 lg:p-5 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
+    <aside class="min-h-0 overflow-y-auto overscroll-contain flex flex-col gap-4">
+      <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold text-slate-700">当前修改对象</h2>
+          <button type="button" @click="startNewContext()" class="text-xs text-brand-600 hover:text-brand-700" :disabled="busy">＋新选区</button>
+        </div>
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <button type="button" @click="chooseScope('selection')" :class="scope === 'selection' ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600'" class="rounded-lg border px-2 py-2 text-sm font-medium">选中内容</button>
+          <button type="button" @click="chooseScope('article')" :class="scope === 'article' ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600'" class="rounded-lg border px-2 py-2 text-sm font-medium">全文</button>
+        </div>
+        <div class="rounded-lg border border-violet-200 bg-violet-50 p-3">
+          <div class="text-xs text-violet-600 mb-1" x-text="scopeLabel()"></div>
+          <div class="text-sm text-slate-700 whitespace-pre-wrap leading-6 max-h-36 overflow-y-auto" x-text="scope === 'article' ? '整篇正文' : (selectedText || '请在下方原文中拖动选中要修改的内容')"></div>
+        </div>
+        <div class="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div class="text-xs font-medium text-slate-500 mb-1" x-text="scope === 'article' ? '正文概览' : '选区附近上下文'"></div>
+          <div class="text-xs text-slate-500 whitespace-pre-wrap leading-5 max-h-28 overflow-y-auto" x-text="contextExcerpt() || '选择内容后，这里会显示前后衔接内容'" ></div>
+        </div>
+      </section>
+
+      <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 min-h-0 flex-1">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="font-semibold text-slate-700">原文与上下文</h2>
+          <span class="text-[11px] text-slate-400">可直接拖动选中</span>
+        </div>
+        <div x-ref="sourceTitle" @mouseup="capturePageSelection()" class="select-text cursor-text rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold leading-6 text-slate-700 mb-2" x-text="baseTitle"></div>
+        <div x-ref="sourceBody" @mouseup="capturePageSelection()" class="select-text cursor-text rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-7 text-slate-600 whitespace-pre-wrap overflow-y-auto max-h-[36vh]" x-text="baseBody"></div>
+        <p class="mt-2 text-[11px] leading-5 text-slate-400">选区只决定本轮修改对象；AI 会同时参考当前段落附近内容，历史对话只作为偏好参考。</p>
+      </section>
+
+      <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 max-h-52 overflow-y-auto">
+        <h2 class="font-semibold text-slate-700 mb-2">修改对象记录</h2>
+        <div class="space-y-2">
+          <template x-for="context in contexts" :key="context.id">
+            <button type="button" @click="selectContext(context)" class="w-full text-left rounded-lg border px-3 py-2 transition" :class="activeContextId === context.id ? 'border-brand-300 bg-brand-50' : 'border-slate-200 hover:border-brand-200'">
+              <div class="flex items-center justify-between gap-2 text-xs"><span class="font-medium text-slate-700" x-text="context.scope === 'article' ? '全文' : (context.target === 'title' ? '标题选区' : '正文选区')"></span><span class="text-slate-400" x-text="context.id === activeContextId ? '当前' : '历史' "></span></div>
+              <div class="mt-1 text-xs text-slate-500 line-clamp-2" x-text="context.scope === 'article' ? '整篇正文' : (context.selectedText || '待选择内容')"></div>
+            </button>
+          </template>
+        </div>
+      </section>
+    </aside>
+
+    <section class="min-h-0 overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+      <div class="shrink-0 px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+        <div><h2 class="font-semibold text-slate-800">AI 修改对话</h2><p class="text-xs text-slate-400 mt-1">每条消息都会标注它对应的修改对象</p></div>
+        <span class="text-xs text-slate-400" x-text="messages.length ? messages.length + ' 条记录' : '还没有对话'"></span>
+      </div>
+      <div x-ref="chat" class="flex-1 min-h-0 overflow-y-auto overscroll-contain p-5 space-y-4">
+        <div x-show="!messages.length" class="h-full min-h-[180px] grid place-items-center text-center text-slate-400">
+          <div><div class="text-3xl mb-3">✨</div><p class="text-sm">先在左侧选中内容，再填写修改要求</p><p class="text-xs mt-1">后续可以继续追问“再克制一点”“保留第二句”等要求</p></div>
+        </div>
+        <template x-for="(message, index) in messages" :key="index">
+          <div :class="message.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
+            <div class="max-w-[88%] min-w-0">
+              <div class="flex items-center gap-2 mb-1 text-[11px] text-slate-400" :class="message.role === 'user' ? 'justify-end' : ''">
+                <span x-text="message.role === 'user' ? '你' : 'AI 修改建议'"></span>
+                <span class="rounded-full bg-slate-100 px-2 py-0.5" x-text="message.scope === 'article' ? '全文' : (message.target === 'title' ? '标题选区' : '正文选区')"></span>
+              </div>
+              <div class="inline-block max-w-full rounded-2xl px-4 py-3 text-sm leading-7 whitespace-pre-wrap break-words" :class="message.role === 'user' ? 'bg-violet-600 text-white rounded-br-md' : 'bg-slate-50 border border-slate-200 text-slate-700 rounded-bl-md'">
+                <div x-show="message.thinking" class="mb-1 text-xs text-violet-500"><span class="inline-block animate-pulse">✨</span> AI 正在思考…</div>
+                <div x-show="message.text" x-text="message.text"></div>
+              </div>
+            </div>
+          </div>
+        </template>
+        <div x-show="error" x-cloak class="rounded-lg border border-rose-200 bg-rose-50 text-rose-700 px-3 py-2 text-sm flex items-center justify-between gap-3">
+          <span x-text="error"></span>
+          <button type="button" x-show="retryable && !busy" @click="retryAiEdit()" class="shrink-0 rounded-md bg-white border border-rose-300 px-2.5 py-1 text-xs font-medium hover:bg-rose-100">重新生成</button>
+        </div>
+      </div>
+      <div class="shrink-0 border-t border-slate-100 p-3">
+        <div class="flex flex-wrap gap-2 mb-1.5">
+          <button type="button" @click="usePreset('润色表达，保留原意，让语言更自然。')" class="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:border-brand-300 hover:text-brand-600">润色表达</button>
+          <button type="button" @click="usePreset('精简内容，保留事实和关键信息。')" class="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:border-brand-300 hover:text-brand-600">精简内容</button>
+          <button type="button" @click="usePreset('增强开头的吸引力，但不要制造夸张或未经证实的信息。')" class="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:border-brand-300 hover:text-brand-600">增强开头</button>
+        </div>
+        <textarea x-model="instruction" rows="2" :disabled="busy" @keydown.ctrl.enter.prevent="requestAiEdit()" @keydown.meta.enter.prevent="requestAiEdit()" placeholder="告诉 AI 你希望怎么修改……（Ctrl/⌘ + Enter 发送）" class="w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-sm leading-6 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none disabled:bg-slate-50"></textarea>
+        <div class="mt-1 flex items-center justify-between gap-3">
+          <span class="text-xs text-slate-400">当前对象：<span class="text-slate-600" x-text="scopeLabel()"></span></span>
+          <div class="flex gap-2">
+            <button type="button" x-show="busy" @click="stopAiEdit()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">停止生成</button>
+            <button type="button" x-show="!busy" @click="requestAiEdit()" class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700">发送修改要求</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="min-h-0 overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+      <div class="shrink-0 px-5 py-4 border-b border-slate-100"><h2 class="font-semibold text-slate-800">当前结果预览</h2><p class="text-xs text-slate-400 mt-1">确认后应用到文章编辑器</p></div>
+      <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain p-5">
+        <div x-show="!done && !busy" class="h-full min-h-[260px] grid place-items-center text-center text-slate-400"><div><div class="text-3xl mb-3">📝</div><p class="text-sm">生成后在这里查看修改结果</p><p class="text-xs mt-1">原文和选区上下文已固定在左侧</p></div></div>
+        <div x-show="busy" class="rounded-xl border border-violet-100 bg-violet-50 px-4 py-5 text-sm text-violet-700"><div class="font-medium">AI 正在生成修改建议</div><div class="text-xs text-violet-500 mt-1">思考过程会显示在中间对话中，完成后自动替换为最终结果。</div></div>
+        <div x-show="done" x-cloak class="space-y-4">
+          <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">✓ 修改建议已完成，可以应用</div>
+          <div><div class="text-xs font-medium text-slate-400 mb-1" x-text="target === 'title' ? '修改后标题' : '修改后正文'"></div><div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-7 whitespace-pre-wrap text-slate-700 max-h-[42vh] overflow-y-auto" x-text="target === 'title' ? resultTitle : resultBody"></div></div>
+          <div x-show="scope === 'selection'" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">本次只会替换当前选中的<span class="font-medium text-slate-700" x-text="target === 'title' ? '标题片段' : '正文片段'"></span>，其他内容保持不变。</div>
+          <div x-show="imageChanges.length" class="rounded-xl border border-amber-200 bg-amber-50 p-3"><div class="text-xs font-medium text-amber-800 mb-2">插图变化</div><template x-for="item in imageChanges" :key="item.index"><div class="mb-2 last:mb-0"><div class="text-xs text-slate-600" x-text="(item.index + 1) + '. ' + (item.new_desc || item.old_desc)"></div><select x-model="imageActions[item.index]" class="mt-1 w-full rounded border border-amber-200 bg-white px-2 py-1.5 text-xs"><option value="regenerate">按新提示词重新生成</option><option value="keep">保留现图</option><option value="remove">删除此插图</option></select></div></template></div>
+        </div>
+      </div>
+      <div class="shrink-0 border-t border-slate-100 p-4 flex gap-2"><button type="button" @click="goBack()" class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">返回文章</button><button type="button" x-show="done" x-cloak @click="applyToEditor()" class="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">应用到编辑器</button></div>
+    </aside>
+  </main>
+</div>
+{% endblock %}

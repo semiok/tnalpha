@@ -8,6 +8,9 @@
 - 多角色辩论/评审记录持久化到 DebateRecord
 """
 import io
+import json
+import os
+import threading
 import time
 
 from sqlmodel import Session, select
@@ -18,7 +21,17 @@ from app.modules.feedback.models import FeedbackExperience
 from app.modules.topic.models import Topic
 from app.modules.writing import routes as wroutes
 from app.modules.writing.contract import writing_status_map
-from app.modules.writing.models import Article, ArticleImage, DebateRecord, Style, WritingReq
+from app.modules.writing.models import (
+    Article,
+    ArticleImage,
+    DebateRecord,
+    Style,
+    StyleDiscussion,
+    StyleDiscussionMessage,
+    StyleDoc,
+    StyleRevision,
+    WritingReq,
+)
 
 
 # ── 同步线程 helper：让后台线程在 start() 时同步执行完，测试可直接断言结果 ──
@@ -134,6 +147,22 @@ def test_writing_home_shows_adopted_topic_even_with_article(owner_client, fresh_
     assert "一枚汉简写了什么" in html
 
 
+def test_writing_home_defaults_to_style_library(owner_client, fresh_db):
+    with Session(fresh_db) as s:
+        brand, _campaign, _topic = _seed_topic(s)
+        s.add(Style(
+            brand_id=brand.id,
+            name="默认展示风格",
+            summary="打开页面即可看到",
+            source="manual",
+        ))
+        s.commit()
+
+    html = owner_client.get("/writing").text
+    assert "x-data=\"{tab:'library'" in html
+    assert "默认展示风格" in html
+
+
 # ── 风格管理测试 ──
 
 def test_style_library_works_without_campaign(owner_client, fresh_db, monkeypatch):
@@ -166,33 +195,219 @@ def test_style_library_works_without_campaign(owner_client, fresh_db, monkeypatc
         assert style.is_default is True
 
 
-def test_capture_styles_creates_default_styles(owner_client, fresh_db, monkeypatch):
+def test_style_discussion_keeps_uploaded_context_and_returns_draft(owner_client, fresh_db, tmp_path, monkeypatch):
     with Session(fresh_db) as s:
         brand, _campaign, _topic = _seed_topic(s)
-        bid = brand.id
+        style = Style(
+            brand_id=brand.id,
+            name="品牌叙事风",
+            summary="以具体物件切入，语言克制，结尾回到生活感受。",
+            source="manual",
+            is_default=True,
+        )
+        s.add(style)
+        s.commit()
+        s.refresh(style)
+        s.add(StyleDoc(
+            brand_id=brand.id,
+            style_id=style.id,
+            filename="品牌过往文章.md",
+            file_path=str(tmp_path / "品牌过往文章.md"),
+            extracted_text="过往文章都从具体物件开场，少用宏大形容词。",
+            note="希望保留克制感，但减少广告腔。",
+        ))
+        s.commit()
+        style_id = style.id
 
-    monkeypatch.setattr(wroutes.sources, "gather", lambda names, query, **k: [
-        {"title": "公众号爆款写法", "summary": "短句开场，史料结尾", "url": "https://x/1", "source": "mp"},
-        {"title": "小红书笔记", "summary": "标题有钩子，段落很短", "url": "https://x/2", "source": "google"},
-    ])
-    def fake_llm(prompt, task="default", module="default", **k):
-        if "公众号" in prompt:
-            return "名称：短句开场体\n总结：短句开场，史料结尾，节奏明快。"
-        return "名称：钩子标题体\n总结：标题有钩子，段落很短，适合社媒。"
-    monkeypatch.setattr(wroutes.llm, "generate_text", fake_llm)
-    r = owner_client.post("/writing/styles/capture", data={
-        "query": "敦煌 文博 写作风格",
-        "source": ["mp", "google"],
-        "count": "5",
-    }, follow_redirects=False)
-    assert r.status_code == 303
+    page = owner_client.get(f"/writing/styles/{style_id}/discussion/page")
+    assert page.status_code == 200
+    assert "返回风格库" in page.text
+    assert "TN-Alpha" in page.text
+    assert f'data-refresh-url="/writing/styles/{style_id}/discussion/page"' in page.text
+
+    seen = {}
+
+    def fake_text(prompt, task="default", module="default", **kwargs):
+        seen["prompt"] = prompt
+        assert task == "style_discussion"
+        assert module == "writing"
+        return (
+            "可以保留具体物件切入，但把结尾从抽象抒情改成可感的生活场景。\n\n"
+            "【修改后名称】\n品牌叙事生活体\n\n"
+            "【修改后总结】\n以具体物件或动作开场，使用克制、自然的短段落推进；减少广告腔和宏大形容词，结尾落到读者可感的生活场景。\n\n"
+            "【修改理由】\n保留原有克制感，降低抽象抒情和营销感。"
+        )
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    response = owner_client.post(
+        f"/writing/styles/{style_id}/discussion",
+        data={"message": "保留克制感，但不要有广告腔。"},
+    )
+    assert response.status_code == 200
+    assert "品牌叙事生活体" in response.text
+    assert "应用到当前风格" in response.text
+    assert "品牌过往文章.md" in response.text
+    assert "过往文章都从具体物件开场" in seen["prompt"]
+    assert "希望保留克制感，但减少广告腔" in seen["prompt"]
+    assert "保留克制感，但不要有广告腔" in seen["prompt"]
+
     with Session(fresh_db) as s:
-        styles = s.exec(select(Style).where(Style.brand_id == bid).order_by(Style.id)).all()
-        assert len(styles) == 2
-        assert styles[0].is_default is True
-        assert styles[0].source == "mp"
-        assert styles[0].name == "短句开场体"
-        assert styles[1].source == "google"
+        discussion = s.exec(select(StyleDiscussion).where(StyleDiscussion.style_id == style_id)).one()
+        messages = s.exec(
+            select(StyleDiscussionMessage).where(
+                StyleDiscussionMessage.discussion_id == discussion.id
+            ).order_by(StyleDiscussionMessage.id)
+        ).all()
+        assert len(messages) == 2
+        assert discussion.draft_name == "品牌叙事生活体"
+        assert "降低抽象抒情" in discussion.draft_reason
+
+
+def test_style_discussion_history_is_bounded():
+    messages = [
+        StyleDiscussionMessage(role="assistant", content=f"第{i}" + "很长的回复。" * 2000)
+        for i in range(12)
+    ]
+    history = wroutes._style_discussion_history(messages)
+    assert len(history) <= 24000
+    assert "历史上下文已截断" in history or "本条较长" in history
+
+
+def test_style_discussion_streams_response_then_persists_draft(owner_client, fresh_db, monkeypatch):
+    with Session(fresh_db) as s:
+        brand, _campaign, _topic = _seed_topic(s)
+        style = Style(brand_id=brand.id, name="原风格", summary="原总结", source="manual")
+        s.add(style)
+        s.commit()
+        s.refresh(style)
+        style_id = style.id
+
+    def fake_stream(prompt, task="default", module="default", **kwargs):
+        assert task == "style_discussion"
+        assert module == "writing"
+        yield "先解释修改方向。\n\n"
+        yield "【修改后名称】\n流式新风格\n"
+        yield "【修改后总结】\n流式生成的完整总结\n"
+        yield "【修改理由】\n保留核心特征。"
+
+    monkeypatch.setattr(wroutes.llm, "stream_text", fake_stream)
+    response = owner_client.post(
+        f"/writing/styles/{style_id}/discussion/stream",
+        data={"message": "请流式调整这套风格。"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: thinking" in response.text
+    assert '"text": "先解释修改方向。\\n\\n"' in response.text
+    assert "event: done" in response.text
+
+    with Session(fresh_db) as s:
+        discussion = s.exec(select(StyleDiscussion).where(StyleDiscussion.style_id == style_id)).one()
+        messages = s.exec(
+            select(StyleDiscussionMessage).where(
+                StyleDiscussionMessage.discussion_id == discussion.id
+            ).order_by(StyleDiscussionMessage.id)
+        ).all()
+        assert [item.role for item in messages] == ["user", "assistant"]
+        assert discussion.draft_name == "流式新风格"
+        assert discussion.draft_summary == "流式生成的完整总结"
+
+
+def test_style_discussion_apply_creates_revision_and_updates_style(owner_client, fresh_db, monkeypatch):
+    with Session(fresh_db) as s:
+        brand, _campaign, _topic = _seed_topic(s)
+        style = Style(
+            brand_id=brand.id,
+            name="原始风格",
+            summary="原始总结",
+            source="manual",
+        )
+        s.add(style)
+        s.commit()
+        s.refresh(style)
+        style_id = style.id
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *args, **kwargs: (
+            "讨论结论\n\n【修改后名称】\n更新风格\n\n"
+            "【修改后总结】\n更新后的完整总结\n\n"
+            "【修改理由】\n更贴近品牌。"
+        ),
+    )
+    response = owner_client.post(
+        f"/writing/styles/{style_id}/discussion",
+        data={"message": "请改得更贴近品牌。"},
+    )
+    assert response.status_code == 200
+
+    applied = owner_client.post(
+        f"/writing/styles/{style_id}/discussion/apply",
+        follow_redirects=False,
+    )
+    assert applied.status_code == 303
+    assert f"highlight={style_id}" in applied.headers["location"]
+    with Session(fresh_db) as s:
+        updated = s.get(Style, style_id)
+        assert updated.name == "更新风格"
+        assert updated.summary == "更新后的完整总结"
+        revision = s.exec(select(StyleRevision).where(StyleRevision.style_id == style_id)).one()
+        assert revision.previous_name == "原始风格"
+        assert revision.new_name == "更新风格"
+        discussion = s.exec(select(StyleDiscussion).where(StyleDiscussion.style_id == style_id)).one()
+        assert discussion.draft_name == ""
+
+
+def test_style_discussion_save_as_keeps_original_style(owner_client, fresh_db, monkeypatch, tmp_path):
+    with Session(fresh_db) as s:
+        brand, _campaign, _topic = _seed_topic(s)
+        style = Style(brand_id=brand.id, name="原风格", summary="原总结", source="manual")
+        s.add(style)
+        s.commit()
+        s.refresh(style)
+        s.add(StyleDoc(
+            brand_id=brand.id,
+            style_id=style.id,
+            filename="原始素材.md",
+            file_path=str(tmp_path / "原始素材.md"),
+            extracted_text="需要继承的风格素材",
+            note="保留这份资料",
+        ))
+        s.commit()
+        style_id = style.id
+    (tmp_path / "原始素材.md").write_text("需要继承的风格素材", encoding="utf-8")
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *args, **kwargs: "【修改后名称】\n新风格\n【修改后总结】\n新的总结\n【修改理由】\n另存测试",
+    )
+    owner_client.post(f"/writing/styles/{style_id}/discussion", data={"message": "另存一版"})
+    saved = owner_client.post(
+        f"/writing/styles/{style_id}/discussion/save-as",
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    new_id = int(saved.headers["location"].split("highlight=", 1)[1].split("&", 1)[0])
+    with Session(fresh_db) as s:
+        original = s.get(Style, style_id)
+        copied = s.get(Style, new_id)
+        assert original.name == "原风格"
+        assert copied.name == "新风格"
+        assert copied.source == "discussion"
+        copied_docs = s.exec(select(StyleDoc).where(StyleDoc.style_id == new_id)).all()
+        assert len(copied_docs) == 1
+        assert copied_docs[0].extracted_text == "需要继承的风格素材"
+        assert copied_docs[0].file_path != str(tmp_path / "原始素材.md")
+        assert os.path.exists(copied_docs[0].file_path)
+
+    deleted = owner_client.post(
+        f"/writing/styles/docs/{copied_docs[0].id}/delete",
+        follow_redirects=False,
+    )
+    assert deleted.status_code == 303
+    assert (tmp_path / "原始素材.md").exists()
 
 
 def test_manual_style_with_files_and_note_creates_style(owner_client, fresh_db, monkeypatch):
@@ -324,6 +539,32 @@ def test_writing_requirement_save_render_and_delete(owner_client, fresh_db):
         assert session.get(WritingReq, req_id) is None
 
 
+def test_writing_requirement_duplicate_is_not_saved(owner_client, fresh_db):
+    """同一品牌的重复写作要求只保留一条，首尾空白不影响判断。"""
+    with Session(fresh_db) as session:
+        session.add(Brand(name="重复要求品牌"))
+        session.commit()
+
+    content = "开头必须提出问题，并包含三个具体数据点。"
+    first = owner_client.post(
+        "/writing/reqs/save",
+        data={"content": content},
+        follow_redirects=False,
+    )
+    duplicate = owner_client.post(
+        "/writing/reqs/save",
+        data={"content": f"  {content}\n"},
+        follow_redirects=False,
+    )
+
+    assert first.status_code == 303
+    assert duplicate.status_code == 303
+    with Session(fresh_db) as session:
+        reqs = session.exec(select(WritingReq)).all()
+        assert len(reqs) == 1
+        assert reqs[0].content == content
+
+
 def test_set_default_style(owner_client, fresh_db):
     with Session(fresh_db) as s:
         brand, _campaign, _topic = _seed_topic(s)
@@ -342,163 +583,33 @@ def test_set_default_style(owner_client, fresh_db):
         assert s.get(Style, bid).is_default is True
 
 
-# ── AI 预设生成测试 ──
-
-def _preset_llm_factory(n: int):
-    """构造返回 n 个预设风格的 fake LLM。"""
-    block = "\n\n".join(
-        f"名称：预设风格{i + 1}\n总结：这是第 {i + 1} 个 AI 预设风格的总结。"
-        for i in range(n)
-    )
-    return lambda *a, **k: block
-
-
-def test_preset_styles_creates_eight_when_no_default(owner_client, fresh_db, monkeypatch):
-    """情况B：无任何默认风格 → 删旧 preset + 生成 8 个新 preset（都不设默认）。"""
-    monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(8))
+def test_ai_preset_styles_are_removed_and_legacy_rows_are_ignored(owner_client, fresh_db):
     with Session(fresh_db) as s:
         brand, _campaign, _topic = _seed_topic(s)
-        # 预先存在的旧 preset（应被删除）
-        s.add(Style(brand_id=brand.id, name="旧预设", summary="旧的", source="preset"))
+        s.add(Style(
+            brand_id=brand.id,
+            name="旧 AI 预设",
+            summary="不应再显示或注入",
+            source="preset",
+            is_default=True,
+        ))
+        s.add(Style(
+            brand_id=brand.id,
+            name="人工提炼风格",
+            summary="仍然可用",
+            source="manual",
+        ))
         s.commit()
-        bid = brand.id
+        brand_id = brand.id
 
-    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
-    assert r.status_code == 303
+    page = owner_client.get("/writing").text
+    assert "AI 预设" not in page
+    assert "旧 AI 预设" not in page
+    assert "人工提炼风格" in page
+    assert owner_client.post("/writing/styles/preset").status_code == 404
+
     with Session(fresh_db) as s:
-        presets = s.exec(
-            select(Style).where(Style.brand_id == bid, Style.source == "preset").order_by(Style.id)
-        ).all()
-        assert len(presets) == 8
-        assert all(p.is_default is False for p in presets)
-        assert all(p.name.startswith("预设风格") for p in presets)
-        # 旧 preset 已被删除
-        assert all(p.name != "旧预设" for p in presets)
-
-
-def test_preset_styles_keeps_default_preset_and_generates_seven(owner_client, fresh_db, monkeypatch):
-    """情况A：默认风格是 preset → 保留该默认 preset + 删其他 preset + 生成 7 个凑足 8。"""
-    monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(7))
-    with Session(fresh_db) as s:
-        brand, _campaign, _topic = _seed_topic(s)
-        keep = Style(brand_id=brand.id, name="要保留的默认预设", summary="保留",
-                     source="preset", is_default=True)
-        drop = Style(brand_id=brand.id, name="要删除的非默认预设", summary="删除", source="preset")
-        s.add(keep); s.add(drop)
-        s.commit()
-        s.refresh(keep)
-        keep_id = keep.id
-        bid = brand.id
-
-    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
-    assert r.status_code == 303
-    with Session(fresh_db) as s:
-        presets = s.exec(
-            select(Style).where(Style.brand_id == bid, Style.source == "preset").order_by(Style.id)
-        ).all()
-        assert len(presets) == 8
-        # 保留的默认 preset 仍在且仍为默认
-        kept = s.get(Style, keep_id)
-        assert kept is not None
-        assert kept.name == "要保留的默认预设"
-        assert kept.is_default is True
-        # 其余 7 个新生成的均非默认
-        new_presets = [p for p in presets if p.id != keep_id]
-        assert len(new_presets) == 7
-        assert all(p.is_default is False for p in new_presets)
-        # 旧的非默认 preset 已删
-        assert all(p.name != "要删除的非默认预设" for p in presets)
-
-
-def test_preset_styles_keeps_non_preset_default_and_generates_eight(owner_client, fresh_db, monkeypatch):
-    """默认风格非 preset（如网络抓取的）→ 该默认不被删 + 删旧 preset + 生成 8 个新 preset。"""
-    monkeypatch.setattr(wroutes.llm, "generate_text", _preset_llm_factory(8))
-    with Session(fresh_db) as s:
-        brand, _campaign, _topic = _seed_topic(s)
-        # 非 preset 的默认风格（应保留不动）
-        non_preset_default = Style(brand_id=brand.id, name="网络抓取的默认", summary="保留",
-                                    source="google", is_default=True)
-        # 旧 preset（应删除）
-        old_preset = Style(brand_id=brand.id, name="旧预设", summary="删", source="preset")
-        s.add(non_preset_default); s.add(old_preset)
-        s.commit()
-        s.refresh(non_preset_default)
-        keep_id = non_preset_default.id
-        bid = brand.id
-
-    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
-    assert r.status_code == 303
-    with Session(fresh_db) as s:
-        # 非 preset 默认保留
-        kept = s.get(Style, keep_id)
-        assert kept is not None
-        assert kept.source == "google"
-        assert kept.is_default is True
-        # preset 全部是新生成的 8 个，都不设默认
-        presets = s.exec(
-            select(Style).where(Style.brand_id == bid, Style.source == "preset")
-        ).all()
-        assert len(presets) == 8
-        assert all(p.is_default is False for p in presets)
-        assert all(p.name != "旧预设" for p in presets)
-
-
-def test_preset_styles_llm_failure_returns_502(owner_client, fresh_db, monkeypatch):
-    """LLM 调用失败 → 502，不写库。"""
-    def boom(*a, **k):
-        raise RuntimeError("LLM down")
-    monkeypatch.setattr(wroutes.llm, "generate_text", boom)
-    with Session(fresh_db) as s:
-        brand, _campaign, _topic = _seed_topic(s)
-        bid = brand.id
-
-    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
-    assert r.status_code == 502
-    with Session(fresh_db) as s:
-        presets = s.exec(
-            select(Style).where(Style.brand_id == bid, Style.source == "preset")
-        ).all()
-        assert len(presets) == 0
-
-
-def test_preset_styles_unparseable_output_returns_502(owner_client, fresh_db, monkeypatch):
-    """LLM 返回无法解析的格式 → 502。"""
-    monkeypatch.setattr(wroutes.llm, "generate_text", lambda *a, **k: "思考中...这不是格式化输出")
-    with Session(fresh_db) as s:
-        _seed_topic(s)
-
-    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
-    assert r.status_code == 502
-
-
-def test_preset_styles_requires_editor_level(publisher_client, fresh_db):
-    """publisher(0) 无生成预设权限：返回 403。"""
-    with Session(fresh_db) as s:
-        _seed_topic(s)
-    r = publisher_client.post("/writing/styles/preset", follow_redirects=False)
-    assert r.status_code == 403
-
-
-def test_preset_styles_default_count_is_eight(owner_client, fresh_db, monkeypatch):
-    """不传 count 时默认生成 8 个。"""
-    seen = {"count_in_prompt": None}
-    def fake_text(prompt, *a, **k):
-        seen["count_in_prompt"] = prompt
-        return _preset_llm_factory(8)()
-
-    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
-    with Session(fresh_db) as s:
-        brand, _campaign, _topic = _seed_topic(s)
-        bid = brand.id
-
-    r = owner_client.post("/writing/styles/preset", follow_redirects=False)
-    assert r.status_code == 303
-    assert "8 个差异化的写作风格" in seen["count_in_prompt"]
-    with Session(fresh_db) as s:
-        presets = s.exec(
-            select(Style).where(Style.brand_id == bid, Style.source == "preset")
-        ).all()
-        assert len(presets) == 8
+        assert wroutes._default_style(s, brand_id).name == "人工提炼风格"
 
 
 # ── 文章生成测试 ──
@@ -1707,7 +1818,7 @@ def test_detail_page_shows_edit_button_when_pending_review(owner_client, fresh_d
         _brand, campaign, topic = _seed_topic(s)
         article = Article(
             topic_id=topic.id, campaign_id=campaign.id, title="T",
-            body="第一段\n[插图：位置一]\n第二段",
+            body="第一段。\n\n第二段。\n[插图：位置一]\n第三段。\n\n第四段。",
             status="待审核",
         )
         s.add(article); s.commit(); s.refresh(article)
@@ -1723,6 +1834,8 @@ def test_detail_page_shows_edit_button_when_pending_review(owner_client, fresh_d
     assert "[插图：待选择]" in html
     assert "在光标处插图" in html
     assert 'data-seg' in html
+    # 每个插图之间的文字是一个连续编辑区，区内自然段不再各自拆框。
+    assert html.count('data-seg data-type="text"') == 2
 
 
 def test_detail_page_hides_placeholder_title_until_generation_finishes(owner_client, fresh_db):
@@ -2386,3 +2499,723 @@ def test_review_approve_with_optional_note(owner_client, fresh_db):
     assert r.status_code == 303
     with Session(fresh_db) as s:
         assert s.get(Article, aid).review_note == "内容合规，可以发布"
+
+
+# ── 待审核正文 AI 修改 ──
+
+def test_ai_edit_returns_selection_preview_without_mutating_article(owner_client, fresh_db, monkeypatch):
+    """AI 修改只返回预览，不直接改写数据库中的文章。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    seen = {}
+
+    def fake_text(prompt, task="default", module="default", **kwargs):
+        seen["prompt"] = prompt
+        assert task == "writing_article_edit"
+        assert module == "writing"
+        return "改写后的段落"
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "selection",
+            "body": "原始段落\n\n第二段",
+            "selected_text": "原始段落",
+            "instruction": "语气更自然，减少宣传腔。",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["scope"] == "selection"
+    assert data["original"] == "原始段落"
+    assert data["proposed"] == "改写后的段落"
+    assert data["body"] == "改写后的段落\n\n第二段"
+    assert "减少宣传腔" in seen["prompt"]
+
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.body == "正文内容\n\n[插图：头图]\n\n结尾段"
+        assert article.status == "待审核"
+
+
+def test_ai_edit_title_selection_returns_title_preview_without_mutating_article(owner_client, fresh_db, monkeypatch):
+    """选中标题时只生成标题预览，正文和数据库文章保持不变。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    seen = {}
+
+    def fake_text(prompt, task="default", module="default", **kwargs):
+        seen["prompt"] = prompt
+        return "更好的标题"
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", fake_text)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "selection",
+            "target": "title",
+            "title": "待审核稿件",
+            "body": "正文内容\n\n[插图：头图]\n\n结尾段",
+            "selected_text": "待审核稿件",
+            "instruction": "标题更有吸引力，但不要夸张。",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["target"] == "title"
+    assert data["original"] == "待审核稿件"
+    assert data["proposed"] == "更好的标题"
+    assert data["title"] == "更好的标题"
+    assert data["body"] == "正文内容\n\n[插图：头图]\n\n结尾段"
+    assert "选中标题" in seen["prompt"]
+
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.title == "待审核稿件"
+        assert article.body == "正文内容\n\n[插图：头图]\n\n结尾段"
+
+
+def test_ai_edit_full_article_preserves_image_slots(owner_client, fresh_db, monkeypatch):
+    """全文 AI 修改可更新插图描述，并返回图片变化清单。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *args, **kwargs: "新的开头\n\n[插图：雨后展厅外景，真实摄影风格]\n\n新的结尾",
+    )
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "article",
+            "body": "原来的开头\n\n[插图：展厅全景]\n\n原来的结尾",
+            "instruction": "全文更紧凑。",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["body"] == "新的开头\n\n[插图：雨后展厅外景，真实摄影风格]\n\n新的结尾"
+    assert data["image_changes"] == [{
+        "index": 0,
+        "kind": "updated",
+        "old_desc": "展厅全景",
+        "new_desc": "雨后展厅外景，真实摄影风格",
+        "action": "regenerate",
+    }]
+
+
+def test_ai_edit_selection_tolerates_browser_newline_normalization(owner_client, fresh_db, monkeypatch):
+    """contenteditable 选区换行与正文收集换行不同，也应能定位选区。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *args, **kwargs: "改写后的两段",
+    )
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "selection",
+            "body": "第一段\n\n第二段",
+            "selected_text": "第一段\n第二段",
+            "instruction": "合并并精简。",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["body"] == "改写后的两段"
+
+
+def test_ai_edit_selection_drops_echoed_image_marker(owner_client, fresh_db, monkeypatch):
+    """选中普通文字时，模型回显上下文插图标记不应再导致 400。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *args, **kwargs: "改写后的段落\n\n[插图：展厅全景]",
+    )
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "selection",
+            "body": "原文段落\n\n[插图：展厅全景]\n\n第二段",
+            "selected_text": "原文段落",
+            "instruction": "语气更自然。",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["body"] == "改写后的段落\n\n[插图：展厅全景]\n\n第二段"
+    assert response.json()["image_changes"] == []
+
+
+def test_ai_edit_streams_deltas_and_returns_final_preview(owner_client, fresh_db, monkeypatch):
+    """AI 修改流式返回增量文本，完成事件携带最终可应用正文。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    def fake_stream(prompt, task="default", module="default", **kwargs):
+        assert task == "writing_article_edit"
+        assert module == "writing"
+        yield "改写后的"
+        yield "正文"
+
+    monkeypatch.setattr(wroutes.llm, "stream_text", fake_stream)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit/stream",
+        data={
+            "scope": "selection",
+            "body": "原始段落\n\n第二段",
+            "selected_text": "原始段落",
+            "instruction": "语气更自然。",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'event: delta' in response.text
+    assert '"text": "改写后的"' in response.text
+    assert '"text": "正文"' in response.text
+    assert 'event: done' in response.text
+    assert '"body": "改写后的正文\\n\\n第二段"' in response.text
+
+
+def test_ai_edit_stream_includes_previous_conversation(owner_client, fresh_db, monkeypatch):
+    """后续 AI 修改请求携带此前的对话记录，支持基于上一轮继续修改。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    captured = {}
+
+    def fake_stream(prompt, task="default", module="default", **kwargs):
+        captured["prompt"] = prompt
+        yield "第二轮修改后的正文"
+
+    monkeypatch.setattr(wroutes.llm, "stream_text", fake_stream)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit/stream",
+        data={
+            "scope": "article",
+            "body": "上一轮 AI 草稿",
+            "instruction": "再具体一点，保留上一轮结构。",
+            "conversation": '[{"role":"user","text":"先润色表达"},{"role":"assistant","text":"上一轮 AI 草稿"}]',
+        },
+    )
+    assert response.status_code == 200
+    assert "【此前的交互修改记录】" in captured["prompt"]
+    assert "先润色表达" in captured["prompt"]
+    assert "上一轮 AI 草稿" in captured["prompt"]
+
+
+def test_ai_edit_stream_filters_thinking_and_retries_empty_final(owner_client, fresh_db, monkeypatch):
+    """只收到思考块时自动重试，前端只接收最终文本。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    calls = {"count": 0}
+    prompts = []
+
+    def fake_stream(prompt, task="default", module="default", **kwargs):
+        calls["count"] += 1
+        prompts.append(prompt)
+        if calls["count"] == 1:
+            yield "<think>这次只有思考，没有最终答案。</think>"
+            return
+        yield "<think>重新思考。</think>"
+        yield "改写后的"
+        yield "正文"
+
+    monkeypatch.setattr(wroutes.llm, "stream_text", fake_stream)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit/stream",
+        data={
+            "scope": "selection",
+            "body": "原始段落\n\n第二段",
+            "selected_text": "原始段落",
+            "instruction": "语气更自然。",
+        },
+    )
+    assert response.status_code == 200
+    assert calls["count"] == 2
+    assert "【重试要求】" in prompts[1]
+    assert "event: retry" in response.text
+    assert "<think>这次只有思考" in response.text
+    assert "<think>重新思考" in response.text
+    assert '"body": "改写后的正文\\n\\n第二段"' in response.text
+
+
+def test_ai_edit_stream_retries_selection_output_that_is_too_long(owner_client, fresh_db, monkeypatch):
+    """选区结果明显膨胀时自动重试，避免把大段模型输出当成替换文本。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    calls = {"count": 0}
+
+    def fake_stream(prompt, task="default", module="default", **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            yield "很长的模型分析结果。" * 100
+            return
+        yield "更自然的段落"
+
+    monkeypatch.setattr(wroutes.llm, "stream_text", fake_stream)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit/stream",
+        data={
+            "scope": "selection",
+            "body": "原始段落\n\n第二段",
+            "selected_text": "原始段落",
+            "instruction": "语气更自然。",
+        },
+    )
+    assert response.status_code == 200
+    assert calls["count"] == 2
+    assert "event: retry" in response.text
+    assert '"body": "更自然的段落\\n\\n第二段"' in response.text
+
+
+def test_image_prompt_optimization_stream_is_scoped_to_slot(owner_client, fresh_db, monkeypatch):
+    """插图提示词优化只携带当前插图及其文章语境，并返回流式最终提示词。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    captured = {}
+
+    def fake_stream(prompt, task="default", module="default", **kwargs):
+        captured["prompt"] = prompt
+        assert task == "writing_image_prompt_edit"
+        assert module == "writing"
+        yield "成都竹林里的盖碗茶，温暖自然光，竖幅摄影构图"
+
+    monkeypatch.setattr(wroutes.llm, "stream_text", fake_stream)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/optimize-prompt/stream",
+        data={
+            "slot_desc": "头图",
+            "current_prompt": "一张旧的插图提示词",
+            "instruction": "突出茶和竹林的氛围。",
+            "conversation": '[{"role":"user","text":"先让画面更自然"}]',
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "当前插图提示词" in captured["prompt"]
+    assert "一张旧的插图提示词" in captured["prompt"]
+    assert "突出茶和竹林的氛围" in captured["prompt"]
+    assert "先让画面更自然" in captured["prompt"]
+    assert 'event: done' in response.text
+    assert '"proposed": "成都竹林里的盖碗茶，温暖自然光，竖幅摄影构图"' in response.text
+
+
+def test_image_prompt_regeneration_replaces_old_candidates(owner_client, fresh_db, monkeypatch):
+    """确认新提示词后生成 4 张候选图，并整体替换该位置的旧候选图。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        s.add(ArticleImage(
+            article_id=aid,
+            slot_index=0,
+            slot_desc="头图",
+            prompt="旧提示词",
+            image_url="https://img.example/old.png",
+            is_selected=True,
+        ))
+        s.commit()
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_images",
+        lambda *args, **kwargs: [f"https://img.example/new-{i}.png" for i in range(4)],
+    )
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/regenerate-with-prompt",
+        data={"prompt": "新的提示词"},
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(images) == 4
+        assert not any(image.image_url.endswith("old.png") for image in images)
+        assert sum(image.prompt == "新的提示词" for image in images) == 4
+        assert sum(image.is_selected for image in images) == 1
+
+
+def test_image_prompt_regeneration_keeps_old_candidates_before_background_generation(owner_client, fresh_db, monkeypatch):
+    """启动提示词生图后保留旧候选图，生成失败时可以回退。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        s.add(ArticleImage(
+            article_id=aid,
+            slot_index=0,
+            slot_desc="头图",
+            prompt="旧提示词",
+            image_url="https://img.example/old.png",
+            is_selected=True,
+        ))
+        s.commit()
+
+    class _NotStartedThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(wroutes.threading, "Thread", _NotStartedThread)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/regenerate-with-prompt",
+        data={"prompt": "新的提示词"},
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.status == "待配图"
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(images) == 1
+        assert images[0].image_url.endswith("old.png")
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "当前图片暂保留" in html
+    assert "正在生成新候选图" in html
+
+
+def test_image_prompt_regeneration_failure_rolls_back_to_old_candidates(owner_client, fresh_db, monkeypatch):
+    """新提示词生图失败时，旧候选图仍然可用并显示错误。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        s.add(ArticleImage(
+            article_id=aid,
+            slot_index=0,
+            slot_desc="头图",
+            prompt="旧提示词",
+            image_url="https://img.example/old.png",
+            is_selected=True,
+        ))
+        s.commit()
+
+    def fail_images(*args, **kwargs):
+        raise RuntimeError("图片服务暂时不可用")
+
+    monkeypatch.setattr(wroutes.llm, "generate_images", fail_images)
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/regenerate-with-prompt",
+        data={"prompt": "新的提示词"},
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert article.status == "待审核"
+        assert "图片服务暂时不可用" in article.error_message
+        assert len(images) == 1
+        assert images[0].prompt == "旧提示词"
+
+
+def test_image_prompt_partial_result_keeps_all_old_candidates(owner_client, fresh_db, monkeypatch):
+    """提示词重生成只返回 1-3 张时，不能把完整旧候选图替换掉。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        for index in range(4):
+            s.add(ArticleImage(
+                article_id=aid,
+                slot_index=0,
+                slot_desc="头图",
+                prompt="旧提示词",
+                image_url=f"https://img.example/old-{index}.png",
+                is_selected=(index == 0),
+            ))
+        s.commit()
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_images",
+        lambda *args, **kwargs: ["https://img.example/partial-0.png"] * 3,
+    )
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/regenerate-with-prompt",
+        data={"prompt": "新的提示词"},
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        images = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.id)
+        ).all()
+        assert article.status == "待审核"
+        assert "需要完整返回 4 张" in article.error_message
+        assert len(images) == 4
+        assert all(image.prompt == "旧提示词" for image in images)
+
+
+def test_ai_edit_allows_new_and_removed_image_slots(owner_client, fresh_db, monkeypatch):
+    """全文 AI 修改可以新增或删除插图位置，并返回对应动作。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_text",
+        lambda *args, **kwargs: "新的正文\n\n[插图：新的配图]\n\n第二个插图\n\n[插图：新增配图]",
+    )
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "article",
+            "body": "原文\n\n[插图：展厅全景]\n\n第二个插图",
+            "instruction": "润色全文。",
+        },
+    )
+    assert response.status_code == 200
+    changes = response.json()["image_changes"]
+    assert changes[0]["kind"] == "updated"
+    assert changes[1]["kind"] == "added"
+
+
+def test_edit_body_regenerates_selected_image_change(owner_client, fresh_db, monkeypatch):
+    """保存 AI 正文修改时，选择重新生成的插图会进入单 slot 配图任务。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        s.add(ArticleImage(
+            article_id=aid,
+            slot_index=0,
+            slot_desc="头图",
+            image_url="https://img.example/old.png",
+            is_selected=True,
+        ))
+        s.commit()
+
+    started = []
+    monkeypatch.setattr(
+        wroutes,
+        "_run_single_slot_worker",
+        lambda *args: started.append(args),
+    )
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={
+            "body": "正文内容\n\n[插图：新的头图]\n\n结尾段",
+            "image_changes": json.dumps([{
+                "index": 0,
+                "kind": "updated",
+                "old_desc": "头图",
+                "new_desc": "新的头图",
+                "action": "regenerate",
+            }], ensure_ascii=False),
+        },
+    )
+    assert response.status_code == 200
+    assert started and started[0][2:4] == (0, "新的头图")
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert article.body == "正文内容\n\n[插图：新的头图]\n\n结尾段"
+        assert article.status == "待配图"
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(images) == 1
+        assert images[0].slot_desc == "新的头图"
+
+
+def test_edit_body_remove_action_removes_marker_and_images(owner_client, fresh_db):
+    """正文保留插图标记时，显式选择删除也必须移除标记和候选图。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        article = s.get(Article, aid)
+        article.body = "正文内容\n\n[插图：头图]\n\n结尾段"
+        s.add(article)
+        s.add(ArticleImage(
+            article_id=aid,
+            slot_index=0,
+            slot_desc="头图",
+            prompt="旧提示词",
+            image_url="https://img.example/old.png",
+            is_selected=True,
+        ))
+        s.commit()
+
+    response = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={
+            "body": "正文内容\n\n[插图：头图]\n\n结尾段",
+            "image_changes": json.dumps([{
+                "index": 0,
+                "kind": "updated",
+                "old_desc": "头图",
+                "new_desc": "头图",
+                "action": "remove",
+            }], ensure_ascii=False),
+        },
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        assert "[插图：头图]" not in article.body
+        assert s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all() == []
+
+
+def test_edit_body_queues_all_regenerated_image_slots(owner_client, fresh_db, monkeypatch):
+    """多个插图同时选择重生成时，所有 slot 都会进入任务队列且保留旧图。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        article = s.get(Article, aid)
+        article.body = "第一段\n\n[插图：头图]\n\n第二段\n\n[插图：尾图]"
+        s.add(article)
+        for index, desc in enumerate(("头图", "尾图")):
+            s.add(ArticleImage(
+                article_id=aid,
+                slot_index=index,
+                slot_desc=desc,
+                prompt=f"旧提示词{index}",
+                image_url=f"https://img.example/old-{index}.png",
+                is_selected=True,
+            ))
+        s.commit()
+
+    started = []
+    monkeypatch.setattr(
+        wroutes,
+        "_run_slot_batch_worker",
+        lambda *args: started.append(args),
+    )
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/edit-body",
+        data={
+            "body": "第一段\n\n[插图：新头图]\n\n第二段\n\n[插图：新尾图]",
+            "image_changes": json.dumps([
+                {"index": 0, "kind": "updated", "old_desc": "头图", "new_desc": "新头图", "action": "regenerate"},
+                {"index": 1, "kind": "updated", "old_desc": "尾图", "new_desc": "新尾图", "action": "regenerate"},
+            ], ensure_ascii=False),
+        },
+    )
+    assert response.status_code == 200
+    assert len(started) == 1
+    assert started[0][2] == [(0, "新头图", ""), (1, "新尾图", "")]
+    assert started[0][-1] is True
+    with Session(fresh_db) as s:
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert len(images) == 2
+
+
+def test_image_slot_batch_finalizes_status_only_after_all_slots(owner_client, fresh_db, monkeypatch):
+    """批量重生成期间保持待配图，全部 slot 完成后才进入待审核。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        article = s.get(Article, aid)
+        article.body = "第一段\n\n[插图：头图]\n\n第二段\n\n[插图：尾图]"
+        article.status = "待配图"
+        s.add(article)
+        for index, desc in enumerate(("头图", "尾图")):
+            for image_index in range(4):
+                s.add(ArticleImage(
+                    article_id=aid,
+                    slot_index=index,
+                    slot_desc=desc,
+                    prompt=f"旧提示词{index}",
+                    image_url=f"https://img.example/old-{index}-{image_index}.png",
+                    is_selected=(image_index == 0),
+                ))
+        s.commit()
+        topic_id = article.topic_id
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = []
+
+    def fake_images(prompt, module="default", n=4, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            first_started.set()
+            assert release_first.wait(2)
+        return [f"https://img.example/new-{len(calls)}-{index}.png" for index in range(4)]
+
+    monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
+    worker = threading.Thread(
+        target=wroutes._run_slot_batch_worker,
+        args=(aid, topic_id, [(0, "头图", ""), (1, "尾图", "")], "", True),
+    )
+    worker.start()
+    assert first_started.wait(2)
+    with Session(fresh_db) as s:
+        assert s.get(Article, aid).status == "待配图"
+    release_first.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert article.status == "待审核"
+        assert len(images) == 8
+        assert len(calls) == 2
+
+
+def test_ai_edit_duplicate_selection_uses_supplied_position(owner_client, fresh_db, monkeypatch):
+    """文章出现重复句子时，服务端按选区偏移替换对应的那一处。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+
+    monkeypatch.setattr(wroutes.llm, "generate_text", lambda *args, **kwargs: "第二处已修改")
+    body = "相同句子\n\n中间内容\n\n相同句子"
+    second_start = body.rfind("相同句子")
+    response = owner_client.post(
+        f"/writing/articles/{aid}/ai-edit",
+        data={
+            "scope": "selection",
+            "body": body,
+            "selected_text": "相同句子",
+            "selection_start": str(second_start),
+            "selection_end": str(second_start + len("相同句子")),
+            "instruction": "润色表达。",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["body"] == "相同句子\n\n中间内容\n\n第二处已修改"
+
+
+def test_pending_review_detail_shows_ai_edit_entry(owner_client, fresh_db):
+    """待审核文章编辑态提供 AI 修改入口和独立预览接口。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    html = owner_client.get(f"/writing/articles/{aid}").text
+    assert "AI 修改正文" in html
+    assert "AI 协作修改" in html
+    assert "pointer-events-none" in html
+    assert '@mouseup.window="if (aiModal && aiMode === \'text\' && !aiBusy) captureAiSelectionFromEvent($event)"' in html
+    assert "captureAiSelectionFromEvent(event)" in html
+    assert "aiConversations" in html
+    assert "aiCurrentConversationId" in html
+    assert "aiConversationHasInteraction(item)" in html
+    assert "!this.aiConversationHasInteraction(item)" in html
+    assert "this.newAiConversation(info.scope, info.target, info.selected, true, info.selectionStart, info.selectionEnd)" in html
+    assert "aiThinkingText" in html
+    assert "AI 正在思考" in html
+    assert "fd.append('conversation', JSON.stringify(this.aiMessages.slice(0, -2)))" in html
+    assert "优化提示词" in html
+    assert "optimize-prompt/stream" in html
+    assert "regenerate-with-prompt" in html
+    assert "aiImageConversations" in html
+    assert "aiImageGenerationStarting" in html
+    assert "正在启动候选图生成" in html
+    assert "选区附近上下文" not in html
+    assert "正文概览" not in html
+    assert "/ai-edit" in html
+
+
+def test_ai_edit_workbench_is_independent_page(owner_client, fresh_db):
+    """AI 修改入口打开独立工作台，页面包含上下文、对话和结果区域。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+    response = owner_client.get(f"/writing/articles/{aid}/ai-edit/page")
+    assert response.status_code == 200
+    html = response.text
+    assert "AI 修改工作台" in html
+    assert "原文与上下文" in html
+    assert "AI 修改对话" in html
+    assert "当前结果预览" in html
+    assert "tnAiEditWorkbench" in html
+    assert "selectionOffset" in html

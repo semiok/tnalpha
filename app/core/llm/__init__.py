@@ -88,6 +88,37 @@ def generate_text(prompt: str, task: str = "default", pdf_path: str | None = Non
     return stub.generate_text(prompt, task=task)
 
 
+def stream_text(prompt: str, task: str = "default", pdf_path: str | None = None,
+                module: str = "default", attachments: list[str] | None = None,
+                fallback: bool = True):
+    """按当前文本 provider 以增量文本迭代；不支持流式的 provider 退化为单块输出。"""
+    st = _settings(module)
+    p = st["text_provider"]
+    try:
+        if p in ("openai", "minimax-m3"):
+            yield from openai_compat.stream_text(
+                prompt, st["openai_base_url"], st["openai_api_key"],
+                st["openai_model"], timeout=config.LLM_TIMEOUT)
+            return
+        if p == "claude-cli":
+            yield claude_cli.generate_text(prompt, st["claude_model"], timeout=config.LLM_TIMEOUT,
+                                            pdf_path=pdf_path, attachments=attachments)
+            return
+        if p == "codex":
+            yield from codex_text.stream_text(
+                prompt, st["codex_model"], timeout=config.LLM_TIMEOUT,
+                pdf_path=pdf_path, attachments=attachments)
+            return
+        yield stub.generate_text(prompt, task=task)
+    except ModelRateLimited:
+        raise
+    except Exception as e:
+        if not fallback:
+            raise RuntimeError(f"文本 provider '{p}' 调用失败：{e}") from e
+        print(f"[llm] 文本 provider '{p}' 流式调用失败，回退 stub：{e}")
+        yield stub.generate_text(prompt, task=task)
+
+
 def generate_image(prompt: str, module: str = "default", fallback: bool = True) -> str:
     """module=模块名，按模块选图像模型（未配→继承 default）。"""
     st = _settings(module)

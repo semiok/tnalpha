@@ -7,18 +7,17 @@
     {{ empty_state("还没有品牌，先去①知识库创建品牌。") }}
   {% else %}
     {{ card_open("写作风格") }}
-      <div x-data="{tab:'{{ tab }}', highlightId: {{ highlight or 'null' }}, expanded:false}" class="space-y-4">
+      <div x-data="{tab:'{{ tab }}', highlightId: {{ highlight or 'null' }}}" class="space-y-4">
         <div class="flex flex-wrap gap-2 border-b border-slate-100 pb-2">
-          <button @click="tab='preset'" :class="tab==='preset' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3.5 py-1.5 rounded-lg text-sm font-medium transition">AI 预设</button>
           <button @click="tab='library'" :class="tab==='library' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3.5 py-1.5 rounded-lg text-sm font-medium transition">风格库</button>
           {% if request.state.can_write_writing %}
           <button @click="tab='new'" :class="tab==='new' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3.5 py-1.5 rounded-lg text-sm font-medium transition">新建</button>
           {% endif %}
         </div>
 
-        <div x-show="tab==='preset'" x-cloak class="space-y-4">
+        <div x-show="tab==='library'" x-cloak class="space-y-4" x-data="{libraryExpanded:false}">
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <p class="text-xs text-slate-400">基于品牌知识库生成公共写作风格，不绑定 campaign。</p>
+            <p class="text-xs text-slate-400">所有 campaign 和品牌常青共用这套风格库；品牌默认风格会自动注入文章生成。</p>
             <div class="flex items-center gap-3">
               {% if has_default_style and request.state.can_write_writing %}
                 <form method="post" action="/writing/styles/unset-default" class="inline"
@@ -26,54 +25,8 @@
                   {{ button("取消默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
                 </form>
               {% endif %}
-              {% if request.state.can_write_writing %}
-                <form method="post" action="/writing/styles/preset" class="inline"
-                      onsubmit="return confirm('生成 8 个品牌级 AI 预设风格？{% if preset_styles %}已有预设将被覆盖（默认预设保留）。{% endif %}');">
-                  {{ button("生成 8 个预设", variant="primary", type="submit", extra="!py-1 !text-xs") }}
-                </form>
-              {% endif %}
-              <span class="text-xs text-slate-400">{{ preset_styles | length }} 个预设风格</span>
+              <span class="text-xs text-slate-400">{{ styles | length }} 个风格</span>
             </div>
-          </div>
-          <div class="grid gap-2 sm:grid-cols-2">
-            {% for style in preset_styles %}
-              <div x-show="{{ loop.index0 }} < 4 || expanded"
-                   class="px-3 py-2 rounded-lg border {{ 'border-brand-300 bg-brand-50' if style.is_default else 'border-slate-200 bg-slate-50' }}">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span class="text-sm font-medium text-slate-700">{{ style.name }}</span>
-                  {% if style.is_default %}{{ chip("品牌默认", "brand") }}{% endif %}
-                </div>
-                <p class="text-xs text-slate-500 mt-1.5 whitespace-pre-line">{{ style.summary }}</p>
-                {% if request.state.can_write_writing %}
-                  <div class="flex gap-2 mt-2">
-                    {% if not style.is_default %}
-                      <form method="post" action="/writing/styles/{{ style.id }}/default" class="inline">
-                        {{ button("设为默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
-                      </form>
-                    {% endif %}
-                    <form method="post" action="/writing/styles/{{ style.id }}/delete" class="inline"
-                          onsubmit="return confirm('删除风格「{{ style.name }}」？');">
-                      {{ button("删除", variant="danger", type="submit", extra="!py-1 !text-xs") }}
-                    </form>
-                  </div>
-                {% endif %}
-              </div>
-            {% else %}
-              <div class="col-span-full text-sm text-slate-400 py-2">还没有预设风格。</div>
-            {% endfor %}
-          </div>
-          {% if preset_styles | length > 4 %}
-            <button @click="expanded = !expanded" type="button"
-                    class="text-xs text-brand-500 hover:text-brand-600 hover:underline">
-              <span x-text="expanded ? '收起' : '查看更多（共 {{ preset_styles | length }} 个）'"></span>
-            </button>
-          {% endif %}
-        </div>
-
-        <div x-show="tab==='library'" x-cloak class="space-y-4" x-data="{libraryExpanded:false}">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <p class="text-xs text-slate-400">所有 campaign 和品牌常青共用这套风格库；品牌默认风格会自动注入文章生成。</p>
-            <span class="text-xs text-slate-400">{{ styles | length }} 个风格</span>
           </div>
           <div class="grid gap-2 sm:grid-cols-2">
             {% for style in styles %}
@@ -102,6 +55,10 @@
                 <p x-show="!open" class="text-xs text-slate-500 mt-1 line-clamp-2">{{ style.summary }}</p>
                 {% if request.state.can_write_writing %}
                   <div class="flex gap-2 mt-2">
+                    <a href="/writing/styles/{{ style.id }}/discussion/page" target="_blank" rel="noopener"
+                       class="px-3.5 py-2 rounded-lg text-xs font-medium transition bg-slate-100 text-slate-700 hover:bg-slate-200 !py-1">
+                      和 AI 讨论 ↗
+                    </a>
                     {% if not style.is_default %}
                       <form method="post" action="/writing/styles/{{ style.id }}/default" class="inline">
                         {{ button("设为默认", variant="secondary", type="submit", extra="!py-1 !text-xs") }}
@@ -116,7 +73,7 @@
               </div>
             {% else %}
               <div class="col-span-full text-sm text-slate-400 py-2">
-                {% if request.state.can_write_writing %}还没有风格，去「新建」抓取或提取。{% else %}还没有风格。{% endif %}
+                {% if request.state.can_write_writing %}还没有风格，去「新建」上传或提取。{% else %}还没有风格。{% endif %}
               </div>
             {% endfor %}
           </div>
@@ -129,49 +86,10 @@
         </div>
 
         {% if request.state.can_write_writing %}
-        <div x-show="tab==='new'" x-cloak x-data="{ntab:'capture'}" class="space-y-4">
+        <div x-show="tab==='new'" x-cloak x-data="{ntab:'manual'}" class="space-y-4">
           <div class="flex flex-wrap gap-2 border-b border-slate-100 pb-2">
-            <button @click="ntab='capture'" :class="ntab==='capture' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">网络抓取</button>
-            <button @click="ntab='extract'" :class="ntab==='extract' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">URL 提取</button>
             <button @click="ntab='manual'" :class="ntab==='manual' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">手动上传</button>
-          </div>
-
-          <div x-show="ntab==='capture'" x-cloak class="space-y-3">
-            <p class="text-xs text-slate-400">检索品牌可长期复用的写作风格，结果直接进入公共风格库。</p>
-            <form method="post" action="/writing/styles/capture" class="flex flex-wrap items-end gap-2">
-              <label class="block">
-                <span class="block text-xs text-slate-500 mb-1">关键词</span>
-                <input type="text" name="query" value="{{ brand.name }} 写作风格"
-                       class="w-56 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
-              </label>
-              <label class="block">
-                <span class="block text-xs text-slate-500 mb-1">数量</span>
-                <input type="number" name="count" value="5" min="1" max="5"
-                       class="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
-              </label>
-              <div class="flex flex-wrap items-center gap-3 text-sm text-slate-600">
-                {% for src in catalog %}
-                  <label class="inline-flex items-center gap-1.5 {{ 'text-slate-400' if not src.enabled else '' }}"
-                         {% if not src.enabled %}title="未配置/未启用"{% endif %}>
-                    <input type="checkbox" name="source" value="{{ src.name }}" {{ 'checked' if src.default_on and src.enabled else '' }} {{ 'disabled' if not src.enabled else '' }}>
-                    <span>{{ src.emoji }} {{ src.label }}</span>
-                  </label>
-                {% endfor %}
-              </div>
-              {{ button("抓风格", variant="secondary", type="submit") }}
-            </form>
-          </div>
-
-          <div x-show="ntab==='extract'" x-cloak class="space-y-3">
-            <p class="text-xs text-slate-400">输入网页 URL，由 AI 提炼为品牌公共写作风格。</p>
-            <form method="post" action="/writing/styles/extract" class="flex flex-wrap items-end gap-2">
-              <label class="block flex-1 min-w-[240px]">
-                <span class="block text-xs text-slate-500 mb-1">网页 URL</span>
-                <input type="url" name="url" placeholder="https://example.com/article" required
-                       class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
-              </label>
-              {{ button("提取风格", variant="secondary", type="submit") }}
-            </form>
+            <button @click="ntab='extract'" :class="ntab==='extract' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'" class="px-3 py-1.5 rounded-lg text-sm transition">URL 提取</button>
           </div>
 
           <div x-show="ntab==='manual'" x-cloak class="space-y-3">
@@ -269,6 +187,18 @@
               {% endif %}
             </div>
           </div>
+
+          <div x-show="ntab==='extract'" x-cloak class="space-y-3">
+            <p class="text-xs text-slate-400">输入网页 URL，由 AI 提炼为品牌公共写作风格。</p>
+            <form method="post" action="/writing/styles/extract" class="flex flex-wrap items-end gap-2">
+              <label class="block flex-1 min-w-[240px]">
+                <span class="block text-xs text-slate-500 mb-1">网页 URL</span>
+                <input type="url" name="url" placeholder="https://example.com/article" required
+                       class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+              </label>
+              {{ button("提取风格", variant="secondary", type="submit") }}
+            </form>
+          </div>
         </div>
         {% endif %}
       </div>
@@ -359,4 +289,34 @@
       {{ card_close() }}
     {% endif %}
   {% endif %}
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const url = new URL(window.location.href);
+      const action = url.searchParams.get('style_sync');
+      const styleId = url.searchParams.get('style_sync_id');
+      const received = url.searchParams.get('style_sync_origin') === 'received';
+
+      window.tnListenStyleUpdate(function(message) {
+        if (window.location.pathname !== '/writing') return;
+        const next = new URL(window.location.href);
+        next.searchParams.set('tab', 'library');
+        if (message.styleId) next.searchParams.set('highlight', message.styleId);
+        next.searchParams.set('style_sync', message.action || 'applied');
+        next.searchParams.set('style_sync_id', message.styleId || '');
+        next.searchParams.set('style_sync_origin', 'received');
+        window.location.replace(next.pathname + next.search);
+      });
+
+      if (action && !received) {
+        window.tnBroadcastStyleUpdate({action: action, styleId: styleId || ''});
+      }
+      if (action) {
+        tnToast(action === 'created' ? '新风格已保存，风格库已更新' : '当前风格已应用修改，风格库已更新');
+        url.searchParams.delete('style_sync');
+        url.searchParams.delete('style_sync_id');
+        url.searchParams.delete('style_sync_origin');
+        window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''));
+      }
+    });
+  </script>
 {% endblock %}
