@@ -10,6 +10,7 @@
 import io
 import json
 import os
+import threading
 import time
 
 from sqlmodel import Session, select
@@ -2915,6 +2916,43 @@ def test_image_prompt_regeneration_failure_rolls_back_to_old_candidates(owner_cl
         assert images[0].prompt == "旧提示词"
 
 
+def test_image_prompt_partial_result_keeps_all_old_candidates(owner_client, fresh_db, monkeypatch):
+    """提示词重生成只返回 1-3 张时，不能把完整旧候选图替换掉。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        for index in range(4):
+            s.add(ArticleImage(
+                article_id=aid,
+                slot_index=0,
+                slot_desc="头图",
+                prompt="旧提示词",
+                image_url=f"https://img.example/old-{index}.png",
+                is_selected=(index == 0),
+            ))
+        s.commit()
+
+    monkeypatch.setattr(
+        wroutes.llm,
+        "generate_images",
+        lambda *args, **kwargs: ["https://img.example/partial-0.png"] * 3,
+    )
+    _patch_threading(monkeypatch)
+    response = owner_client.post(
+        f"/writing/articles/{aid}/slots/0/regenerate-with-prompt",
+        data={"prompt": "新的提示词"},
+    )
+    assert response.status_code == 200
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        images = s.exec(
+            select(ArticleImage).where(ArticleImage.article_id == aid).order_by(ArticleImage.id)
+        ).all()
+        assert article.status == "待审核"
+        assert "需要完整返回 4 张" in article.error_message
+        assert len(images) == 4
+        assert all(image.prompt == "旧提示词" for image in images)
+
+
 def test_ai_edit_allows_new_and_removed_image_slots(owner_client, fresh_db, monkeypatch):
     """全文 AI 修改可以新增或删除插图位置，并返回对应动作。"""
     with Session(fresh_db) as s:
@@ -3041,7 +3079,7 @@ def test_edit_body_queues_all_regenerated_image_slots(owner_client, fresh_db, mo
     started = []
     monkeypatch.setattr(
         wroutes,
-        "_run_single_slot_worker",
+        "_run_slot_batch_worker",
         lambda *args: started.append(args),
     )
     _patch_threading(monkeypatch)
@@ -3056,12 +3094,64 @@ def test_edit_body_queues_all_regenerated_image_slots(owner_client, fresh_db, mo
         },
     )
     assert response.status_code == 200
-    assert len(started) == 2
-    assert {args[2] for args in started} == {0, 1}
-    assert all(args[-1] is True for args in started)
+    assert len(started) == 1
+    assert started[0][2] == [(0, "新头图", ""), (1, "新尾图", "")]
+    assert started[0][-1] is True
     with Session(fresh_db) as s:
         images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
         assert len(images) == 2
+
+
+def test_image_slot_batch_finalizes_status_only_after_all_slots(owner_client, fresh_db, monkeypatch):
+    """批量重生成期间保持待配图，全部 slot 完成后才进入待审核。"""
+    with Session(fresh_db) as s:
+        aid, _cid = _seed_pending_review_article(s)
+        article = s.get(Article, aid)
+        article.body = "第一段\n\n[插图：头图]\n\n第二段\n\n[插图：尾图]"
+        article.status = "待配图"
+        s.add(article)
+        for index, desc in enumerate(("头图", "尾图")):
+            for image_index in range(4):
+                s.add(ArticleImage(
+                    article_id=aid,
+                    slot_index=index,
+                    slot_desc=desc,
+                    prompt=f"旧提示词{index}",
+                    image_url=f"https://img.example/old-{index}-{image_index}.png",
+                    is_selected=(image_index == 0),
+                ))
+        s.commit()
+        topic_id = article.topic_id
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = []
+
+    def fake_images(prompt, module="default", n=4, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            first_started.set()
+            assert release_first.wait(2)
+        return [f"https://img.example/new-{len(calls)}-{index}.png" for index in range(4)]
+
+    monkeypatch.setattr(wroutes.llm, "generate_images", fake_images)
+    worker = threading.Thread(
+        target=wroutes._run_slot_batch_worker,
+        args=(aid, topic_id, [(0, "头图", ""), (1, "尾图", "")], "", True),
+    )
+    worker.start()
+    assert first_started.wait(2)
+    with Session(fresh_db) as s:
+        assert s.get(Article, aid).status == "待配图"
+    release_first.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    with Session(fresh_db) as s:
+        article = s.get(Article, aid)
+        images = s.exec(select(ArticleImage).where(ArticleImage.article_id == aid)).all()
+        assert article.status == "待审核"
+        assert len(images) == 8
+        assert len(calls) == 2
 
 
 def test_ai_edit_duplicate_selection_uses_supplied_position(owner_client, fresh_db, monkeypatch):
@@ -3101,6 +3191,7 @@ def test_pending_review_detail_shows_ai_edit_entry(owner_client, fresh_db):
     assert "aiCurrentConversationId" in html
     assert "aiConversationHasInteraction(item)" in html
     assert "!this.aiConversationHasInteraction(item)" in html
+    assert "this.newAiConversation(info.scope, info.target, info.selected, true, info.selectionStart, info.selectionEnd)" in html
     assert "aiThinkingText" in html
     assert "AI 正在思考" in html
     assert "fd.append('conversation', JSON.stringify(this.aiMessages.slice(0, -2)))" in html
@@ -3127,3 +3218,4 @@ def test_ai_edit_workbench_is_independent_page(owner_client, fresh_db):
     assert "AI 修改对话" in html
     assert "当前结果预览" in html
     assert "tnAiEditWorkbench" in html
+    assert "selectionOffset" in html

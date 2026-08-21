@@ -161,7 +161,16 @@ function tnAiEditWorkbench(initial) {
       this.scope = 'selection';
       this.target = 'body';
       this.selectedText = '';
+      this.selectedStart = -1;
+      this.selectedEnd = -1;
       this.activateContext(true);
+    },
+    selectionOffset(root, node, offset) {
+      if (!root || !node) return -1;
+      const range = document.createRange();
+      range.selectNodeContents(root);
+      try { range.setEnd(node, offset); } catch (_) { return -1; }
+      return range.toString().length;
     },
     capturePageSelection() {
       if (this.busy) return;
@@ -172,10 +181,19 @@ function tnAiEditWorkbench(initial) {
       const inBody = this.$refs.sourceBody && this.$refs.sourceBody.contains(selection.anchorNode);
       if (!inTitle && !inBody) return;
       const nextTarget = inTitle ? 'title' : 'body';
-      if (this.scope === 'selection' && this.target === nextTarget && this.selectedText === text) return;
+      if (!selection.rangeCount) return;
+      const root = inTitle ? this.$refs.sourceTitle : this.$refs.sourceBody;
+      const range = selection.getRangeAt(0);
+      const rawStart = this.selectionOffset(root, range.startContainer, range.startOffset);
+      const leading = (selection.toString() || '').length - (selection.toString() || '').replace(/^\s+/, '').length;
+      const nextStart = rawStart >= 0 ? rawStart + leading : -1;
+      const nextEnd = nextStart >= 0 ? nextStart + text.length : -1;
+      if (this.scope === 'selection' && this.target === nextTarget && this.selectedText === text && this.selectedStart === nextStart && this.selectedEnd === nextEnd) return;
       this.scope = 'selection';
       this.target = nextTarget;
       this.selectedText = text;
+      this.selectedStart = nextStart;
+      this.selectedEnd = nextEnd;
       this.activateContext(true);
     },
     usePreset(text) { this.instruction = text; },

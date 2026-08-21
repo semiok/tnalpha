@@ -1471,22 +1471,26 @@ def _run_image_worker(article_id: int, topic_id: int, platform: str = "",
         lock.release()
 
 
-def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
-                             slot_desc: str, platform: str = "",
-                             prompt_override: str = "",
-                             replace_after_generation: bool = False) -> None:
-    """配图子线程：为指定 slot 重新生成 4 张候选图。
+def _run_slot_batch_worker(article_id: int, topic_id: int,
+                           slot_specs: list[tuple[int, str, str]],
+                           platform: str = "",
+                           replace_after_generation: bool = True) -> None:
+    """配图子线程：串行完成一批 slot，再统一结算文章状态。
 
-    清理该 slot 的旧候选图，保留其他 slot 的图。
-    用 minimax n 参数批量生成 4 张（1 次 API 调用）。
+    同一文章的多个插图不能各自启动 worker：单个 worker 完成时，其他 slot
+    可能仍保留 4 张旧图，按候选图数量判断会把文章错误地提前标成「待审核」。
+    这里由一个 worker 持有文章锁，逐个处理整批 slot，所有 slot 完成后才结算
+    「待审核/待配图」状态。新候选图不足 4 张时不替换旧图，保证可以回退。
+
+    ``slot_specs`` 中每项为 ``(slot_index, slot_desc, prompt_override)``。
     """
     lock = _get_article_lock(article_id)
-    # 同一文章的多个插图任务必须排队执行，不能因为锁被占用而静默丢弃。
-    # 任务在线程中运行，阻塞这里不会阻塞请求线程。
     lock.acquire()
     try:
         from sqlmodel import Session as SMSession
         with SMSession(db.engine) as s:
+            article = None
+            errors: list[str] = []
             try:
                 article = s.get(Article, article_id)
                 topic = s.get(Topic, topic_id)
@@ -1497,54 +1501,56 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
                 ctx = KnowledgeContext.load(s, topic.brand_id, topic.campaign_id)
                 style = _default_style(s, topic.brand_id)
 
-                # 普通重生会先清理旧候选；提示词优化采用“先生成、后替换”，
-                # 生成成功前保留旧图用于失败回退，但页面通过 image_generation_slot 隐藏旧图。
-                old_imgs = s.exec(
-                    select(ArticleImage).where(
-                        ArticleImage.article_id == article_id,
-                        ArticleImage.slot_index == slot_index,
-                    )
-                ).all()
-                if not replace_after_generation:
-                    for oi in old_imgs:
-                        s.delete(oi)
-                    s.commit()
+                for slot_index, slot_desc, prompt_override in slot_specs:
+                    old_imgs = s.exec(
+                        select(ArticleImage).where(
+                            ArticleImage.article_id == article_id,
+                            ArticleImage.slot_index == slot_index,
+                        )
+                    ).all()
+                    img_p = (prompt_override or "").strip() or _image_prompt_for_slot(
+                        topic, ctx, style, slot_desc, article.body, platform)
+                    image_provider, image_model = llm.image_model_info("writing")
+                    try:
+                        urls = llm.generate_images(img_p, module="writing", n=4, fallback=False)
+                        urls = list(urls or [])
+                        if replace_after_generation and len(urls) < 4:
+                            raise RuntimeError(
+                                f"图片服务只返回 {len(urls)} 张候选图，需要完整返回 4 张后再替换"
+                            )
+                        # 只有候选图准备好后才删除旧图；部分返回或异常均可回退。
+                        for oi in old_imgs:
+                            s.delete(oi)
+                        for candidate_idx, url in enumerate(urls[:4]):
+                            # 默认选中第 0 张：AI 给默认选择，用户不换 = 默认认可
+                            s.add(ArticleImage(
+                                article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
+                                slot_index=slot_index, slot_desc=slot_desc,
+                                is_selected=(candidate_idx == 0),
+                                image_provider=image_provider,
+                                image_model=image_model,
+                            ))
+                        s.commit()
+                    except Exception as exc:
+                        s.rollback()
+                        errors.append(f"插图位置 {slot_index + 1}：{str(exc)[:180]}")
+                        continue
 
-                img_p = (prompt_override or "").strip() or _image_prompt_for_slot(
-                    topic, ctx, style, slot_desc, article.body, platform)
-                image_provider, image_model = llm.image_model_info("writing")
-                try:
-                    urls = llm.generate_images(img_p, module="writing", n=4, fallback=False)
-                except RuntimeError:
-                    # 普通配图允许保留“待配图”状态等待补生；提示词替换必须回到待审核并展示失败原因。
-                    if replace_after_generation:
-                        raise
-                    urls = []
-                if replace_after_generation and not urls:
-                    raise RuntimeError("图片服务未返回候选图")
-                if replace_after_generation:
-                    for oi in old_imgs:
-                        s.delete(oi)
-                for candidate_idx, url in enumerate(urls):
-                    # 默认选中第 0 张：AI 给默认选择，用户不换 = 默认认可
-                    s.add(ArticleImage(
-                        article_id=article_id, prompt=img_p, image_url=_public_image_url(url),
-                        slot_index=slot_index, slot_desc=slot_desc,
-                        is_selected=(candidate_idx == 0),
-                        image_provider=image_provider,
-                        image_model=image_model,
-                    ))
-                s.commit()
-
-                # 单 slot 重生后：若所有 slot 满 4 张 → 待审核；否则保持待配图
+                # 只有整批 slot 都处理完后才统一结算状态，避免第一项完成时提前进入待审核。
+                article = s.get(Article, article_id)
+                if article is None:
+                    return
                 all_imgs = s.exec(
                     select(ArticleImage).where(ArticleImage.article_id == article_id)
                 ).all()
-                if _all_image_slots_full(article.body, all_imgs):
+                if errors and len(slot_specs) == 1 and replace_after_generation:
+                    # 保持单 slot 旧逻辑：即使旧候选图不足 4 张，失败时也回到待审核供用户查看回退图。
+                    article.status = "待审核"
+                elif _all_image_slots_full(article.body, all_imgs):
                     article.status = "待审核"
                 else:
                     article.status = "待配图"
-                article.error_message = ""
+                article.error_message = "；".join(errors)[:400]
                 article.image_generation_slot = -1
                 article.updated_at = _now()
                 s.add(article)
@@ -1552,17 +1558,31 @@ def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
 
             except Exception as exc:
                 s.rollback()
-                if replace_after_generation and article:
+                article = s.get(Article, article_id)
+                if article:
                     article.status = "待审核"
                     article.error_message = f"插图候选生成失败：{str(exc)[:400]}"
                     article.image_generation_slot = -1
                     article.updated_at = _now()
                     s.add(article)
                     s.commit()
-                # 单 slot 失败不影响整体，记日志即可
-                print(f"[single-slot-worker] article={article_id} slot={slot_index} 失败: {exc}", flush=True)
+                print(f"[slot-batch-worker] article={article_id} 失败: {exc}", flush=True)
     finally:
         lock.release()
+
+
+def _run_single_slot_worker(article_id: int, topic_id: int, slot_index: int,
+                             slot_desc: str, platform: str = "",
+                             prompt_override: str = "",
+                             replace_after_generation: bool = False) -> None:
+    """兼容单 slot 调用，实际仍走批处理 worker 的统一结算逻辑。"""
+    _run_slot_batch_worker(
+        article_id,
+        topic_id,
+        [(slot_index, slot_desc, prompt_override)],
+        platform,
+        replace_after_generation,
+    )
 
 
 def _display_phase_for_article(article: Article) -> str | None:
@@ -2669,11 +2689,20 @@ def _apply_article_body_image_changes(session: Session, article: Article,
         article.updated_at = _now()
         session.add(article)
     session.commit()
-    for slot_index in regenerate:
+    if len(regenerate) == 1:
+        slot_index = regenerate[0]
         slot_desc = new_slots[slot_index]
         t = threading.Thread(
             target=_run_single_slot_worker,
             args=(article.id, article.topic_id, slot_index, slot_desc, article.platform, "", True),
+            daemon=True,
+        )
+        t.start()
+    elif regenerate:
+        slot_specs = [(slot_index, new_slots[slot_index], "") for slot_index in regenerate]
+        t = threading.Thread(
+            target=_run_slot_batch_worker,
+            args=(article.id, article.topic_id, slot_specs, article.platform, True),
             daemon=True,
         )
         t.start()
