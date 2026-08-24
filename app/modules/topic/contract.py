@@ -12,25 +12,31 @@ from dataclasses import dataclass, field
 from sqlmodel import Session, select
 
 from app.modules.knowledge.models import (
-    Brand, Campaign, CampaignPoolRef, PoolTopic,
+    Brand, Campaign, CampaignPoolRef, CampaignStrategyRef, PoolTopic, Strategy,
 )
 
 
 @dataclass
 class KnowledgeContext:
     """②从①读到的分层输入（见 ARCHITECTURE §5.1）：
-    品牌层=约束（怎么写）｜活动层=内容（写什么·时机·素材）｜数据池=调优（素材/经验打法）。"""
+    品牌层=约束｜策略层=方向｜活动层=内容（含数据池素材/经验）。"""
     brand_prompt: str = ""        # 主题调性（约束：调性/文风/受众/母题，生成时优先级最高）
     content_notes: str = ""       # 内容要求（规范：字数/平台/史料/配图/尾注）
     doc_digest: str = ""          # 文档解读综合（品牌内容全景）
     style_digest: str = ""        # 综合视觉风格（配图方向）
+    strategy_contexts: list[str] = field(default_factory=list)  # 活动引用的策略名称 + 解析摘要
+    campaign_name: str = ""       # 已选择的活动名称；即使尚未解析也必须进入生成上下文
+    activity_type: str = ""       # campaign | column；无活动时为空
     campaign_digest: str = ""     # 活动选题简报（6 块；无活动=空 → 品牌常青选题模式）
     pool_materials: list[str] = field(default_factory=list)     # 资料包 content（素材/佐证）
     pool_experiences: list[str] = field(default_factory=list)   # 经验包 content（⑤复盘的打法，供调优先级）
+    brand_weight: int = 3
+    strategy_weight: int = 3
+    activity_weight: int = 4
 
     @property
     def has_campaign(self) -> bool:
-        return bool(self.campaign_digest)
+        return bool(self.campaign_name or self.campaign_digest)
 
     @classmethod
     def load(cls, session: Session, brand_id: int, campaign_id: int | None = None) -> "KnowledgeContext":
@@ -40,11 +46,34 @@ class KnowledgeContext:
         if brand is None:
             raise ValueError("品牌不存在")
         campaign_digest = ""
+        campaign_name = ""
+        activity_type = ""
+        strategy_contexts: list[str] = []
         materials: list[str] = []
         experiences: list[str] = []
+        brand_weight, strategy_weight, activity_weight = 3, 3, 4
         if campaign_id:
             camp = session.get(Campaign, campaign_id)
-            campaign_digest = camp.campaign_digest if camp else ""
+            if camp is None or camp.brand_id != brand_id:
+                raise ValueError("活动不存在或不属于该品牌")
+            campaign_name = camp.name
+            activity_type = camp.activity_type
+            campaign_digest = camp.campaign_digest
+            brand_weight = camp.brand_weight
+            strategy_weight = camp.strategy_weight
+            activity_weight = camp.activity_weight
+            strategy_ids = [ref.strategy_id for ref in session.exec(
+                select(CampaignStrategyRef).where(
+                    CampaignStrategyRef.campaign_id == campaign_id
+                )
+            ).all()]
+            strategies = session.exec(
+                select(Strategy).where(Strategy.id.in_(strategy_ids)).order_by(Strategy.id)
+            ).all() if strategy_ids else []
+            strategy_contexts = [
+                f"策略：{strategy.name}\n{strategy.strategy_digest or strategy.description or '（尚未解析）'}"
+                for strategy in strategies if strategy.brand_id == brand_id
+            ]
             ref_ids = [r.pool_topic_id for r in session.exec(
                 select(CampaignPoolRef).where(CampaignPoolRef.campaign_id == campaign_id)).all()]
             topics = session.exec(select(PoolTopic).where(PoolTopic.id.in_(ref_ids))).all() if ref_ids else []
@@ -53,8 +82,12 @@ class KnowledgeContext:
         return cls(
             brand_prompt=brand.brand_prompt, content_notes=brand.content_notes,
             doc_digest=brand.doc_digest, style_digest=brand.style_digest,
+            strategy_contexts=strategy_contexts,
+            campaign_name=campaign_name, activity_type=activity_type,
             campaign_digest=campaign_digest,
-            pool_materials=materials, pool_experiences=experiences)
+            pool_materials=materials, pool_experiences=experiences,
+            brand_weight=brand_weight, strategy_weight=strategy_weight,
+            activity_weight=activity_weight)
 
 
 @dataclass

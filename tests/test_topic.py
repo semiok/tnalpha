@@ -8,7 +8,7 @@ from datetime import datetime
 from urllib.parse import unquote
 from sqlmodel import Session, select
 
-from app.modules.knowledge.models import Brand, Campaign
+from app.modules.knowledge.models import Brand, Campaign, CampaignStrategyRef, Strategy
 from app.core.llm.errors import ModelRateLimited
 from app.modules.topic import generate as gen
 from app.modules.topic import routes as troutes
@@ -29,6 +29,13 @@ _SAMPLE = """标题：一枚汉简写了什么
 纲要：沈少民装置的反消费解读。
 受众：艺术爱好者
 时效：强"""
+
+
+def _candidate_text(*titles: str) -> str:
+    return "\n\n".join(
+        f"标题：{title}\n纲要：围绕{title}展开具体内容与素材。\n受众：城市青年\n时效：中"
+        for title in titles
+    )
 
 
 def _seed_brand(session: Session, with_campaign: bool = False) -> tuple[int, int | None]:
@@ -95,6 +102,7 @@ def test_generate_topics_campaign_mode(fresh_db, monkeypatch):
     assert created[0].llm_provider == "codex"
     assert created[0].llm_model == "gpt-5.5"
     assert "③选题方向" in seen["prompt"]                    # 活动简报进了 prompt
+    assert "品牌：策略：活动 = 3:3:4" in seen["prompt"]
 
 
 def test_generate_topics_brand_evergreen_mode(fresh_db, monkeypatch):
@@ -110,6 +118,173 @@ def test_generate_topics_brand_evergreen_mode(fresh_db, monkeypatch):
         created = gen.generate_topics(s, bid, None, count=5)
     assert len(created) == 2 and all(t.campaign_id is None for t in created)
     assert "③选题方向" not in seen["prompt"]                # 品牌常青不含活动简报
+
+
+def test_topic_prompt_keeps_weight_context_with_legacy_override(monkeypatch):
+    context = gen.KnowledgeContext(
+        strategy_contexts=["策略：年轻化\n面向城市青年"],
+        brand_weight=2,
+        strategy_weight=5,
+        activity_weight=3,
+    )
+    monkeypatch.setattr(gen, "resolve", lambda *args, **kwargs: "旧版自定义提示词")
+    prompt = gen._topics_prompt(context, [], 3)
+    assert "品牌：策略：活动 = 2:5:3" in prompt
+    assert "年轻化" in prompt and "旧版自定义提示词" in prompt
+
+
+def test_topic_prompt_enforces_equal_weight_for_multiple_strategies():
+    context = gen.KnowledgeContext(
+        strategy_contexts=[
+            "策略：小红书运营\n优先搜索承接与真实体验",
+            "策略：线下渠道\n优先门店活动与到店转化",
+        ],
+        brand_weight=3,
+        strategy_weight=3,
+        activity_weight=4,
+    )
+    prompt = gen._topics_prompt(context, [], 5)
+    assert "每条在策略层内部权重完全相同（各占 1/2）" in prompt
+    assert "每条策略至少成为一个候选的主要依据" in prompt
+    assert "【策略 1/2｜策略层内部权重 1/2】" in prompt
+    assert "【策略 2/2｜策略层内部权重 1/2】" in prompt
+    assert "小红书运营" in prompt and "线下渠道" in prompt
+    assert "只符合泛品牌调性" in prompt
+
+
+def test_topic_prompt_does_not_infer_strategy_without_activity_reference():
+    context = gen.KnowledgeContext(
+        doc_digest="品牌历史资料中曾经提到小红书运营",
+        strategy_contexts=[],
+    )
+    prompt = gen._topics_prompt(context, [], 3)
+    assert "本活动未引用策略，策略层权重本次不生效" in prompt
+    assert "不得从品牌资料中自行猜测一条当前策略" in prompt
+    assert "只作为历史背景，不得替代活动明确引用的策略" in prompt
+
+
+def test_extract_strategy_examples_and_forbid_them_in_prompt():
+    context = gen.KnowledgeContext(strategy_contexts=[
+        "策略：美学文章\n示例标题：\n- 《月白不是白，是睡前慢慢安静下来》\n"
+        "- 《像一只茶盏那样，刚好贴合日常》\n重复：《月白不是白，是睡前慢慢安静下来》",
+    ])
+    examples = gen.extract_strategy_example_titles(context.strategy_contexts)
+    assert examples == ["月白不是白，是睡前慢慢安静下来", "像一只茶盏那样，刚好贴合日常"]
+    prompt = gen._topics_prompt(context, [], 3, strategy_example_titles=examples)
+    assert "策略解释中的示例标题｜禁止复用" in prompt
+    assert "禁止原样使用、近义改写、换词重组" in prompt
+    assert all(title in prompt for title in examples)
+
+
+def test_title_similarity_catches_near_duplicate():
+    assert gen.title_similarity(
+        "月白不是白，是睡前慢慢安静下来",
+        "月白不是白，是夜晚慢慢安静",
+    ) >= 0.76
+    assert gen.title_similarity("秋天的干，不只在脸上", "一双袜子的温度分寸") < 0.76
+
+
+def test_generate_rejects_strategy_examples_and_refills(fresh_db, monkeypatch):
+    calls = []
+
+    def fake(prompt, **_kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return _candidate_text(
+                "月白不是白，是睡前慢慢安静下来",
+                "秋天的干，不只在脸上",
+            )
+        return _candidate_text("袜口为什么要留一点余地", "一双袜子的温度分寸")
+
+    monkeypatch.setattr(gen.llm, "generate_text", fake)
+    with Session(fresh_db) as session:
+        brand = Brand(name="溯肤", brand_prompt="温和克制")
+        session.add(brand); session.commit(); session.refresh(brand)
+        campaign = Campaign(brand_id=brand.id, name="球袜", campaign_digest="只生成球袜选题")
+        strategy = Strategy(
+            brand_id=brand.id,
+            name="美学文章",
+            strategy_digest="示例标题：\n- 《月白不是白，是睡前慢慢安静下来》",
+        )
+        session.add(campaign); session.add(strategy); session.commit()
+        session.refresh(campaign); session.refresh(strategy)
+        session.add(CampaignStrategyRef(campaign_id=campaign.id, strategy_id=strategy.id))
+        session.add(Topic(
+            brand_id=brand.id, campaign_id=campaign.id, title="秋天的干，不只在脸上",
+        ))
+        session.commit()
+        created = gen.generate_topics(session, brand.id, campaign.id, count=2)
+
+    assert len(calls) == 2
+    assert [topic.title for topic in created] == ["袜口为什么要留一点余地", "一双袜子的温度分寸"]
+    assert "月白不是白，是睡前慢慢安静下来" in calls[0]
+    assert "策略解释中的示例标题｜禁止复用" in calls[0]
+
+
+def test_instant_topic_rejects_duplicate_and_refills(fresh_db, monkeypatch):
+    calls = []
+
+    def fake(prompt, **_kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return _candidate_text("秋天的干，不只在脸上")
+        return _candidate_text("袜口松一点，身体先知道")
+
+    monkeypatch.setattr(gen.llm, "generate_text", fake)
+    with Session(fresh_db) as session:
+        brand = Brand(name="溯肤")
+        session.add(brand); session.commit(); session.refresh(brand)
+        campaign = Campaign(brand_id=brand.id, name="球袜")
+        session.add(campaign); session.commit(); session.refresh(campaign)
+        session.add(Topic(
+            brand_id=brand.id,
+            campaign_id=campaign.id,
+            title="秋天的干，不只在脸上",
+        ))
+        session.commit()
+        created = gen.create_topic_from_brief(
+            session,
+            brand.id,
+            campaign.id,
+            "参考一篇关于秋燥的内容，从球袜穿着感受生成新选题。",
+        )
+
+    assert len(calls) == 2
+    assert "秋天的干，不只在脸上" in calls[1]
+    assert created.title == "袜口松一点，身体先知道"
+    assert created.source == "instant"
+
+
+def test_topic_prompt_keeps_unparsed_activity_as_hard_scope():
+    context = gen.KnowledgeContext(
+        campaign_name="球袜",
+        activity_type="column",
+        campaign_digest="",
+    )
+    prompt = gen._topics_prompt(context, [], 1)
+    assert "【本次活动范围｜必须遵守】" in prompt
+    assert "名称：球袜" in prompt and "类型：栏目" in prompt
+    assert "活动名称与类型仍是本次选题的硬范围" in prompt
+
+
+def test_instant_prompt_keeps_activity_scope_with_custom_override(monkeypatch):
+    context = gen.KnowledgeContext(
+        campaign_name="球袜",
+        activity_type="column",
+    )
+    monkeypatch.setattr(
+        gen,
+        "resolve",
+        lambda key, default, **kwargs: (
+            "【用户即时输入｜本次任务核心】\n临时想法\n"
+            "【选题生成决策规则｜必须执行】\n按规则生成"
+            if key == "topic:instant_prompt"
+            else default.format(**kwargs)
+        ),
+    )
+    prompt = gen._instant_prompt(context, "临时想法", [], [])
+    assert "【本次活动范围｜必须遵守】" in prompt
+    assert "名称：球袜" in prompt and "类型：栏目" in prompt
 
 
 def test_generate_topics_count_and_source(fresh_db, monkeypatch):
@@ -137,6 +312,25 @@ def _stub_generate(monkeypatch):
 def test_topics_home_empty(owner_client):
     r = owner_client.get("/topics")
     assert r.status_code == 200 and "②选题库" in r.text
+
+
+def test_topics_home_shows_activity_strategy_context(owner_client, fresh_db):
+    with Session(fresh_db) as session:
+        brand = Brand(name="溯肤")
+        session.add(brand); session.commit(); session.refresh(brand)
+        campaign = Campaign(
+            brand_id=brand.id, name="秋冬促销",
+            brand_weight=2, strategy_weight=5, activity_weight=3,
+        )
+        strategy = Strategy(brand_id=brand.id, name="小红书运营策略")
+        session.add(campaign); session.add(strategy); session.commit()
+        session.refresh(campaign); session.refresh(strategy)
+        session.add(CampaignStrategyRef(campaign_id=campaign.id, strategy_id=strategy.id))
+        session.commit()
+    text = owner_client.get("/topics").text
+    assert "活动：秋冬促销" in text
+    assert "策略：小红书运营策略" in text
+    assert "权重 2:5:3" in text
 
 
 def test_generate_route_creates_and_lists(owner_client, fresh_db, monkeypatch):
@@ -273,15 +467,17 @@ def test_generate_route_passes_and_filters_sources(owner_client, fresh_db, monke
     assert captured["use_rejection_experience"] is True
 
 
-def test_manual_topics_keep_input_titles(owner_client, fresh_db, monkeypatch):
+def test_instant_topic_generates_one_candidate_from_brief(owner_client, fresh_db, monkeypatch):
+    seen = {}
+
     def fake(prompt, task="default", module="default", **k):
-        assert "用户已经手动指定" in prompt
-        return """标题：模型想改掉的题目
-纲要：模型补的纲要
+        seen.update(prompt=prompt, task=task, module=module)
+        return """标题：从袜口的一厘米，看见一天的身体感受
+纲要：从袜口松紧留下的细小痕迹切入，结合球袜活动讨论穿着感受与日常选择。
 受众：亲子
 时效：中
-素材：习字简
-配图：简牍
+素材：用户粘贴的品牌发布与球袜资料
+配图：袜口细节
 时机：周末"""
 
     monkeypatch.setattr(gen.llm, "generate_text", fake)
@@ -289,16 +485,24 @@ def test_manual_topics_keep_input_titles(owner_client, fresh_db, monkeypatch):
         bid, cid = _seed_brand(s, with_campaign=True)
     r = owner_client.post(
         "/topics/manual",
-        data={"campaign_id": str(cid), "title": ["在边塞练字的人：一枚习字简", "", "300尊佛，翻模300次"]},
+        data={
+            "campaign_id": str(cid),
+            "brief": "看到某品牌从勒痕切入讲日常穿着。请结合球袜活动，生成一个身体感受方向的新选题。",
+        },
         follow_redirects=False,
     )
     assert r.status_code == 303
+    assert seen["task"] == "topic_instant" and seen["module"] == "topic"
+    assert "【用户即时输入｜本次任务核心】" in seen["prompt"]
+    assert "看到某品牌从勒痕切入" in seen["prompt"]
+    assert "名称：丝路有多长" in seen["prompt"]
+    assert "外部案例只借鉴选题方法和信息结构" in seen["prompt"]
     with Session(fresh_db) as s:
         rows = s.exec(select(Topic).where(Topic.brand_id == bid).order_by(Topic.id)).all()
-        assert [t.title for t in rows] == ["在边塞练字的人：一枚习字简", "300尊佛，翻模300次"]
-        assert all(t.source == "manual" for t in rows)
-        assert all(t.campaign_id == cid for t in rows)
-        assert rows[0].outline == "模型补的纲要"
+        assert len(rows) == 1
+        assert rows[0].title == "从袜口的一厘米，看见一天的身体感受"
+        assert rows[0].source == "instant" and rows[0].campaign_id == cid
+        assert "袜口松紧" in rows[0].outline
 
 
 def test_generate_route_shows_rate_limit_modal(owner_client, fresh_db, monkeypatch):
@@ -408,7 +612,9 @@ def test_topics_catalog_checkboxes_render(owner_client, fresh_db):
     assert "Google 搜索" in html and "搜狗公众号" in html
     assert "weixin.sogou.com" in html
     assert "🔥 深度热点" not in html and "小红书" in html
-    assert "手动上传选题" in html and "确认上传" in html
+    assert "即时选题 / 想法" in html and "即时选题 / 实时想法" in html
+    assert 'name="brief"' in html and "生成选题" in html
+    assert "增加一行" not in html and "manualRows" not in html
     assert "不采纳原因默认作为选题经验参考" in html
     assert "参考选题经验包" not in html and "参考发布经验包" not in html
     assert 'name="use_rejection_experience"' not in html

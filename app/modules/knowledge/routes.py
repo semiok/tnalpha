@@ -22,7 +22,8 @@ from app.modules.knowledge.experience_pool import (
     sync_brand_experience_pack, sync_campaign_experience_pack,
 )
 from app.modules.knowledge.models import (
-    Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, PoolTopic,
+    Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, CampaignStrategyRef,
+    PoolTopic, Strategy, StrategyDoc,
 )
 
 router = APIRouter()
@@ -31,6 +32,7 @@ _DEMO_HTML = Path("app/templates/demo.html")  # 只读演示壳（原型全貌�
 
 _ANALYZE_CHARS = 12000  # AI 解析喂给 LLM 的最大字符数（防超长）
 _DEFAULT_BRAND_NAME = "溯肤"  # 单品牌默认（新增/删除品牌 UI 已隐藏）
+_ACTIVITY_TYPES = {"campaign", "column"}
 
 
 def _parse_date(value: str) -> date | None:
@@ -203,19 +205,186 @@ def toggle_deep_read(brand_id: int, doc_id: int, request: Request,
     return RedirectResponse(f"/brands/{brand_id}", status_code=303)
 
 
+# ─────────────────────────────── 策略 ───────────────────────────────
+
+@router.get("/strategies")
+def strategy_list(request: Request, session: Session = Depends(get_session)):
+    if not runtime.knowledge_writable():
+        return RedirectResponse("/", status_code=303)
+    brand = _default_brand(session)
+    strategies = session.exec(
+        select(Strategy).where(Strategy.brand_id == brand.id)
+        .order_by(Strategy.created_at.desc(), Strategy.id.desc())
+    ).all()
+    doc_counts = {
+        strategy.id: len(session.exec(
+            select(StrategyDoc.id).where(StrategyDoc.strategy_id == strategy.id)
+        ).all())
+        for strategy in strategies
+    }
+    return templates.TemplateResponse(request, "knowledge/strategies.html", {
+        "brand": brand, "strategies": strategies, "doc_counts": doc_counts,
+    })
+
+
+@router.post("/strategies")
+def create_strategy(request: Request, name: str = Form(...), description: str = Form(""),
+                    session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    brand = _default_brand(session)
+    name = name.strip()
+    if not name:
+        raise HTTPException(422, "策略名称不能为空")
+    strategy = Strategy(brand_id=brand.id, name=name, description=description.strip())
+    session.add(strategy)
+    session.commit()
+    session.refresh(strategy)
+    return RedirectResponse(f"/strategies/{strategy.id}", status_code=303)
+
+
+@router.get("/strategies/{strategy_id}")
+def strategy_detail(strategy_id: int, request: Request,
+                    session: Session = Depends(get_session)):
+    if not runtime.knowledge_writable():
+        return RedirectResponse("/", status_code=303)
+    strategy = session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise HTTPException(404, "策略不存在")
+    brand = session.get(Brand, strategy.brand_id)
+    docs = session.exec(
+        select(StrategyDoc).where(StrategyDoc.strategy_id == strategy_id)
+        .order_by(StrategyDoc.id.desc())
+    ).all()
+    return templates.TemplateResponse(request, "knowledge/strategy.html", {
+        "brand": brand, "strategy": strategy, "docs": docs,
+    })
+
+
+@router.post("/strategies/{strategy_id}/docs")
+def upload_strategy_doc(strategy_id: int, request: Request, file: UploadFile = File(...),
+                        session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    strategy = session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise HTTPException(404, "策略不存在")
+    path = storage.save_upload(file, subdir=f"strategy/{strategy_id}")
+    session.add(StrategyDoc(
+        strategy_id=strategy_id,
+        filename=file.filename,
+        file_path=path,
+        extracted_text=docparse.extract_text(path),
+    ))
+    strategy.analysis_status = "idle"
+    session.add(strategy)
+    session.commit()
+    return RedirectResponse(f"/strategies/{strategy_id}", status_code=303)
+
+
+@router.get("/strategies/{strategy_id}/docs/{doc_id}/download")
+def download_strategy_doc(strategy_id: int, doc_id: int,
+                          session: Session = Depends(get_session)):
+    doc = session.get(StrategyDoc, doc_id)
+    if doc is None or doc.strategy_id != strategy_id or not Path(doc.file_path).exists():
+        raise HTTPException(404, "文档不存在")
+    return FileResponse(doc.file_path, filename=doc.filename)
+
+
+@router.post("/strategies/{strategy_id}/docs/{doc_id}/delete")
+def delete_strategy_doc(strategy_id: int, doc_id: int, request: Request,
+                        session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    doc = session.get(StrategyDoc, doc_id)
+    if doc is None or doc.strategy_id != strategy_id:
+        raise HTTPException(404, "文档不存在")
+    Path(doc.file_path).unlink(missing_ok=True)
+    session.delete(doc)
+    strategy = session.get(Strategy, strategy_id)
+    if strategy:
+        strategy.analysis_status = "idle"
+        session.add(strategy)
+    session.commit()
+    return RedirectResponse(f"/strategies/{strategy_id}", status_code=303)
+
+
+@router.post("/strategies/{strategy_id}/docs/{doc_id}/deep-read")
+def toggle_strategy_deep_read(strategy_id: int, doc_id: int, request: Request,
+                              session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    doc = session.get(StrategyDoc, doc_id)
+    if doc is None or doc.strategy_id != strategy_id:
+        raise HTTPException(404, "文档不存在")
+    doc.deep_read = not doc.deep_read
+    session.add(doc)
+    session.commit()
+    return RedirectResponse(f"/strategies/{strategy_id}", status_code=303)
+
+
+@router.post("/strategies/{strategy_id}/analyze")
+def analyze_strategy(strategy_id: int, request: Request,
+                     session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    strategy = session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise HTTPException(404, "策略不存在")
+    if strategy.analysis_status != "running":
+        strategy.analysis_status, strategy.analysis_error = "running", ""
+        session.add(strategy)
+        session.commit()
+        analysis.start_strategy_analysis(strategy_id)
+    return RedirectResponse(f"/strategies/{strategy_id}", status_code=303)
+
+
+@router.get("/strategies/{strategy_id}/analysis-status")
+def strategy_analysis_status(strategy_id: int, request: Request,
+                             session: Session = Depends(get_session)):
+    strategy = session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise HTTPException(404, "策略不存在")
+    if strategy.analysis_status == "running":
+        return templates.TemplateResponse(request, "knowledge/_strategy_poll.html", {
+            "strategy": strategy,
+        })
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@router.post("/strategies/{strategy_id}/delete")
+def delete_strategy(strategy_id: int, request: Request,
+                    session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    strategy = session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise HTTPException(404, "策略不存在")
+    for doc in session.exec(
+        select(StrategyDoc).where(StrategyDoc.strategy_id == strategy_id)
+    ).all():
+        Path(doc.file_path).unlink(missing_ok=True)
+        session.delete(doc)
+    for ref in session.exec(
+        select(CampaignStrategyRef).where(CampaignStrategyRef.strategy_id == strategy_id)
+    ).all():
+        session.delete(ref)
+    session.delete(strategy)
+    session.commit()
+    return RedirectResponse("/strategies", status_code=303)
+
+
 # ─────────────────────────────── Campaign ───────────────────────────────
 
 @router.post("/campaigns")
 def create_campaign(request: Request,
                     brand_id: int = Form(...), name: str = Form(...),
+                    activity_type: str = Form("campaign"),
                     start_date: str = Form(""), end_date: str = Form(""),
                     experience_pack_id: list[int] = Form([]),
                     session: Session = Depends(get_session)):
     auth.require_level(request, 2)
     if not session.get(Brand, brand_id):
         raise HTTPException(404, "品牌不存在")
-    campaign = Campaign(brand_id=brand_id, name=name,
-                        start_date=_parse_date(start_date),
+    if activity_type not in _ACTIVITY_TYPES:
+        raise HTTPException(422, "活动类型无效")
+    campaign = Campaign(brand_id=brand_id, name=name.strip(),
+                        activity_type=activity_type,
+                        start_date=None if activity_type == "column" else _parse_date(start_date),
                         end_date=_parse_date(end_date))
     session.add(campaign)
     session.commit()
@@ -248,9 +417,59 @@ def campaign_detail(campaign_id: int, request: Request,
     all_topics = session.exec(select(PoolTopic).order_by(PoolTopic.id.desc())).all()
     refs = [t for t in all_topics if t.id in ref_ids]
     available = [t for t in all_topics if t.id not in ref_ids]
+    strategy_ref_ids = {
+        ref.strategy_id for ref in session.exec(
+            select(CampaignStrategyRef).where(CampaignStrategyRef.campaign_id == campaign_id)
+        ).all()
+    }
+    strategies = session.exec(
+        select(Strategy).where(Strategy.brand_id == campaign.brand_id)
+        .order_by(Strategy.created_at.desc(), Strategy.id.desc())
+    ).all()
     return templates.TemplateResponse(request, "knowledge/campaign.html",
                                       {"campaign": campaign, "brand": brand, "docs": docs,
-                                       "refs": refs, "available": available})
+                                       "refs": refs, "available": available,
+                                       "strategies": strategies,
+                                       "strategy_ref_ids": strategy_ref_ids})
+
+
+@router.post("/campaigns/{campaign_id}/context")
+def save_campaign_context(campaign_id: int, request: Request,
+                          strategy_id: list[int] = Form([]),
+                          brand_weight: int = Form(3),
+                          strategy_weight: int = Form(3),
+                          activity_weight: int = Form(4),
+                          session: Session = Depends(get_session)):
+    auth.require_level(request, 2)
+    campaign = session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(404, "活动不存在")
+    weights = (brand_weight, strategy_weight, activity_weight)
+    if any(weight < 0 or weight > 100 for weight in weights) or sum(weights) == 0:
+        raise HTTPException(422, "权重需为 0-100 的整数，且不能全部为 0")
+    selected_ids = set(strategy_id)
+    selected = session.exec(
+        select(Strategy).where(Strategy.id.in_(selected_ids))
+    ).all() if selected_ids else []
+    if len(selected) != len(selected_ids) or any(
+        strategy.brand_id != campaign.brand_id for strategy in selected
+    ):
+        raise HTTPException(422, "只能引用当前品牌的策略")
+
+    for ref in session.exec(
+        select(CampaignStrategyRef).where(CampaignStrategyRef.campaign_id == campaign_id)
+    ).all():
+        session.delete(ref)
+    for strategy in selected:
+        session.add(CampaignStrategyRef(
+            campaign_id=campaign_id, strategy_id=strategy.id,
+        ))
+    campaign.brand_weight = brand_weight
+    campaign.strategy_weight = strategy_weight
+    campaign.activity_weight = activity_weight
+    session.add(campaign)
+    session.commit()
+    return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
 
 
 @router.get("/campaigns/{campaign_id}/docs/{doc_id}/download")
@@ -376,6 +595,9 @@ def delete_campaign(campaign_id: int, request: Request,
     for doc in session.exec(
             select(CampaignDoc).where(CampaignDoc.campaign_id == campaign_id)).all():
         session.delete(doc)
+    for ref in session.exec(
+            select(CampaignStrategyRef).where(CampaignStrategyRef.campaign_id == campaign_id)).all():
+        session.delete(ref)
     session.delete(campaign)
     session.commit()
     # HTMX 调用走 HX-Redirect（客户端跳转，不 swap body）；普通请求走 303。

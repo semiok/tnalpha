@@ -14,6 +14,7 @@ from app.core.llm import prompts
 from app.core.prompt_override import resolve
 from app.modules.knowledge.models import (
     Brand, BrandDoc, Campaign, CampaignDoc, CampaignPoolRef, PoolTopic,
+    Strategy, StrategyDoc,
 )
 
 _ANALYZE_CHARS = 12000
@@ -176,6 +177,125 @@ def start_background_analysis(brand_id: int, *, resume: bool = False) -> None:
                     brand.analysis_status, brand.analysis_error = "failed", str(e)[:200]
                     s.add(brand)
                     s.commit()
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+# ─────────────────────────── 策略资料解析 ───────────────────────────
+
+def _brand_context(brand: Brand | None) -> str:
+    if brand is None:
+        return "（品牌库尚未建立）"
+    return "\n".join([
+        f"品牌：{brand.name}",
+        f"主题调性：{brand.brand_prompt or '（未设置）'}",
+        f"内容要求：{brand.content_notes or '（未设置）'}",
+        f"品牌资料综合：{brand.doc_digest or '（尚未解析）'}",
+    ])
+
+
+def _strategy_doc_prompt(strategy: Strategy, brand: Brand | None, doc: StrategyDoc,
+                         content: str, has_attachment: bool) -> str:
+    attachment_note = (
+        "已附上原始 PDF/图片，请同时读取附件中的文字、图表和版式。\n"
+        if has_attachment else ""
+    )
+    default = (
+        "你是品牌策略分析师。请在品牌库既有结论的约束下，解释这份策略资料，供后续选题与写作直接使用。\n"
+        "重点输出：①策略目标与适用范围；②目标人群/场景；③核心主张与执行原则；"
+        "④可用于内容创作的切入点、素材和禁区。只写资料能够支持的结论，不要补造。\n\n"
+        "【品牌库上下文】\n{brand_context}\n\n"
+        "【策略】\n名称：{strategy_name}\n说明：{strategy_description}\n\n"
+        "{attachment_note}【策略资料｜{filename}】\n{content}"
+    )
+    return resolve(
+        "knowledge:strategy_doc_analysis", default,
+        brand_context=_brand_context(brand),
+        strategy_name=strategy.name,
+        strategy_description=strategy.description or "（无）",
+        attachment_note=attachment_note,
+        filename=doc.filename,
+        content=content,
+    )
+
+
+def _strategy_digest_prompt(strategy: Strategy, brand: Brand | None,
+                            items: list[tuple[str, str]]) -> str:
+    body = "\n\n".join(f"【{name}】\n{text}" for name, text in items) or "（暂无资料解读）"
+    default = (
+        "你是品牌策略总监。基于品牌库上下文、策略说明和逐份资料解读，形成一份可复用的策略摘要。\n"
+        "摘要将直接进入选题与写作提示词，请清楚写出：策略目标、核心人群、关键主张、内容方向、"
+        "执行原则、必须遵守的事实与禁区。策略结论不得覆盖或违背品牌定义。\n\n"
+        "【品牌库上下文】\n{brand_context}\n\n"
+        "【策略】\n名称：{strategy_name}\n说明：{strategy_description}\n\n"
+        "【资料解读】\n{body}"
+    )
+    return resolve(
+        "knowledge:strategy_digest", default,
+        brand_context=_brand_context(brand),
+        strategy_name=strategy.name,
+        strategy_description=strategy.description or "（无）",
+        body=body,
+    )
+
+
+def run_strategy_analysis(strategy_id: int, session: Session) -> None:
+    """逐份解释策略资料，再结合品牌库解析结果生成策略摘要。"""
+    strategy = session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise ValueError("策略不存在")
+    brand = session.get(Brand, strategy.brand_id)
+    doc_ids = session.exec(
+        select(StrategyDoc.id).where(StrategyDoc.strategy_id == strategy_id)
+        .order_by(StrategyDoc.created_at, StrategyDoc.id)
+    ).all()
+    for doc_id in doc_ids:
+        doc = session.get(StrategyDoc, doc_id)
+        if doc is None:
+            continue
+        attachments = [doc.file_path] if _as_attachment(doc.file_path, doc.deep_read) else []
+        doc.ai_analysis = llm.generate_text(
+            _strategy_doc_prompt(
+                strategy, brand, doc, (doc.extracted_text or "")[:_ANALYZE_CHARS], bool(attachments)
+            ),
+            task="strategy_doc_analysis",
+            attachments=attachments,
+            fallback=False,
+        )
+        session.add(doc)
+        session.commit()
+
+    docs = session.exec(
+        select(StrategyDoc).where(StrategyDoc.strategy_id == strategy_id)
+        .order_by(StrategyDoc.created_at, StrategyDoc.id)
+    ).all()
+    items = [(doc.filename, doc.ai_analysis) for doc in docs if doc.ai_analysis]
+    strategy.strategy_digest = llm.generate_text(
+        _strategy_digest_prompt(strategy, brand, items),
+        task="strategy_digest",
+        fallback=False,
+    )
+    session.add(strategy)
+    session.commit()
+
+
+def start_strategy_analysis(strategy_id: int) -> None:
+    def _worker() -> None:
+        with Session(db.engine) as session:
+            try:
+                run_strategy_analysis(strategy_id, session)
+                strategy = session.get(Strategy, strategy_id)
+                strategy.analysis_status, strategy.analysis_error = "done", ""
+                session.add(strategy)
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                strategy = session.get(Strategy, strategy_id)
+                if strategy:
+                    strategy.analysis_status = "failed"
+                    strategy.analysis_error = str(exc)[:200]
+                    session.add(strategy)
+                    session.commit()
 
     threading.Thread(target=_worker, daemon=True).start()
 

@@ -58,6 +58,8 @@ def test_agent_api_reads_brand_overview(anon_client, fresh_db, monkeypatch):
     brands = anon_client.get("/api/v1/brands", headers=_headers()).json()
     assert brands["count"] == 1
     assert brands["items"][0]["name"] == "溯肤"
+    campaigns = anon_client.get(f"/api/v1/brands/{brand_id}/campaigns", headers=_headers()).json()
+    assert campaigns["items"][0]["activity_type"] == "campaign"
     overview = anon_client.get(f"/api/v1/brands/{brand_id}/overview", headers=_headers()).json()
     assert overview["campaigns"] == 1
     assert overview["topics"] == {"total": 1, "by_status": {"候选": 1}}

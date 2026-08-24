@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, button, chip, empty_state, file_input %}
+{% block content %}
+  {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
+  {{ page_header("①知识库", strategy.name, crumbs=[("首页", "/"), ("策略管理", "/strategies"), (strategy.name, "")]) }}
+
+  <div class="rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 mb-4 text-sm text-brand-700">
+    本策略解析会继承「{{ brand.name }}」的品牌调性、内容要求和品牌资料综合结果。
+  </div>
+
+  {{ card_open("策略说明") }}
+    <div class="text-sm text-slate-600 whitespace-pre-wrap">{{ strategy.description or "未填写策略说明。" }}</div>
+  {{ card_close() }}
+
+  {{ card_open("AI 策略解释") }}
+    {% if strategy.strategy_digest %}
+    <div class="text-sm text-slate-600 whitespace-pre-wrap">{{ strategy.strategy_digest }}</div>
+    {% else %}
+    <div class="text-sm text-slate-400">上传策略资料并完成 AI 解析后，这里会展示可供选题和写作复用的策略摘要。</div>
+    {% endif %}
+  {{ card_close() }}
+
+  {{ card_open("策略资料") }}
+    {% if can_edit %}
+    <form method="post" action="/strategies/{{ strategy.id }}/docs" enctype="multipart/form-data"
+          class="flex flex-wrap items-center gap-2 mb-3" x-data="{uploading:false}" @submit="uploading=true">
+      {{ file_input("file", required=True) }}
+      <button type="submit" :disabled="uploading"
+              class="px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-60">
+        <span x-show="!uploading">上传</span>
+        <span x-show="uploading" x-cloak>上传中</span>
+      </button>
+    </form>
+    {% if strategy.analysis_status == "running" %}
+      {% include "knowledge/_strategy_poll.html" %}
+    {% else %}
+      <form method="post" action="/strategies/{{ strategy.id }}/analyze" class="mb-3">
+        {{ button("AI 解析策略资料", variant="primary", type="submit", extra="w-full") }}
+      </form>
+      {% if strategy.analysis_status == "failed" %}<div class="text-xs text-rose-600 mb-3">解析失败：{{ strategy.analysis_error }}</div>{% endif %}
+    {% endif %}
+    {% endif %}
+
+    <div class="space-y-2">
+      {% for doc in docs %}
+      <div class="rounded-lg bg-slate-50 px-3 py-3 text-sm">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="font-medium">📄 {{ doc.filename }}</span>
+          <span class="flex items-center gap-3 text-xs">
+            {% set ext = doc.filename.lower().rsplit('.', 1)[-1] if '.' in doc.filename else '' %}
+            {% if ext == 'pdf' and can_edit %}
+            <form method="post" action="/strategies/{{ strategy.id }}/docs/{{ doc.id }}/deep-read" class="inline">
+              <label class="cursor-pointer {{ 'text-brand-600' if doc.deep_read else 'text-slate-400' }}">
+                <input type="checkbox" onchange="this.form.submit()" {{ 'checked' if doc.deep_read else '' }}> 深度读图
+              </label>
+            </form>
+            {% elif ext in ['png','jpg','jpeg','webp','gif'] %}<span class="text-emerald-600">自动读图</span>{% endif %}
+            <a href="/strategies/{{ strategy.id }}/docs/{{ doc.id }}/download" class="text-brand-600 hover:text-brand-700">下载</a>
+            {% if can_edit %}
+            <form method="post" action="/strategies/{{ strategy.id }}/docs/{{ doc.id }}/delete" class="inline" onsubmit="return confirm('删除该策略资料？')">
+              <button type="submit" class="text-rose-600 hover:text-rose-700">删除</button>
+            </form>
+            {% endif %}
+          </span>
+        </div>
+        {% if doc.ai_analysis %}
+        <details class="mt-2" open>
+          <summary class="cursor-pointer text-xs font-medium text-brand-600">AI 单篇解释</summary>
+          <div class="mt-2 border-l-2 border-brand-200 pl-3 text-xs leading-6 text-slate-600 whitespace-pre-wrap">{{ doc.ai_analysis }}</div>
+        </details>
+        {% endif %}
+      </div>
+      {% else %}
+      {{ empty_state("还没有策略资料。") }}
+      {% endfor %}
+    </div>
+  {{ card_close() }}
+
+  {% if can_edit %}
+  <div>{{ button("删除该策略", variant="danger", hx_post="/strategies/" ~ strategy.id ~ "/delete", hx_confirm="删除该策略？活动中的引用会同步移除。") }}</div>
+  {% endif %}
+{% endblock %}

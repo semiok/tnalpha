@@ -23,7 +23,7 @@ from app.modules.knowledge.analysis import _campaign_digest_prompt
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.schedule.models import DEFAULT_RECOMMEND_PROMPT, ScheduleMetric, ScheduleSetting, ScheduleSlot
 from app.modules.topic.contract import KnowledgeContext
-from app.modules.topic.generate import _manual_prompt, _topics_prompt
+from app.modules.topic.generate import _instant_prompt, _topics_prompt
 from app.modules.topic.models import Topic
 from app.modules.writing import routes as writing_prompts
 from app.modules.writing.debate import ROLES, _debate_prompt, _review_prompt, rewrite_prompt
@@ -67,6 +67,8 @@ def _sample_context(session: Session, brand: Brand | None, campaign_id: int | No
         content_notes="内容要求示例：事实准确，避免空泛抒情，适配公众号/小红书。",
         doc_digest="品牌资料综合示例：这里会注入知识库 AI 解析后的品牌资料摘要。",
         style_digest="视觉风格示例：低饱和暖色、文物质感、留白构图。",
+        campaign_name="丝路有多长",
+        activity_type="campaign",
         campaign_digest="活动简报示例：这里会注入 campaign 的选题方向、时效节点和关键素材。",
         pool_materials=["资料包示例：展品清单、新闻稿、图片说明。"],
         pool_experiences=["经验包示例：具体物件切入优于抽象制度解释，开头要有生活化问题。"],
@@ -207,6 +209,8 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
             content_notes="{content_notes}",
             doc_digest="{doc_digest}",
             style_digest="{style_digest}",
+            campaign_name="{campaign_name}",
+            activity_type="campaign",
             campaign_digest="{campaign_digest}",
             pool_materials=["{pool_materials}"],
             pool_experiences=["{pool_experiences}"],
@@ -337,13 +341,20 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
         ),
         PromptItem(
             "②选题库",
-            "手动上传选题 / 补全字段",
-            "app/modules/topic/generate.py::_manual_prompt",
-            _manual_prompt(ctx, [
-                value("{manual_title_1}", "用户手动输入的标题一"),
-                value("{manual_title_2}", "用户手动输入的标题二"),
-            ], value("{campaign_overall_experience_pack}", unified_experience)),
-            "标题必须逐字保留，模型只补全纲要、受众、素材等字段。",
+            "即时选题 / 实时想法",
+            "app/modules/topic/generate.py::_instant_prompt",
+            _instant_prompt(
+                ctx,
+                value(
+                    "{instant_brief}",
+                    "我看到一个品牌发布，内容从日常穿着中的小麻烦切入。请结合球袜活动和引用策略，"
+                    "生成一个更具体、可执行的新选题，不要照抄这个案例。",
+                ),
+                [value("{existing_topic_titles}", "已经生成过的选题标题")],
+                [value("{strategy_example_titles}", "策略解释里的示例标题")],
+                value("{campaign_overall_experience_pack}", unified_experience),
+            ),
+            note="识别一段灵感、参考内容或具体要求，结合所选活动上下文生成一个全新候选选题。",
         ),
         PromptItem(
             "③写作引擎",
@@ -432,7 +443,10 @@ def _prompt_items(session: Session, mode: str = "template") -> list[PromptItem]:
             "③写作引擎",
             "多角色评审 / 单角色意见",
             "app/modules/writing/debate.py::_review_prompt",
-            _review_prompt(role_key, role_name, role_stance, article, "（首轮，尚无前序发言）"),
+            _review_prompt(
+                role_key, role_name, role_stance, article,
+                "（首轮，尚无前序发言）", topic, ctx, unified_experience,
+            ),
         ),
         PromptItem(
             "③写作引擎",
@@ -504,7 +518,7 @@ _SOURCE_TO_KEY: dict[str, str] = {
     "app/core/llm/prompts.py::brand_fields_prompt": "knowledge:brand_fields_prompt",
     "app/modules/knowledge/analysis.py::_campaign_digest_prompt": "knowledge:campaign_digest",
     "app/modules/topic/generate.py::_topics_prompt": "topic:topics_prompt",
-    "app/modules/topic/generate.py::_manual_prompt": "topic:manual_prompt",
+    "app/modules/topic/generate.py::_instant_prompt": "topic:instant_prompt",
     "app/modules/writing/routes.py::_article_prompt": "writing:article_prompt",
     "app/modules/writing/routes.py::_article_prompt_with_brief": "writing:article_prompt_with_brief",
     "app/modules/writing/routes.py::_style_discussion_prompt": "writing:style_discussion_prompt",

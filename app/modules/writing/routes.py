@@ -25,7 +25,15 @@ from app.modules.feedback.experience import campaign_experience_context, upsert_
 from app.modules.knowledge.models import Brand, Campaign
 from app.modules.topic.contract import KnowledgeContext
 from app.modules.topic.models import Topic
-from app.modules.writing.debate import clean_llm_output, knowledge_context_block, rewrite_prompt, run_ai_review, run_debate, run_review
+from app.modules.writing.debate import (
+    clean_llm_output,
+    ensure_knowledge_context,
+    knowledge_context_block,
+    rewrite_prompt,
+    run_ai_review,
+    run_debate,
+    run_review,
+)
 from app.modules.writing.models import (
     ARTICLE_STATUSES,
     PLATFORMS,
@@ -1324,7 +1332,10 @@ def _run_generation_worker(article_id: int, topic_id: int, debate_rounds: int, r
 
             # ── 评审阶段 ──
             if review_rounds > 0:
-                review_summary = run_review(s, article_id, review_rounds, article)
+                review_summary = run_review(
+                    s, article_id, review_rounds, article,
+                    topic, ctx, writing_experience,
+                )
                 article.review_summary = review_summary
                 article.status = "重写中"
                 article.updated_at = _now()
@@ -3436,10 +3447,11 @@ def _article_prompt(topic: Topic, ctx: KnowledgeContext, style: Style | None,
 4. [插图：...] 标记只能放在完整段落之间，禁止插到句子中间或段落内部。
 5. 直接输出正文，不要输出「正文：」之外的解释性文字。
 """
-    return resolve("writing:article_prompt", default,
-                   topic=topic, style_text=style_text, platform_dir=platform_dir,
-                   img_slot_dir=img_slot_dir, enforce=enforce, req_block=req_block,
-                   knowledge_block=knowledge_block)
+    prompt = resolve("writing:article_prompt", default,
+                     topic=topic, style_text=style_text, platform_dir=platform_dir,
+                     img_slot_dir=img_slot_dir, enforce=enforce, req_block=req_block,
+                     knowledge_block=knowledge_block)
+    return ensure_knowledge_context(prompt, knowledge_block)
 
 
 def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style | None,
@@ -3489,10 +3501,11 @@ def _article_prompt_with_brief(topic: Topic, ctx: KnowledgeContext, style: Style
 4. [插图：...] 标记只能放在完整段落之间，禁止插到句子中间或段落内部。
 5. 直接输出正文，不要输出「正文：」之外的解释性文字。
 """
-    return resolve("writing:article_prompt_with_brief", default,
-                   topic=topic, brief=brief, style_text=style_text, platform_dir=platform_dir,
-                   img_slot_dir=img_slot_dir, enforce=enforce, req_block=req_block,
-                   knowledge_block=knowledge_block)
+    prompt = resolve("writing:article_prompt_with_brief", default,
+                     topic=topic, brief=brief, style_text=style_text, platform_dir=platform_dir,
+                     img_slot_dir=img_slot_dir, enforce=enforce, req_block=req_block,
+                     knowledge_block=knowledge_block)
+    return ensure_knowledge_context(prompt, knowledge_block)
 
 
 def _parse_image_slots(body: str) -> list[tuple[int, str]]:

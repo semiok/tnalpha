@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import page_header, card_open, card_close, button, chip, empty_state %}
+{% block content %}
+  {% set can_edit = request.state.level >= 2 and request.state.knowledge_writable %}
+  {{ page_header("①知识库", "策略管理", crumbs=[("首页", "/"), (brand.name, ""), ("策略管理", "")]) }}
+
+  <div x-data="{adding:false}">
+    {{ card_open() }}
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="text-sm font-semibold text-slate-700">策略（{{ strategies|length }}）</div>
+          <div class="text-xs text-slate-400 mt-1">策略继承品牌库解析结果，可被多个活动重复引用。</div>
+        </div>
+        {% if can_edit %}
+        <button type="button" @click="adding=true" class="text-sm text-brand-600 hover:text-brand-700">＋ 新增</button>
+        {% endif %}
+      </div>
+
+      <div class="space-y-2">
+        {% for strategy in strategies %}
+        <a href="/strategies/{{ strategy.id }}" class="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-4 py-4 hover:bg-slate-100 transition">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-medium">🧭 {{ strategy.name }}</span>
+              {% if strategy.analysis_status == "done" %}{{ chip("已解析", "emerald") }}
+              {% elif strategy.analysis_status == "running" %}{{ chip("解析中", "amber") }}
+              {% elif strategy.analysis_status == "failed" %}{{ chip("解析失败", "rose") }}
+              {% else %}{{ chip("待解析", "slate") }}{% endif %}
+            </div>
+            <div class="text-xs text-slate-400 mt-1 line-clamp-2">
+              {{ strategy.description or "未填写策略说明" }} · {{ doc_counts.get(strategy.id, 0) }} 份资料
+            </div>
+          </div>
+          <span class="shrink-0 text-xs text-slate-400">进入 →</span>
+        </a>
+        {% else %}
+        {{ empty_state("还没有策略，点「＋ 新增」创建第一个策略。") }}
+        {% endfor %}
+      </div>
+    {{ card_close() }}
+
+    {% if can_edit %}
+    <div x-show="adding" x-cloak class="fixed inset-0 z-40 bg-black/30 grid place-items-center" @click.self="adding=false" @keydown.escape.window="adding=false">
+      <form method="post" action="/strategies" class="bg-white rounded-xl shadow-xl w-full max-w-lg p-5 m-4 space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">新增策略</div>
+          <button type="button" @click="adding=false" class="text-slate-400 hover:text-slate-600" aria-label="关闭">✕</button>
+        </div>
+        <label class="block">
+          <span class="block text-sm text-slate-600 mb-1">策略名称</span>
+          <input type="text" name="name" required placeholder="例如：2026 小红书增长策略"
+                 class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+        </label>
+        <label class="block">
+          <span class="block text-sm text-slate-600 mb-1">策略说明（可选）</span>
+          <textarea name="description" rows="4" placeholder="策略目标、适用场景或需要重点解释的问题"
+                    class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none"></textarea>
+        </label>
+        <div class="flex justify-end gap-2">
+          <button type="button" @click="adding=false" class="px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200">取消</button>
+          {{ button("新建", variant="primary", type="submit") }}
+        </div>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+{% endblock %}

@@ -1,4 +1,4 @@
-"""①知识库 数据模型——两级树：品牌 → campaign，各挂文档 + 全局数据池。
+"""①知识库 数据模型——两级树：品牌 → 活动，各挂文档 + 全局数据池。
 
 这是其他模块的"样板"：怎么定义 SQLModel 表、关系、时间字段。
 PoolTopic 是跨模块共享表（见 ARCHITECTURE §6）：①建表、⑤写经验包、②读取，
@@ -6,6 +6,7 @@ PoolTopic 是跨模块共享表（见 ARCHITECTURE §6）：①建表、⑤写�
 """
 from datetime import date, datetime
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -40,10 +41,14 @@ class BrandDoc(SQLModel, table=True):
 
 
 class Campaign(SQLModel, table=True):
-    """活动：品牌下的子级，强时效。is_default=True 为每品牌默认的"品牌日常"（无起止）。"""
+    """活动：品牌下的子级，可分为 campaign（强时效）和栏目（长期内容）。"""
     id: int | None = Field(default=None, primary_key=True)
     brand_id: int = Field(foreign_key="brand.id", index=True)
     name: str
+    activity_type: str = Field(default="campaign", max_length=20)  # campaign | column
+    brand_weight: int = 3
+    strategy_weight: int = 3
+    activity_weight: int = 4
     start_date: date | None = None
     end_date: date | None = None
     is_default: bool = False      # 品牌日常常驻 campaign
@@ -70,6 +75,42 @@ class CampaignPoolRef(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     campaign_id: int = Field(foreign_key="campaign.id", index=True)
     pool_topic_id: int = Field(foreign_key="pooltopic.id", index=True)
+    created_at: datetime = Field(default_factory=_now)
+
+
+class Strategy(SQLModel, table=True):
+    """品牌策略：继承品牌定义，并向活动提供可复用的策略上下文。"""
+    id: int | None = Field(default=None, primary_key=True)
+    brand_id: int = Field(foreign_key="brand.id", index=True)
+    name: str
+    description: str = ""
+    strategy_digest: str = ""
+    analysis_status: str = "idle"  # idle | running | done | failed
+    analysis_error: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+
+class StrategyDoc(SQLModel, table=True):
+    """策略资料：保留原文件、抽取正文与单篇 AI 解读。"""
+    id: int | None = Field(default=None, primary_key=True)
+    strategy_id: int = Field(foreign_key="strategy.id", index=True)
+    filename: str
+    file_path: str
+    extracted_text: str = ""
+    ai_analysis: str = ""
+    deep_read: bool = False
+    created_at: datetime = Field(default_factory=_now)
+
+
+class CampaignStrategyRef(SQLModel, table=True):
+    """活动引用的策略；同一策略在同一活动内只引用一次。"""
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "strategy_id", name="uq_campaign_strategy_ref"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    campaign_id: int = Field(foreign_key="campaign.id", index=True)
+    strategy_id: int = Field(foreign_key="strategy.id", index=True)
     created_at: datetime = Field(default_factory=_now)
 
 

@@ -127,6 +127,76 @@ def test_writing_status_map_reads_article_state(fresh_db):
         assert writing_status_map(s, [topic.id, 999]) == {topic.id: "待审核"}
 
 
+def test_writing_context_block_includes_strategies_and_weights():
+    from app.modules.topic.contract import KnowledgeContext
+    from app.modules.writing.debate import knowledge_context_block
+
+    context = KnowledgeContext(
+        brand_prompt="品牌调性",
+        strategy_contexts=[
+            "策略：年轻化\n优先面向城市青年",
+            "策略：小红书\n使用真实体验切口",
+        ],
+        campaign_name="球袜",
+        activity_type="column",
+        campaign_digest="秋冬活动简报",
+        pool_materials=["产品资料"],
+        brand_weight=2,
+        strategy_weight=5,
+        activity_weight=3,
+    )
+    block = knowledge_context_block(context)
+    assert "品牌：策略：活动 = 2:5:3" in block
+    assert "年轻化" in block and "城市青年" in block
+    assert "产品资料" in block and "计入活动层" in block
+    assert "权重表示发生取舍时的相对决策优先级" in block
+    assert "不是段落数、字数或引用篇幅比例" in block
+    assert "【策略 1/2｜策略层内部权重 1/2】" in block
+    assert "【策略 2/2｜策略层内部权重 1/2】" in block
+    assert "当前范围：栏目：球袜" in block
+    assert "权重不能把文章改写成另一个选题" in block
+
+
+def test_article_prompt_keeps_weight_rules_with_custom_override(monkeypatch):
+    from app.modules.topic.contract import KnowledgeContext
+
+    topic = Topic(brand_id=1, campaign_id=1, title="球袜与身体感受")
+    context = KnowledgeContext(
+        campaign_name="球袜",
+        activity_type="column",
+        strategy_contexts=["策略：美学文章\n从具体物件切入"],
+        brand_weight=3,
+        strategy_weight=3,
+        activity_weight=4,
+    )
+    monkeypatch.setattr(wroutes, "resolve", lambda *args, **kwargs: "旧版自定义写作提示词")
+    prompt = wroutes._article_prompt(topic, context, None)
+    assert "【写作上下文决策规则｜必须执行】" in prompt
+    assert "品牌：策略：活动 = 3:3:4" in prompt
+    assert "当前范围：栏目：球袜" in prompt
+    assert "旧版自定义写作提示词" in prompt
+
+
+def test_review_prompt_includes_activity_weight_context():
+    from app.modules.topic.contract import KnowledgeContext
+    from app.modules.writing.debate import _review_prompt
+
+    topic = Topic(brand_id=1, campaign_id=1, title="球袜与身体感受", outline="从袜口切入")
+    article = Article(topic_id=1, campaign_id=1, title="初稿", body="初稿正文")
+    context = KnowledgeContext(
+        campaign_name="球袜",
+        activity_type="column",
+        strategy_contexts=["策略：美学文章\n从具体物件切入"],
+        brand_weight=2,
+        strategy_weight=5,
+        activity_weight=3,
+    )
+    prompt = _review_prompt("editor", "编辑", "检查结构", article, "（无）", topic, context)
+    assert "【来源选题】" in prompt and "球袜与身体感受" in prompt
+    assert "品牌：策略：活动 = 2:5:3" in prompt
+    assert "当前范围：栏目：球袜" in prompt
+
+
 def test_writing_home_lists_only_adopted_topics(owner_client, fresh_db):
     with Session(fresh_db) as s:
         _seed_topic(s, status="采纳")
