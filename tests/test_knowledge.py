@@ -14,6 +14,16 @@ def _create_campaign(client, brand_id, name="美术展") -> int:
     return int(resp.headers["location"].rsplit("/", 1)[-1])
 
 
+def _create_strategy(client, name="小红书增长策略", description="面向年轻用户") -> int:
+    resp = client.post(
+        "/strategies",
+        data={"name": name, "description": description},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    return int(resp.headers["location"].rsplit("/", 1)[-1])
+
+
 # ── 品牌 + 默认 campaign ──
 
 def test_create_brand_no_default_campaign(owner_client):
@@ -26,7 +36,7 @@ def test_home_shows_default_brand_and_entries(owner_client):
     # 空库首访自动建默认品牌「溯肤」+ 两个管理入口，无「新建品牌」
     home = owner_client.get("/").text
     assert "溯肤" in home
-    assert "品牌库管理" in home and "数据池管理" in home
+    assert "品牌库管理" in home and "策略管理" in home and "数据池管理" in home
     assert "新建品牌" not in home
 
 
@@ -38,6 +48,188 @@ def test_create_campaign(owner_client):
     page = owner_client.get(f"/campaigns/{cid}")
     assert page.status_code == 200
     assert "美术展" in page.text
+
+
+def test_home_uses_unified_activity_labels(owner_client):
+    brand_id = _create_brand(owner_client)
+    _create_campaign(owner_client, brand_id)
+
+    home = owner_client.get("/").text
+
+    assert "活动（1）" in home
+    assert "＋ 新增" in home
+    assert "Campaign 活动" not in home
+    assert "新增 campaign" not in home
+    assert ">Campaign<" in home
+    assert ">栏目<" in home
+
+
+def test_create_column_ignores_start_date_and_shows_type(owner_client, fresh_db):
+    from datetime import date
+
+    from sqlmodel import Session
+
+    from app.modules.knowledge.models import Campaign
+
+    brand_id = _create_brand(owner_client)
+    response = owner_client.post(
+        "/campaigns",
+        data={
+            "brand_id": brand_id,
+            "name": "日常内容运营",
+            "activity_type": "column",
+            "start_date": "2026-09-01",
+            "end_date": "2026-12-31",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    campaign_id = int(response.headers["location"].rsplit("/", 1)[-1])
+    with Session(fresh_db) as session:
+        column = session.get(Campaign, campaign_id)
+        assert column.activity_type == "column"
+        assert column.start_date is None
+        assert column.end_date == date(2026, 12, 31)
+
+    home = owner_client.get("/").text
+    assert "日常内容运营" in home
+    assert "截至 2026.12.31" in home
+    assert ">栏目<" in home
+
+
+def test_create_activity_rejects_unknown_type(owner_client):
+    brand_id = _create_brand(owner_client)
+    response = owner_client.post(
+        "/campaigns",
+        data={"brand_id": brand_id, "name": "未知类型", "activity_type": "other"},
+    )
+    assert response.status_code == 422
+
+
+def test_strategy_create_upload_and_detail(owner_client, fresh_db):
+    from sqlmodel import Session, select
+
+    from app.modules.knowledge.models import Strategy, StrategyDoc
+
+    owner_client.get("/")
+    strategy_id = _create_strategy(owner_client)
+    response = owner_client.post(
+        f"/strategies/{strategy_id}/docs",
+        files={"file": ("strategy.txt", "核心人群：城市青年".encode(), "text/plain")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    page = owner_client.get(f"/strategies/{strategy_id}")
+    assert page.status_code == 200
+    assert "小红书增长策略" in page.text
+    assert "strategy.txt" in page.text
+    assert "继承「溯肤」" in page.text
+    with Session(fresh_db) as session:
+        strategy = session.get(Strategy, strategy_id)
+        doc = session.exec(select(StrategyDoc).where(StrategyDoc.strategy_id == strategy_id)).one()
+        assert strategy.description == "面向年轻用户"
+        assert "城市青年" in doc.extracted_text
+
+
+def test_run_strategy_analysis_inherits_brand_context(owner_client, fresh_db, monkeypatch):
+    from sqlmodel import Session, select
+
+    from app.modules.knowledge import analysis
+    from app.modules.knowledge.models import Brand, Strategy, StrategyDoc
+
+    owner_client.get("/")
+    strategy_id = _create_strategy(owner_client)
+    owner_client.post(
+        f"/strategies/{strategy_id}/docs",
+        files={"file": ("growth.txt", b"channel plan", "text/plain")},
+    )
+    with Session(fresh_db) as session:
+        brand = session.exec(select(Brand)).one()
+        brand.brand_prompt = "克制、自然"
+        brand.content_notes = "事实准确"
+        brand.doc_digest = "品牌资料综合结论"
+        session.add(brand)
+        session.commit()
+
+    prompts = []
+
+    def fake_generate(prompt, task="default", **kwargs):
+        prompts.append((task, prompt))
+        return f"解析结果-{task}"
+
+    monkeypatch.setattr(analysis.llm, "generate_text", fake_generate)
+    with Session(fresh_db) as session:
+        analysis.run_strategy_analysis(strategy_id, session)
+    with Session(fresh_db) as session:
+        strategy = session.get(Strategy, strategy_id)
+        doc = session.exec(select(StrategyDoc).where(StrategyDoc.strategy_id == strategy_id)).one()
+        assert strategy.strategy_digest == "解析结果-strategy_digest"
+        assert doc.ai_analysis == "解析结果-strategy_doc_analysis"
+    assert prompts
+    assert all("品牌资料综合结论" in prompt for _, prompt in prompts)
+    assert all("克制、自然" in prompt for _, prompt in prompts)
+
+
+def test_strategy_parse_route_sets_running(owner_client, fresh_db, monkeypatch):
+    from sqlmodel import Session
+
+    from app.modules.knowledge import analysis
+    from app.modules.knowledge.models import Strategy
+
+    owner_client.get("/")
+    strategy_id = _create_strategy(owner_client)
+    monkeypatch.setattr(analysis, "start_strategy_analysis", lambda sid: None)
+    response = owner_client.post(
+        f"/strategies/{strategy_id}/analyze", follow_redirects=False
+    )
+    assert response.status_code == 303
+    with Session(fresh_db) as session:
+        assert session.get(Strategy, strategy_id).analysis_status == "running"
+
+
+def test_campaign_references_multiple_strategies_and_saves_weights(owner_client, fresh_db):
+    from sqlmodel import Session, select
+
+    from app.modules.knowledge.models import Campaign, CampaignStrategyRef
+
+    brand_id = _create_brand(owner_client)
+    first_id = _create_strategy(owner_client, "内容增长策略")
+    second_id = _create_strategy(owner_client, "会员运营策略")
+    campaign_id = _create_campaign(owner_client, brand_id)
+    response = owner_client.post(
+        f"/campaigns/{campaign_id}/context",
+        data={
+            "strategy_id": [first_id, second_id],
+            "brand_weight": 2,
+            "strategy_weight": 5,
+            "activity_weight": 3,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with Session(fresh_db) as session:
+        campaign = session.get(Campaign, campaign_id)
+        refs = session.exec(
+            select(CampaignStrategyRef).where(
+                CampaignStrategyRef.campaign_id == campaign_id
+            )
+        ).all()
+        assert {ref.strategy_id for ref in refs} == {first_id, second_id}
+        assert (campaign.brand_weight, campaign.strategy_weight, campaign.activity_weight) == (2, 5, 3)
+    page = owner_client.get(f"/campaigns/{campaign_id}").text
+    assert "内容增长策略" in page and "会员运营策略" in page
+    assert "数据池引用计入活动层" in page
+
+
+def test_campaign_context_rejects_invalid_weights(owner_client):
+    brand_id = _create_brand(owner_client)
+    campaign_id = _create_campaign(owner_client, brand_id)
+    response = owner_client.post(
+        f"/campaigns/{campaign_id}/context",
+        data={"brand_weight": 0, "strategy_weight": 0, "activity_weight": 0},
+    )
+    assert response.status_code == 422
 
 
 def test_delete_campaign(owner_client):

@@ -209,7 +209,7 @@ def test_topic_generation_can_reference_publish_experience(monkeypatch, fresh_db
 
     def fake_generate(prompt, **kwargs):
         seen["prompt"] = prompt
-        return "标题：新的习字简选题\n纲要：从具体物件切入。\n受众：亲子\n时效：中\n素材：习字简\n配图：简牍\n时机：近期"
+        return "标题：边塞写字的人如何度过一天\n纲要：从具体物件切入。\n受众：亲子\n时效：中\n素材：习字简\n配图：简牍\n时机：近期"
 
     monkeypatch.setattr("app.modules.topic.generate.llm.generate_text", fake_generate)
     with Session(fresh_db) as session:

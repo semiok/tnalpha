@@ -15,8 +15,8 @@ from app.core import auth, sources
 from app.core.db import get_session
 from app.core.llm.errors import ModelRateLimited
 from app.core.templates import create_templates
-from app.modules.knowledge.models import Brand, Campaign
-from app.modules.topic.generate import create_manual_topics, generate_topics
+from app.modules.knowledge.models import Brand, Campaign, CampaignStrategyRef, Strategy
+from app.modules.topic.generate import create_topic_from_brief, generate_topics
 from app.modules.topic.models import TOPIC_STATUSES, Topic
 
 router = APIRouter()
@@ -83,6 +83,7 @@ def topics_home(request: Request, status: str = "", scope: str = "all",
                 session: Session = Depends(get_session)):
     brand = session.exec(select(Brand).order_by(Brand.id)).first()
     campaigns, topics, cmap, tab_counts, scope_counts = [], [], {}, {}, {}
+    campaign_context = {}
     active = status or "all"
     active_scope = scope or "all"
     if brand is not None:
@@ -111,6 +112,29 @@ def topics_home(request: Request, status: str = "", scope: str = "all",
             in_scope = [t for t in all_topics if _topic_in_scope(t, *_scope_from_query(scope_key))]
             scope_counts[scope_key] = len(_topics_in_status(in_scope, st))
         cmap = {c.id: c.name for c in campaigns}
+        refs = session.exec(
+            select(CampaignStrategyRef).where(
+                CampaignStrategyRef.campaign_id.in_([c.id for c in campaigns])
+            )
+        ).all() if campaigns else []
+        strategy_ids = sorted({ref.strategy_id for ref in refs})
+        strategy_by_id = {
+            strategy.id: strategy for strategy in session.exec(
+                select(Strategy).where(Strategy.id.in_(strategy_ids))
+            ).all()
+        } if strategy_ids else {}
+        names_by_campaign: dict[int, list[str]] = {c.id: [] for c in campaigns}
+        for ref in refs:
+            strategy = strategy_by_id.get(ref.strategy_id)
+            if strategy is not None:
+                names_by_campaign.setdefault(ref.campaign_id, []).append(strategy.name)
+        campaign_context = {
+            c.id: {
+                "strategy_names": names_by_campaign.get(c.id, []),
+                "weights": f"{c.brand_weight}:{c.strategy_weight}:{c.activity_weight}",
+            }
+            for c in campaigns
+        }
     tab_links = [
         (key, label, _topic_url(key, active_scope), tab_counts.get(key, 0))
         for key, label, _sts in TABS
@@ -127,6 +151,7 @@ def topics_home(request: Request, status: str = "", scope: str = "all",
         "statuses": TOPIC_STATUSES, "catalog": sources.catalog(),
         "tabs": TABS, "tab_counts": tab_counts, "tab_links": tab_links,
         "scope_links": scope_links, "active_tab": active, "active_scope": active_scope,
+        "campaign_context": campaign_context,
         "error": error, "modal_error": modal_error})
 
 
@@ -158,20 +183,24 @@ def generate(request: Request, campaign_id: str = Form(""), count: int = Form(5)
 
 
 @router.post("/topics/manual")
-def manual_topics(request: Request, campaign_id: str = Form(""),
-                  title: list[str] = Form([]),
+def instant_topic(request: Request, campaign_id: str = Form(""),
+                  brief: str = Form(""), title: list[str] = Form([]),
                   session: Session = Depends(get_session)):
-    """手动上传选题标题；标题原样保留，AI 只补全纲要/受众等字段。"""
+    """即时想法/参考内容/具体要求 → AI 识别并生成一个候选选题。"""
     auth.require_level(request, 1)
     brand = _brand_or_404(session)
     cid = int(campaign_id) if campaign_id.strip() else None
     if cid is not None and session.get(Campaign, cid) is None:
         raise HTTPException(404, "活动不存在")
     target_scope = "brand" if cid is None else f"campaign:{cid}"
+    input_text = brief.strip() or "\n".join(item.strip() for item in title if item.strip())
     try:
-        create_manual_topics(session, brand.id, cid, title)
-    except ValueError as exc:
-        params = urlencode({"status": "候选", "scope": target_scope, "error": f"手动上传失败：{exc}"})
+        create_topic_from_brief(session, brand.id, cid, input_text)
+    except ModelRateLimited:
+        params = urlencode({"status": "候选", "scope": target_scope, "modal_error": "当前模型已限流"})
+        return RedirectResponse(f"/topics?{params}", status_code=303)
+    except (ValueError, RuntimeError) as exc:
+        params = urlencode({"status": "候选", "scope": target_scope, "error": f"即时选题生成失败：{exc}"})
         return RedirectResponse(f"/topics?{params}", status_code=303)
     return RedirectResponse(_topic_url("候选", target_scope), status_code=303)
 

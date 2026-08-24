@@ -6,12 +6,66 @@
       ("首页","/"), (brand.name, "/brands/" ~ brand.id), (campaign.name, "")]) }}
 
   <div class="mb-4 flex items-center gap-2">
+    {{ chip("栏目", "emerald") if campaign.activity_type == "column" else chip("Campaign", "brand") }}
     {% if campaign.is_default %}{{ chip("品牌日常·常驻", "slate") }}
+    {% elif campaign.activity_type == "column" and campaign.end_date %}{{ chip("截至 " ~ campaign.end_date.strftime('%Y.%m.%d'), "slate") }}
     {% elif campaign.start_date %}{{ chip(campaign.start_date.strftime('%Y.%m.%d') ~ "–" ~ (campaign.end_date.strftime('%m.%d') if campaign.end_date else "?"), "amber") }}{% endif %}
   </div>
 
+  {{ card_open("策略引用与提示词权重") }}
+    <form method="post" action="/campaigns/{{ campaign.id }}/context"
+          x-data="{brand:{{ campaign.brand_weight }}, strategy:{{ campaign.strategy_weight }}, activity:{{ campaign.activity_weight }}}">
+      <div class="text-xs text-slate-400 mb-3">选中的策略会进入后续选题和写作上下文。数据池引用计入活动层，不单独设置权重。</div>
+      <div class="mb-4">
+        <div class="text-sm font-medium text-slate-700 mb-2">引用策略</div>
+        <div class="grid sm:grid-cols-2 gap-2">
+          {% for strategy in strategies %}
+          <label class="flex items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:border-brand-200">
+            <input type="checkbox" name="strategy_id" value="{{ strategy.id }}" class="mt-1 rounded border-slate-300 text-brand-600"
+                   {{ 'checked' if strategy.id in strategy_ref_ids else '' }} {{ 'disabled' if not can_edit else '' }}>
+            <span class="min-w-0">
+              <span class="block font-medium text-slate-700">{{ strategy.name }}</span>
+              <span class="block text-xs text-slate-400 mt-0.5">{{ '已解析' if strategy.strategy_digest else '待解析' }}{% if strategy.description %} · {{ strategy.description }}{% endif %}</span>
+            </span>
+          </label>
+          {% else %}
+          <div class="text-sm text-slate-400">还没有策略，先去<a href="/strategies" class="text-brand-600">策略管理</a>创建。</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-50 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div class="text-sm font-medium text-slate-700">提示词参考权重</div>
+          <div class="font-mono text-sm text-brand-700" x-text="brand + ':' + strategy + ':' + activity"></div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <label class="block min-w-0">
+            <span class="block text-xs text-slate-500 mb-1">品牌</span>
+            <input type="number" name="brand_weight" min="0" max="100" x-model.number="brand"
+                   {{ 'disabled' if not can_edit else '' }}
+                   class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+          </label>
+          <label class="block min-w-0">
+            <span class="block text-xs text-slate-500 mb-1">策略</span>
+            <input type="number" name="strategy_weight" min="0" max="100" x-model.number="strategy"
+                   {{ 'disabled' if not can_edit else '' }}
+                   class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+          </label>
+          <label class="block min-w-0">
+            <span class="block text-xs text-slate-500 mb-1">活动</span>
+            <input type="number" name="activity_weight" min="0" max="100" x-model.number="activity"
+                   {{ 'disabled' if not can_edit else '' }}
+                   class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
+          </label>
+        </div>
+      </div>
+      {% if can_edit %}<div class="mt-3 flex justify-end">{{ button("保存引用与权重", variant="primary", type="submit") }}</div>{% endif %}
+    </form>
+  {{ card_close() }}
+
   {# ── 活动资料（上传/深度读图/下载/删除）── #}
-  {{ card_open("活动资料（强时效·AI 读）") }}
+  {{ card_open("活动资料（AI 读）") }}
     <div class="space-y-2 mb-3">
       {% for d in docs %}
       <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 text-sm">
@@ -106,8 +160,8 @@
   {{ card_close() }}
 
   {% if can_edit and not campaign.is_default %}
-  <div>{{ button("删除该 campaign", variant="danger",
+  <div>{{ button("删除该活动", variant="danger",
       hx_post="/campaigns/" ~ campaign.id ~ "/delete",
-      hx_confirm="删除该 campaign？其活动资料将一并删除，不可恢复。") }}</div>
+      hx_confirm="删除该活动？其活动资料将一并删除，不可恢复。") }}</div>
   {% endif %}
 {% endblock %}

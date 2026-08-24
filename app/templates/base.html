@@ -37,7 +37,7 @@
       {% for item in request.state.visible_nav %}
       {% set href = item.href %}
       {% set label = item.num ~ item.label %}
-      {% set active = (item.key == "knowledge" and (p == "/" or p.startswith("/brands") or p.startswith("/campaigns") or p.startswith("/pool"))) or (item.key != "knowledge" and p.startswith(href)) %}
+      {% set active = (item.key == "knowledge" and (p == "/" or p.startswith("/brands") or p.startswith("/strategies") or p.startswith("/campaigns") or p.startswith("/pool"))) or (item.key != "knowledge" and p.startswith(href)) %}
       <a href="{{ href }}" class="px-3.5 py-2.5 whitespace-nowrap font-medium border-b-2 {{ 'border-brand-600 text-brand-700' if active else 'border-transparent text-slate-500 hover:text-slate-800' }}">{{ label }}</a>
       {% endfor %}
     </div>

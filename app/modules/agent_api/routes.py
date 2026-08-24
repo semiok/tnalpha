@@ -159,6 +159,7 @@ def list_campaigns(
             "id": campaign.id,
             "brand_id": campaign.brand_id,
             "name": campaign.name,
+            "activity_type": campaign.activity_type,
             "is_default": campaign.is_default,
             "start_date": campaign.start_date,
             "end_date": campaign.end_date,

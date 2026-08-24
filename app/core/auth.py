@@ -71,7 +71,7 @@ def label_of(role: str | None) -> str:
 
 
 def module_for_path(path: str) -> str:
-    if path.startswith(("/brands", "/campaigns", "/pool")) or path == "/":
+    if path.startswith(("/brands", "/strategies", "/campaigns", "/pool")) or path == "/":
         return "knowledge"
     if path.startswith("/topics"):
         return "topic"

@@ -12,7 +12,7 @@
   {% if not brand %}
     {{ empty_state("还没有品牌，先去①知识库建/解析品牌。") }}
   {% else %}
-  <p class="text-sm text-slate-500 -mt-3 mb-5">读①知识库（品牌定义 + 活动选题简报 + 数据池）生成候选选题，可选联网蹭热点。</p>
+  <p class="text-sm text-slate-500 -mt-3 mb-5">读①知识库（品牌定义 + 引用策略 + 活动选题简报 + 数据池）生成候选选题，可选联网蹭热点。</p>
   {% if error %}
   <div class="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2.5 text-sm text-rose-700 mb-4">
     {{ error }}
@@ -20,12 +20,12 @@
   {% endif %}
 
   {% if can_edit %}
-  <div x-data="{manualOpen:false, manualRows:5, manualLoading:false}">
+  <div x-data="{instantOpen:false, instantLoading:false}">
   {{ card_open("生成候选选题") }}
     <div class="flex justify-end mb-3">
-      <button type="button" @click="manualOpen=true"
+      <button type="button" @click="instantOpen=true"
               class="px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200">
-        手动上传选题
+        即时选题 / 想法
       </button>
     </div>
     <form method="post" action="/topics/generate" class="space-y-3"
@@ -35,7 +35,11 @@
           <span class="block text-xs text-slate-500 mb-1">范围</span>
           <select name="campaign_id" x-model="campaign" class="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
             <option value="">品牌常青（不限活动）</option>
-            {% for c in campaigns %}<option value="{{ c.id }}">活动：{{ c.name }}</option>{% endfor %}
+            {% for c in campaigns %}
+              {% set ctx = campaign_context.get(c.id, {}) %}
+              {% set strategy_names = ctx.get("strategy_names", []) %}
+              <option value="{{ c.id }}">活动：{{ c.name }} · {% if strategy_names %}策略：{{ strategy_names|join('、') }}{% else %}策略未引用{% endif %} · 权重 {{ ctx.get("weights", "3:3:4") }}</option>
+            {% endfor %}
           </select>
         </label>
         <label class="block">
@@ -76,45 +80,42 @@
     </form>
     <p class="text-xs text-slate-400 mt-2">活动选题=读该活动简报③方向（高时效，简报已够全 → <b>默认不联网</b>）；品牌常青=只读品牌层（<b>默认勾 Google</b> 找外部灵感）。回收站里的不采纳原因默认作为选题经验参考；发布复盘经验只读取①知识库中当前范围已关联的经验包。热点仅作参考，须贴合品牌调性。走当前模型配置。</p>
   {{ card_close() }}
-  <div x-show="manualOpen" x-cloak class="fixed inset-0 z-40 bg-black/30 grid place-items-center p-4" @click.self="manualOpen=false">
-    <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl p-5">
+  <div x-show="instantOpen" x-cloak class="fixed inset-0 z-40 bg-black/30 grid place-items-center p-4" @click.self="instantOpen=false" @keydown.escape.window="instantOpen=false">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-5">
       <div class="flex items-center justify-between mb-4">
         <div>
-          <div class="font-semibold text-slate-800">手动上传选题</div>
-          <div class="text-xs text-slate-400 mt-1">只改补充字段，不改你输入的题目。</div>
+          <div class="font-semibold text-slate-800">即时选题 / 实时想法</div>
+          <div class="text-xs text-slate-400 mt-1">粘贴灵感、参考内容或具体要求，生成一个候选选题。</div>
         </div>
-        <button type="button" @click="manualOpen=false" class="text-slate-400 hover:text-slate-600">✕</button>
+        <button type="button" @click="instantOpen=false" class="shrink-0 text-slate-400 hover:text-slate-600" aria-label="关闭">✕</button>
       </div>
-      <form method="post" action="/topics/manual" class="space-y-3" @submit="manualLoading=true">
+      <form method="post" action="/topics/manual" class="space-y-4" @submit="instantLoading=true">
         <label class="block">
           <span class="block text-xs text-slate-500 mb-1">范围</span>
           <select name="campaign_id" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600">
             <option value="">品牌常青（不限活动）</option>
-            {% for c in campaigns %}<option value="{{ c.id }}">活动：{{ c.name }}</option>{% endfor %}
+            {% for c in campaigns %}
+              {% set ctx = campaign_context.get(c.id, {}) %}
+              {% set strategy_names = ctx.get("strategy_names", []) %}
+              <option value="{{ c.id }}">活动：{{ c.name }} · {% if strategy_names %}策略：{{ strategy_names|join('、') }}{% else %}策略未引用{% endif %} · 权重 {{ ctx.get("weights", "3:3:4") }}</option>
+            {% endfor %}
           </select>
         </label>
-        <div class="space-y-2 max-h-80 overflow-auto pr-1">
-          <template x-for="i in manualRows" :key="i">
-            <div class="flex items-center gap-2">
-              <span class="w-6 text-right text-xs text-slate-400" x-text="i"></span>
-              <input type="text" name="title" placeholder="输入选题标题"
-                     class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-400 focus:outline-none">
-            </div>
-          </template>
-        </div>
-        <div class="flex items-center justify-between pt-2">
-          <button type="button" @click="manualRows++" :disabled="manualLoading"
-                  class="px-3 py-1.5 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200">＋ 增加一行</button>
-          <div class="flex items-center gap-2">
-            <button type="button" @click="manualOpen=false" :disabled="manualLoading"
+        <label class="block">
+          <span class="block text-xs text-slate-500 mb-1">灵感、参考内容或具体要求</span>
+          <textarea name="brief" rows="12" maxlength="20000" required
+                    placeholder="可以直接写一个临时想法或具体要求；也可以粘贴看到的品牌发布、文章片段或其他参考内容，再说明希望 AI 从什么角度生成选题。"
+                    class="w-full min-h-64 max-h-[55vh] resize-y border border-slate-200 rounded-lg px-4 py-3 text-sm leading-6 focus:border-brand-400 focus:outline-none"></textarea>
+        </label>
+        <div class="flex justify-end gap-2 pt-1">
+            <button type="button" @click="instantOpen=false" :disabled="instantLoading"
                     class="px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200">取消</button>
-            <button type="submit" :disabled="manualLoading"
+            <button type="submit" :disabled="instantLoading"
                     class="px-3.5 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700"
-                    :class="manualLoading ? 'opacity-60 pointer-events-none' : ''">
-              <span x-show="!manualLoading">确认上传</span>
-              <span x-show="manualLoading" x-cloak>选题生成中</span>
+                    :class="instantLoading ? 'opacity-60 pointer-events-none' : ''">
+              <span x-show="!instantLoading">生成选题</span>
+              <span x-show="instantLoading" x-cloak>AI 识别生成中</span>
             </button>
-          </div>
         </div>
       </form>
     </div>

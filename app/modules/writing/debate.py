@@ -41,21 +41,60 @@ def knowledge_context_block(ctx: KnowledgeContext, writing_experience: str = "")
     """
     pool_materials = "；".join(ctx.pool_materials) if ctx.pool_materials else "（无）"
     pool_experiences = "；".join(ctx.pool_experiences) if ctx.pool_experiences else "（无）"
+    strategy_count = len(ctx.strategy_contexts)
+    if strategy_count:
+        strategies = "\n---\n".join(
+            f"【策略 {index}/{strategy_count}｜策略层内部权重 1/{strategy_count}】\n{strategy}"
+            for index, strategy in enumerate(ctx.strategy_contexts, start=1)
+        )
+        strategy_rule = (
+            f"本次引用 {strategy_count} 条策略，每条在策略层内部等权。成文必须让每条适用策略都落到"
+            "至少一个可辨认的写作选择上，例如受众、切口、结构、渠道表达或行动引导；不得因为某条策略"
+            "篇幅更长就让它压过其他策略。策略有冲突时取真实交集，并服从本次活动与已采纳选题。"
+        )
+    else:
+        strategies = "（本次活动未引用策略）"
+        strategy_rule = "本次没有引用策略，策略层不参与本篇判断；不得从品牌历史资料中自行猜测当前策略。"
+    if ctx.has_campaign:
+        activity_label = "栏目" if ctx.activity_type == "column" else "Campaign"
+        activity_scope = f"{activity_label}：{ctx.campaign_name or '（未命名）'}"
+        activity_digest = ctx.campaign_digest or "（尚未解析；仍须遵守活动名称、类型与已采纳选题）"
+    else:
+        activity_scope = "品牌常青（不限活动）"
+        activity_digest = "（品牌常青）"
     return f"""【知识库上下文】
-1. 品牌约束（怎么写）
+【写作上下文决策规则｜必须执行】
+1. 品牌：策略：活动 = {ctx.brand_weight}:{ctx.strategy_weight}:{ctx.activity_weight}。权重表示发生取舍时的相对决策优先级，不是段落数、字数或引用篇幅比例；某层没有有效内容时跳过，并按其余层重新判断。
+2. 已采纳选题与活动层共同锁定“本篇写什么”。权重不能把文章改写成另一个选题，也不能为了贴策略而偏离活动素材、发布时间或已确认事实。
+3. 品牌层负责不可违背的事实口径、内容边界、受众边界与表达气质；品牌资料中的历史运营建议不能替代活动明确引用的策略。
+4. 策略层负责本篇面向谁、达成什么内容目标、采用什么渠道与表达打法。{strategy_rule}
+5. 活动层负责具体主题、事实素材、时效和本次经验。数据池素材、知识库经验与 Campaign 总体经验包都计入活动层，不另设权重；经验用于改进结构、钩子和取舍，不能用来补造事实。
+6. 用户本次填写的写作要求是交付指令，应优先落实到文章形式与细节，但不得突破品牌硬边界或制造未经资料支持的事实。输出前在内部检查以上规则，不要输出检查过程。
+
+1. 品牌层（怎么写）
 - 品牌调性：{ctx.brand_prompt or "（未设置）"}
 - 内容要求：{ctx.content_notes or "（未设置）"}
 - 品牌资料综合：{ctx.doc_digest or "（无）"}
 
-2. 活动内容（写什么 / 什么时候 / 用什么素材）
-- 活动简报：{ctx.campaign_digest or "（品牌常青）"}
+2. 策略层（方向 / 人群 / 执行原则）
+{strategies}
 
-3. 资料包（事实细节 / 可引用素材）
+3. 活动层（写什么 / 什么时候 / 用什么素材）
+- 当前范围：{activity_scope}
+- 活动简报：{activity_digest}
+- 活动引用的数据池素材：
 {pool_materials}
 
-4. Campaign 总体经验包（结构 / 钩子 / 取舍 / 风险规避）
+4. Campaign 总体经验包（计入活动层；结构 / 钩子 / 取舍 / 风险规避）
 - 知识库经验：{pool_experiences}
 - 统一经验上下文：{writing_experience or "（本次未引用）"}"""
+
+
+def ensure_knowledge_context(prompt: str, knowledge_block: str) -> str:
+    """自定义提示词也不能丢掉活动权重与分层决策规则。"""
+    if "【写作上下文决策规则｜必须执行】" in prompt:
+        return prompt
+    return f"{knowledge_block}\n\n{prompt}"
 
 
 def clean_llm_output(text: str) -> str:
@@ -141,10 +180,11 @@ def _debate_prompt(role_key: str, role_name: str, role_stance: str,
 
 请从你的角色立场出发，对这篇选题的文章标题、切入角度、结构、素材、受众钩子提出观点（可支持、反对或补充）。文章标题应区别于选题标题，需更有吸引力、更贴合最终成文。
 直接输出你的发言，{char_limit}字以内，不要输出思考过程或分析步骤。"""
-    return resolve("writing:debate_prompt", default,
-                   role_stance=role_stance, topic=topic,
-                   knowledge_block=knowledge_block, history=history,
-                   char_limit=char_limit)
+    prompt = resolve("writing:debate_prompt", default,
+                     role_stance=role_stance, topic=topic,
+                     knowledge_block=knowledge_block, history=history,
+                     char_limit=char_limit)
+    return ensure_knowledge_context(prompt, knowledge_block)
 
 
 def run_debate(session: Session, article_id: int, rounds: int,
@@ -222,11 +262,21 @@ def _synthesize_debate(records: list[DebateRecord], topic: Topic, ctx: Knowledge
 
 
 def _review_prompt(role_key: str, role_name: str, role_stance: str,
-                   article: Article, history: str) -> str:
+                   article: Article, history: str, topic: Topic | None = None,
+                   ctx: KnowledgeContext | None = None,
+                   writing_experience: str = "") -> str:
     body_preview = article.body[:2000] if article.body else "（空）"
     image_url = article.image_url or "（无）"
     char_limit = _DEBATE_CHARS
+    knowledge_block = knowledge_context_block(ctx, writing_experience) if ctx is not None else ""
+    topic_block = (
+        f"【来源选题】\n标题：{topic.title}\n纲要：{topic.outline}\n受众：{topic.audience}\n"
+        if topic is not None else ""
+    )
     default = """{role_stance}
+
+{topic_block}
+{knowledge_block}
 
 【文章标题】{article.title}
 【文章正文】
@@ -238,13 +288,17 @@ def _review_prompt(role_key: str, role_name: str, role_stance: str,
 
 请从你的角色立场评审这篇文章和配图，指出具体问题（结构/事实/调性/受众/可读性）。
 直接输出你的评审意见，{char_limit}字以内，不要输出思考过程。"""
-    return resolve("writing:review_prompt", default,
-                   role_stance=role_stance, article=article,
-                   body_preview=body_preview, image_url=image_url,
-                   history=history, char_limit=char_limit)
+    prompt = resolve("writing:review_prompt", default,
+                     role_stance=role_stance, article=article,
+                     topic_block=topic_block, knowledge_block=knowledge_block,
+                     body_preview=body_preview, image_url=image_url,
+                     history=history, char_limit=char_limit)
+    return ensure_knowledge_context(prompt, knowledge_block) if knowledge_block else prompt
 
 
-def run_review(session: Session, article_id: int, rounds: int, article: Article) -> str:
+def run_review(session: Session, article_id: int, rounds: int, article: Article,
+               topic: Topic | None = None, ctx: KnowledgeContext | None = None,
+               writing_experience: str = "") -> str:
     """执行 M 轮评审，每轮 4 角色评审当前图文草稿，返回综合评审摘要。"""
     for rnd in range(1, rounds + 1):
         records = list(session.exec(
@@ -253,7 +307,10 @@ def run_review(session: Session, article_id: int, rounds: int, article: Article)
         ).all()) if rnd > 1 else []
         history = _format_debate_history(records, "review", rnd)
         for role_key, role_name, role_stance in ROLES:
-            prompt = _review_prompt(role_key, role_name, role_stance, article, history)
+            prompt = _review_prompt(
+                role_key, role_name, role_stance, article, history,
+                topic, ctx, writing_experience,
+            )
             try:
                 content = clean_llm_output(llm.generate_text(
                     prompt, task="review", module="writing", fallback=False))
@@ -273,15 +330,21 @@ def run_review(session: Session, article_id: int, rounds: int, article: Article)
             DebateRecord.article_id == article_id, DebateRecord.phase == "review"
         ).order_by(DebateRecord.round_num, DebateRecord.id)
     ).all()
-    return _synthesize_review(all_records, article)
+    return _synthesize_review(all_records, article, topic, ctx, writing_experience)
 
 
-def _synthesize_review(records: list[DebateRecord], article: Article) -> str:
+def _synthesize_review(records: list[DebateRecord], article: Article,
+                       topic: Topic | None = None, ctx: KnowledgeContext | None = None,
+                       writing_experience: str = "") -> str:
     history = "\n".join(
         f"第{r.round_num}轮 {dict((k, v) for k, v, _ in ROLES).get(r.role, r.role)}：{r.content}"
         for r in records
     )
+    knowledge_block = knowledge_context_block(ctx, writing_experience) if ctx is not None else ""
+    topic_block = f"【来源选题】{topic.title}\n" if topic is not None else ""
     prompt = f"""你是写作总监。基于以下多角色评审记录，综合出改进建议。
+
+{topic_block}{knowledge_block}
 
 【文章标题】{article.title}
 【文章正文（前2000字）】
@@ -338,10 +401,11 @@ def rewrite_prompt(article: Article, review_summary: str, topic: Topic,
 4. [插图：...] 标记只能放在完整段落之间，禁止插到句子中间或段落内部。
 5. 直接输出正文，不要输出「正文：」之外的解释性文字。
 """
-    return resolve("writing:rewrite_prompt", default,
-                   req_block=req_block, topic=topic,
-                   knowledge_block=knowledge_block, style_text=style_text,
-                   review_summary=review_summary, article=article)
+    prompt = resolve("writing:rewrite_prompt", default,
+                     req_block=req_block, topic=topic,
+                     knowledge_block=knowledge_block, style_text=style_text,
+                     review_summary=review_summary, article=article)
+    return ensure_knowledge_context(prompt, knowledge_block)
 
 
 # ── AI 审核：动态角色 + 合规/真实性审核 ──
